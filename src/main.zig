@@ -109,6 +109,33 @@ pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, fisca
     return true;
 }
 
+pub export fn ledger_create_draft(handle: ?*LedgerDB, book_id: i64, document_number: [*:0]const u8, transaction_date: [*:0]const u8, posting_date: [*:0]const u8, period_id: i64, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.entry.Entry.createDraft(h.sqlite, book_id, std.mem.span(document_number), std.mem.span(transaction_date), std.mem.span(posting_date), null, period_id, null, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.entry.Entry.addLine(h.sqlite, entry_id, line_number, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, null, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_post_entry(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.entry.Entry.post(h.sqlite, entry_id, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_void_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.entry.Entry.voidEntry(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_reverse_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]const u8, reversal_date: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.entry.Entry.reverse(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(reversal_date), std.mem.span(performed_by)) catch -1;
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;

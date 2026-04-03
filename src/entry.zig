@@ -120,6 +120,7 @@ pub const Entry = struct {
             if (!has_row) return error.NotFound;
             const status = stmt.columnText(0).?;
             if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
+            if (stmt.columnInt64(1) != entry_book_id) return error.InvalidInput;
         }
 
         try database.beginTransaction();
@@ -259,6 +260,19 @@ pub const Entry = struct {
                 cache_stmt.reset();
                 cache_stmt.clearBindings();
             }
+        }
+
+        // Step 8: Mark future periods stale
+        {
+            var stale_stmt = try database.prepare(
+                \\UPDATE ledger_account_balances
+                \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE book_id = ? AND period_id != ? AND is_stale = 0;
+            );
+            defer stale_stmt.finalize();
+            try stale_stmt.bindInt(1, entry_book_id);
+            try stale_stmt.bindInt(2, period_id);
+            _ = try stale_stmt.step();
         }
 
         // Step 9: Audit log
@@ -980,4 +994,132 @@ test "post with FX rate computes correct base amounts" {
     _ = try stmt.step();
     // 10_000_000_000 * 565_000_000_000 / 10_000_000_000 = 565_000_000_000 (5,650.00)
     try std.testing.expectEqual(@as(i64, 565_000_000_000), stmt.columnInt64(0));
+}
+
+// ── Edge case tests ─────────────────────────────────────────────
+
+test "void already-voided entry rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    try Entry.voidEntry(database, 1, "Error", "admin");
+
+    const result = Entry.voidEntry(database, 1, "Double void", "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
+}
+
+test "reverse already-reversed entry rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+
+    const result = Entry.reverse(database, 1, "Double reverse", "2026-01-31", "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
+}
+
+test "post 3-line entry: split payment" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create tax payable account
+    _ = try account_mod.Account.create(database, 1, "2100", "Tax Payable", .liability, false, "admin");
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", "Split payment", 1, null, "admin");
+    // Debit Cash 1000
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    // Credit AP 800
+    _ = try Entry.addLine(database, 1, 2, 0, 800_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    // Credit Tax Payable 200
+    _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+
+    try Entry.post(database, 1, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+
+    // Verify all 3 accounts have cache entries
+    var count_stmt = try database.prepare("SELECT COUNT(*) FROM ledger_account_balances WHERE period_id = 1;");
+    defer count_stmt.finalize();
+    _ = try count_stmt.step();
+    try std.testing.expectEqual(@as(i32, 3), count_stmt.columnInt(0));
+}
+
+test "addLine rejects account from different book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try book_mod.Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "1000", "Cash USD", .asset, false, "admin");
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    // Account 3 belongs to book 2, entry belongs to book 1
+    const result = Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "post entry with zero-amount line rejected by schema" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    // Both debit and credit = 0 violates CHECK constraint
+    const result = Entry.addLine(database, 1, 1, 0, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    try std.testing.expectError(error.SqliteStepFailed, result);
+}
+
+test "full lifecycle: create -> post -> void -> verify cache zero" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 5_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 5_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    try Entry.voidEntry(database, 1, "Cancelled", "admin");
+
+    // All cache entries should be zero
+    var stmt = try database.prepare("SELECT SUM(debit_sum), SUM(credit_sum), SUM(entry_count) FROM ledger_account_balances;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(2));
+}
+
+test "full lifecycle: create -> post -> reverse -> verify cache balanced" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+
+    // For each account, debit_sum should equal credit_sum (net zero)
+    var stmt = try database.prepare("SELECT account_id, debit_sum, credit_sum FROM ledger_account_balances ORDER BY account_id;");
+    defer stmt.finalize();
+
+    // Cash: debit 2000 (original) + credit 2000 (reversal)
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(1));
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(2));
+
+    // AP: credit 2000 (original) + debit 2000 (reversal)
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(1));
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(2));
 }
