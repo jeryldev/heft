@@ -84,7 +84,8 @@ pub export fn ledger_create_period(handle: ?*LedgerDB, book_id: i64, name: [*:0]
 
 pub export fn ledger_update_account_status(handle: ?*LedgerDB, account_id: i64, new_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.account.Account.updateStatus(h.sqlite, account_id, std.mem.span(new_status), std.mem.span(performed_by)) catch return false;
+    const status = heft.account.AccountStatus.fromString(std.mem.span(new_status)) orelse return false;
+    heft.account.Account.updateStatus(h.sqlite, account_id, status, std.mem.span(performed_by)) catch return false;
     return true;
 }
 
@@ -285,7 +286,7 @@ test "C ABI: full lifecycle book -> account -> period -> transition" {
         try std.testing.expect(period_id > 0);
 
         try std.testing.expect(ledger_transition_period(h, period_id, "soft_closed", "admin"));
-        try std.testing.expect(ledger_update_account_status(h, acct_id, "inactive", "admin"));
+        try std.testing.expect(ledger_update_account_status(h, acct_id, "archived", "admin"));
         try std.testing.expect(ledger_set_rounding_account(h, book_id, acct_id, "admin"));
     }
 }

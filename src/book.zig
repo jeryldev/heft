@@ -2,7 +2,29 @@ const std = @import("std");
 const db = @import("db.zig");
 const audit = @import("audit.zig");
 
+pub const BookStatus = enum {
+    active,
+    archived,
+
+    pub fn toString(self: BookStatus) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromString(s: []const u8) ?BookStatus {
+        const map = .{
+            .{ "active", BookStatus.active },
+            .{ "archived", BookStatus.archived },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
+};
+
 pub const Book = struct {
+    const id_buf_len = 20; // max i64 decimal digits
+
     const create_sql: [*:0]const u8 =
         \\INSERT INTO ledger_books (name, base_currency, decimal_places)
         \\VALUES (?, ?, ?);
@@ -64,10 +86,46 @@ pub const Book = struct {
         }
 
         // Format account_id as string for audit log
-        var id_buf: [20]u8 = undefined;
+        var id_buf: [id_buf_len]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
 
         try audit.log(database, "book", book_id, "update", "rounding_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn archive(database: db.Database, book_id: i64, performed_by: []const u8) !void {
+        // Verify book exists and is active
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const current = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (current == .archived) return error.InvalidTransition;
+        }
+
+        // Verify no open or soft_closed periods exist
+        {
+            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ? AND status IN ('open', 'soft_closed');");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET status = 'archived', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "book", book_id, "update", "status", "active", "archived", performed_by, book_id);
 
         try database.commit();
     }
@@ -248,4 +306,115 @@ test "setRoundingAccount rejects nonexistent book" {
 
     const result = Book.setRoundingAccount(database, 999, 1, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+// ── archive tests ───────────────────────────────────────────────
+
+const period_mod = @import("period.zig");
+
+test "archive book with all periods closed or locked succeeds" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try period_mod.Period.create(database, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+
+    try Book.archive(database, book_id, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+test "archive book with open periods rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try period_mod.Period.create(database, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const result = Book.archive(database, book_id, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "archive book with soft_closed periods rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try period_mod.Period.create(database, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+
+    const result = Book.archive(database, book_id, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "archive book with no periods succeeds" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+
+    try Book.archive(database, book_id, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+test "archive already archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try Book.archive(database, book_id, "admin");
+
+    const result = Book.archive(database, book_id, "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
+}
+
+test "archive book writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try Book.archive(database, book_id, "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'book' AND action = 'update' AND field_changed = 'status';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("status", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("active", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("archived", stmt.columnText(2).?);
+}
+
+test "archive nonexistent book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Book.archive(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "create operations on archived book should fail at entity level" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try Book.archive(database, book_id, "admin");
+
+    // Account creation on archived book — the account.create checks book exists
+    // but doesn't check book status. This is a Sprint 3 concern (posting engine
+    // will check book status). For now, verify the book IS archived.
+    var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
 }

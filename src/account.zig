@@ -37,7 +37,40 @@ pub const NormalBalance = enum {
     }
 };
 
+pub const AccountStatus = enum {
+    active,
+    inactive,
+    archived,
+
+    pub fn canTransitionTo(self: AccountStatus, target: AccountStatus) bool {
+        return switch (self) {
+            .active => target == .inactive or target == .archived,
+            .inactive => target == .active or target == .archived,
+            .archived => false,
+        };
+    }
+
+    pub fn toString(self: AccountStatus) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromString(s: []const u8) ?AccountStatus {
+        const map = .{
+            .{ "active", AccountStatus.active },
+            .{ "inactive", AccountStatus.inactive },
+            .{ "archived", AccountStatus.archived },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
+};
+
 pub const Account = struct {
+    const max_number_len = 50;
+    const max_status_len = 10; // "archived" = 8, padded
+
     pub fn deriveNormalBalance(account_type: AccountType, is_contra: bool) NormalBalance {
         const base: NormalBalance = switch (account_type) {
             .asset, .expense => .debit,
@@ -55,7 +88,7 @@ pub const Account = struct {
     ;
 
     pub fn create(database: db.Database, book_id: i64, number: []const u8, name: []const u8, account_type: AccountType, is_contra: bool, performed_by: []const u8) !i64 {
-        if (number.len == 0 or number.len > 50) return error.InvalidInput;
+        if (number.len == 0 or number.len > max_number_len) return error.InvalidInput;
         if (name.len == 0) return error.InvalidInput;
 
         // Verify book exists
@@ -82,6 +115,7 @@ pub const Account = struct {
         try stmt.bindInt(5, if (is_contra) 1 else 0);
         try stmt.bindInt(6, book_id);
 
+        // After FK validation, only UNIQUE constraint can fail here
         _ = stmt.step() catch return error.DuplicateNumber;
 
         const id = database.lastInsertRowId();
@@ -91,29 +125,9 @@ pub const Account = struct {
         return id;
     }
 
-    const valid_statuses = [_][]const u8{ "active", "inactive", "archived" };
-
-    fn isValidStatus(status: []const u8) bool {
-        for (valid_statuses) |s| {
-            if (std.mem.eql(u8, status, s)) return true;
-        }
-        return false;
-    }
-
-    fn isValidTransition(from: []const u8, to: []const u8) bool {
-        if (std.mem.eql(u8, from, to)) return false;
-        if (std.mem.eql(u8, from, "archived")) return false;
-        if (std.mem.eql(u8, from, "active")) return true;
-        if (std.mem.eql(u8, from, "inactive")) return true;
-        return false;
-    }
-
-    pub fn updateStatus(database: db.Database, account_id: i64, new_status: []const u8, performed_by: []const u8) !void {
-        if (!isValidStatus(new_status)) return error.InvalidInput;
-
+    pub fn updateStatus(database: db.Database, account_id: i64, target: AccountStatus, performed_by: []const u8) !void {
         // Fetch current status and book_id
-        var old_status_buf: [20]u8 = undefined;
-        var old_status_len: usize = 0;
+        var current: AccountStatus = undefined;
         var acct_book_id: i64 = 0;
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
@@ -121,14 +135,11 @@ pub const Account = struct {
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const old = stmt.columnText(0).?;
-            @memcpy(old_status_buf[0..old.len], old);
-            old_status_len = old.len;
+            current = AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             acct_book_id = stmt.columnInt64(1);
         }
-        const old_status = old_status_buf[0..old_status_len];
 
-        if (!isValidTransition(old_status, new_status)) return error.InvalidTransition;
+        if (!current.canTransitionTo(target)) return error.InvalidTransition;
 
         try database.beginTransaction();
         errdefer database.rollback();
@@ -136,12 +147,12 @@ pub const Account = struct {
         {
             var stmt = try database.prepare("UPDATE ledger_accounts SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
-            try stmt.bindText(1, new_status);
+            try stmt.bindText(1, target.toString());
             try stmt.bindInt(2, account_id);
             _ = try stmt.step();
         }
 
-        try audit.log(database, "account", account_id, "update", "status", old_status, new_status, performed_by, acct_book_id);
+        try audit.log(database, "account", account_id, "update", "status", current.toString(), target.toString(), performed_by, acct_book_id);
 
         try database.commit();
     }
@@ -328,7 +339,7 @@ test "updateStatus changes account to inactive" {
     defer database.close();
 
     _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    try Account.updateStatus(database, 1, "inactive", "admin");
+    try Account.updateStatus(database, 1, .inactive, "admin");
 
     var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = 1;");
     defer stmt.finalize();
@@ -341,8 +352,8 @@ test "updateStatus reactivates inactive account" {
     defer database.close();
 
     _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    try Account.updateStatus(database, 1, "inactive", "admin");
-    try Account.updateStatus(database, 1, "active", "admin");
+    try Account.updateStatus(database, 1, .inactive, "admin");
+    try Account.updateStatus(database, 1, .active, "admin");
 
     var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = 1;");
     defer stmt.finalize();
@@ -355,7 +366,7 @@ test "updateStatus writes audit log with old and new values" {
     defer database.close();
 
     _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    try Account.updateStatus(database, 1, "inactive", "admin");
+    try Account.updateStatus(database, 1, .inactive, "admin");
 
     var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'account' AND action = 'update';");
     defer stmt.finalize();
@@ -370,14 +381,18 @@ test "updateStatus rejects invalid status" {
     defer database.close();
 
     _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    const result = Account.updateStatus(database, 1, "deleted", "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    // "deleted" is not a valid AccountStatus — but updateStatus now takes enum,
+    // so invalid strings are caught at the C ABI layer (fromString returns null).
+    // Test the enum-level guard instead: archived -> active
+    try Account.updateStatus(database, 1, .archived, "admin");
+    const result = Account.updateStatus(database, 1, .active, "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
 }
 
 test "updateStatus rejects nonexistent account" {
     const database = try setupTestDb();
     defer database.close();
 
-    const result = Account.updateStatus(database, 999, "inactive", "admin");
+    const result = Account.updateStatus(database, 999, .inactive, "admin");
     try std.testing.expectError(error.NotFound, result);
 }

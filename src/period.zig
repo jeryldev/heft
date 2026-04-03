@@ -74,6 +74,11 @@ pub const PeriodGranularity = enum {
 };
 
 pub const Period = struct {
+    const max_status_len = 12; // "soft_closed" = 11, padded
+    const date_buf_len = 16;
+    const name_buf_len = 48;
+    const id_buf_len = 20;
+
     const create_sql: [*:0]const u8 =
         \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, period_type, book_id)
         \\VALUES (?, ?, ?, ?, ?, ?, ?);
@@ -142,8 +147,6 @@ pub const Period = struct {
 
     pub fn transition(database: db.Database, period_id: i64, target_status: PeriodStatus, performed_by: []const u8) !void {
         // Fetch current status and book_id
-        var old_status_buf: [20]u8 = undefined;
-        var old_status_len: usize = 0;
         var current: PeriodStatus = undefined;
         var period_book_id: i64 = 0;
         {
@@ -152,13 +155,9 @@ pub const Period = struct {
             try stmt.bindInt(1, period_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const status_str = stmt.columnText(0).?;
-            @memcpy(old_status_buf[0..status_str.len], status_str);
-            old_status_len = status_str.len;
-            current = PeriodStatus.fromString(status_str) orelse return error.InvalidInput;
+            current = PeriodStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             period_book_id = stmt.columnInt64(1);
         }
-        const old_status = old_status_buf[0..old_status_len];
 
         if (current == .locked) return error.PeriodLocked;
         if (!current.canTransitionTo(target_status)) return error.InvalidTransition;
@@ -174,7 +173,7 @@ pub const Period = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "period", period_id, "transition", "status", old_status, target_status.toString(), performed_by, period_book_id);
+        try audit.log(database, "period", period_id, "transition", "status", current.toString(), target_status.toString(), performed_by, period_book_id);
 
         try database.commit();
     }
@@ -226,9 +225,9 @@ pub const Period = struct {
         var audit_stmt = try database.prepare(audit_sql);
         defer audit_stmt.finalize();
 
-        var start_buf: [16]u8 = undefined;
-        var end_buf: [16]u8 = undefined;
-        var name_buf: [48]u8 = undefined;
+        var start_buf: [date_buf_len]u8 = undefined;
+        var end_buf: [date_buf_len]u8 = undefined;
+        var name_buf: [name_buf_len]u8 = undefined;
 
         const period_count = granularity.periodCount();
         const months_per = granularity.monthsPerPeriod();
@@ -988,12 +987,12 @@ test "account archived rejects further transitions" {
     defer database.close();
 
     _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    try account_mod.Account.updateStatus(database, 1, "archived", "admin");
+    try account_mod.Account.updateStatus(database, 1, .archived, "admin");
 
-    const to_active = account_mod.Account.updateStatus(database, 1, "active", "admin");
+    const to_active = account_mod.Account.updateStatus(database, 1, .active, "admin");
     try std.testing.expectError(error.InvalidTransition, to_active);
 
-    const to_inactive = account_mod.Account.updateStatus(database, 1, "inactive", "admin");
+    const to_inactive = account_mod.Account.updateStatus(database, 1, .inactive, "admin");
     try std.testing.expectError(error.InvalidTransition, to_inactive);
 }
 
@@ -1002,9 +1001,9 @@ test "account full lifecycle: active -> inactive -> active -> archived" {
     defer database.close();
 
     _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    try account_mod.Account.updateStatus(database, 1, "inactive", "admin");
-    try account_mod.Account.updateStatus(database, 1, "active", "admin");
-    try account_mod.Account.updateStatus(database, 1, "archived", "admin");
+    try account_mod.Account.updateStatus(database, 1, .inactive, "admin");
+    try account_mod.Account.updateStatus(database, 1, .active, "admin");
+    try account_mod.Account.updateStatus(database, 1, .archived, "admin");
 
     var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = 1;");
     defer stmt.finalize();
@@ -1018,7 +1017,7 @@ test "account same-status transition rejected" {
 
     _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
 
-    const result = account_mod.Account.updateStatus(database, 1, "active", "admin");
+    const result = account_mod.Account.updateStatus(database, 1, .active, "admin");
     try std.testing.expectError(error.InvalidTransition, result);
 }
 
