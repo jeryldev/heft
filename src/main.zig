@@ -41,8 +41,9 @@ pub export fn ledger_open(path: [*:0]const u8) ?*LedgerDB {
     return internal_open(path) catch null;
 }
 
-pub export fn ledger_close(handle: *LedgerDB) void {
-    internal_close(handle);
+pub export fn ledger_close(handle: ?*LedgerDB) void {
+    const h = handle orelse return;
+    internal_close(h);
 }
 
 pub export fn ledger_version() [*:0]const u8 {
@@ -51,22 +52,33 @@ pub export fn ledger_version() [*:0]const u8 {
 
 // ── Tests ───────────────────────────────────────────────────────
 
+fn cleanupTestFile(name: [*:0]const u8) void {
+    const cwd = std.fs.cwd();
+    const base = std.mem.span(name);
+    cwd.deleteFile(base) catch {};
+    // WAL mode creates -wal and -shm sidecar files
+    var wal_buf: [256]u8 = undefined;
+    var shm_buf: [256]u8 = undefined;
+    const wal_name = std.fmt.bufPrint(&wal_buf, "{s}-wal", .{base}) catch return;
+    const shm_name = std.fmt.bufPrint(&shm_buf, "{s}-shm", .{base}) catch return;
+    cwd.deleteFile(wal_name) catch {};
+    cwd.deleteFile(shm_name) catch {};
+}
+
 test "ledger_version returns 0.0.1" {
     const v = std.mem.span(ledger_version());
     try std.testing.expectEqualStrings("0.0.1", v);
 }
 
 test "ledger_open returns non-null, ledger_close cleans up" {
+    defer cleanupTestFile("test-open-close.ledger");
     const handle = ledger_open("test-open-close.ledger");
     try std.testing.expect(handle != null);
     if (handle) |h| ledger_close(h);
-
-    std.fs.cwd().deleteFile("test-open-close.ledger") catch {};
-    std.fs.cwd().deleteFile("test-open-close.ledger-wal") catch {};
-    std.fs.cwd().deleteFile("test-open-close.ledger-shm") catch {};
 }
 
 test "ledger_open creates all 11 schema tables" {
+    defer cleanupTestFile("test-schema-main.ledger");
     const handle = ledger_open("test-schema-main.ledger");
     try std.testing.expect(handle != null);
 
@@ -97,13 +109,10 @@ test "ledger_open creates all 11 schema tables" {
             try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
         }
     }
-
-    std.fs.cwd().deleteFile("test-schema-main.ledger") catch {};
-    std.fs.cwd().deleteFile("test-schema-main.ledger-wal") catch {};
-    std.fs.cwd().deleteFile("test-schema-main.ledger-shm") catch {};
 }
 
 test "ledger_open enables WAL mode" {
+    defer cleanupTestFile("test-wal.ledger");
     const handle = ledger_open("test-wal.ledger");
     try std.testing.expect(handle != null);
 
@@ -115,13 +124,10 @@ test "ledger_open enables WAL mode" {
         _ = try stmt.step();
         try std.testing.expectEqualStrings("wal", stmt.columnText(0).?);
     }
-
-    std.fs.cwd().deleteFile("test-wal.ledger") catch {};
-    std.fs.cwd().deleteFile("test-wal.ledger-wal") catch {};
-    std.fs.cwd().deleteFile("test-wal.ledger-shm") catch {};
 }
 
 test "ledger_open enables foreign keys" {
+    defer cleanupTestFile("test-fk.ledger");
     const handle = ledger_open("test-fk.ledger");
     try std.testing.expect(handle != null);
 
@@ -133,10 +139,6 @@ test "ledger_open enables foreign keys" {
         _ = try stmt.step();
         try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
     }
-
-    std.fs.cwd().deleteFile("test-fk.ledger") catch {};
-    std.fs.cwd().deleteFile("test-fk.ledger-wal") catch {};
-    std.fs.cwd().deleteFile("test-fk.ledger-shm") catch {};
 }
 
 test "ledger_open returns null for invalid path" {
@@ -145,6 +147,7 @@ test "ledger_open returns null for invalid path" {
 }
 
 test "ledger_open is idempotent on existing file" {
+    defer cleanupTestFile("test-idempotent.ledger");
     const h1 = ledger_open("test-idempotent.ledger");
     try std.testing.expect(h1 != null);
     if (h1) |h| ledger_close(h);
@@ -153,8 +156,4 @@ test "ledger_open is idempotent on existing file" {
     const h2 = ledger_open("test-idempotent.ledger");
     try std.testing.expect(h2 != null);
     if (h2) |h| ledger_close(h);
-
-    std.fs.cwd().deleteFile("test-idempotent.ledger") catch {};
-    std.fs.cwd().deleteFile("test-idempotent.ledger-wal") catch {};
-    std.fs.cwd().deleteFile("test-idempotent.ledger-shm") catch {};
 }

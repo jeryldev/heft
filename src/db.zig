@@ -26,6 +26,7 @@ pub const Database = struct {
         const self = Database{
             .handle = db orelse return error.SqliteOpenFailed,
         };
+        errdefer _ = c.sqlite3_close(self.handle);
 
         try self.exec("PRAGMA foreign_keys = ON;");
         try self.exec("PRAGMA journal_mode = WAL;");
@@ -42,7 +43,10 @@ pub const Database = struct {
         var err_msg: [*c]u8 = null;
         const rc = c.sqlite3_exec(self.handle, sql, null, null, &err_msg);
         if (rc != c.SQLITE_OK) {
-            if (err_msg != null) c.sqlite3_free(err_msg);
+            if (err_msg != null) {
+                std.log.debug("sqlite3_exec failed: {s}", .{std.mem.span(err_msg)});
+                c.sqlite3_free(err_msg);
+            }
             return error.SqliteExecFailed;
         }
     }
@@ -75,8 +79,7 @@ pub const Statement = struct {
     handle: *c.sqlite3_stmt,
 
     pub fn finalize(self: Statement) void {
-        const rc = c.sqlite3_finalize(self.handle);
-        std.debug.assert(rc == c.SQLITE_OK);
+        _ = c.sqlite3_finalize(self.handle);
     }
 
     pub fn step(self: Statement) !bool {
