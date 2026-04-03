@@ -19,11 +19,24 @@ pub const LedgerDB = struct {
 
 // ── Internal (Zig idioms) ───────────────────────────────────────
 
+const SCHEMA_VERSION: i32 = 1;
+
 fn internal_open(path: [*:0]const u8) !*LedgerDB {
     const db = try heft.db.Database.open(path);
     errdefer db.close();
 
-    try heft.schema.createAll(db);
+    const version = blk: {
+        var stmt = try db.prepare("PRAGMA user_version;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        break :blk stmt.columnInt(0);
+    };
+
+    if (version == 0) {
+        try heft.schema.createAll(db);
+    } else if (version > SCHEMA_VERSION) {
+        return error.SchemaVersionMismatch;
+    }
 
     const handle = std.heap.c_allocator.create(LedgerDB) catch return error.OutOfMemory;
     handle.* = .{ .sqlite = db };
@@ -136,6 +149,55 @@ test "ledger_open enables foreign keys" {
         defer ledger_close(h);
 
         var stmt = try h.sqlite.prepare("PRAGMA foreign_keys;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+    }
+}
+
+test "ledger_open sets schema version 1 on new file" {
+    defer cleanupTestFile("test-version.ledger");
+    const handle = ledger_open("test-version.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        var stmt = try h.sqlite.prepare("PRAGMA user_version;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+    }
+}
+
+test "ledger_open rejects future schema version" {
+    defer cleanupTestFile("test-future-version.ledger");
+
+    const h1 = ledger_open("test-future-version.ledger");
+    try std.testing.expect(h1 != null);
+    if (h1) |h| ledger_close(h);
+
+    const raw_db = try heft.db.Database.open("test-future-version.ledger");
+    try raw_db.exec("PRAGMA user_version = 999;");
+    raw_db.close();
+
+    const h2 = ledger_open("test-future-version.ledger");
+    try std.testing.expect(h2 == null);
+}
+
+test "ledger_open preserves schema version on reopen" {
+    defer cleanupTestFile("test-reopen-version.ledger");
+
+    const h1 = ledger_open("test-reopen-version.ledger");
+    try std.testing.expect(h1 != null);
+    if (h1) |h| ledger_close(h);
+
+    const h2 = ledger_open("test-reopen-version.ledger");
+    try std.testing.expect(h2 != null);
+    if (h2) |h| {
+        defer ledger_close(h);
+
+        var stmt = try h.sqlite.prepare("PRAGMA user_version;");
         defer stmt.finalize();
         _ = try stmt.step();
         try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));

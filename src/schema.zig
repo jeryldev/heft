@@ -23,6 +23,7 @@ pub fn createAll(database: db.Database) !void {
     for (tables) |ddl| try database.exec(ddl);
     for (indexes) |idx| try database.exec(idx);
     for (views) |v| try database.exec(v);
+    try database.exec("PRAGMA user_version = 1;");
 
     try database.commit();
 }

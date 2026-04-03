@@ -74,6 +74,10 @@ pub const Database = struct {
         try self.exec("COMMIT;");
     }
 
+    pub fn lastInsertRowId(self: Database) i64 {
+        return c.sqlite3_last_insert_rowid(self.handle);
+    }
+
     pub fn rollback(self: Database) void {
         self.exec("ROLLBACK;") catch {};
     }
@@ -88,6 +92,14 @@ pub const Statement = struct {
         _ = c.sqlite3_finalize(self.handle);
     }
 
+    pub fn reset(self: Statement) void {
+        _ = c.sqlite3_reset(self.handle);
+    }
+
+    pub fn clearBindings(self: Statement) void {
+        _ = c.sqlite3_clear_bindings(self.handle);
+    }
+
     pub fn step(self: Statement) !bool {
         const rc = c.sqlite3_step(self.handle);
         return switch (rc) {
@@ -95,6 +107,11 @@ pub const Statement = struct {
             c.SQLITE_DONE => false,
             else => error.SqliteStepFailed,
         };
+    }
+
+    pub fn bindNull(self: Statement, col: c_int) !void {
+        const rc = c.sqlite3_bind_null(self.handle, col);
+        if (rc != c.SQLITE_OK) return error.SqliteBindFailed;
     }
 
     pub fn bindInt(self: Statement, col: c_int, value: i64) !void {
@@ -117,6 +134,10 @@ pub const Statement = struct {
 
     pub fn columnInt(self: Statement, col: c_int) i32 {
         return c.sqlite3_column_int(self.handle, col);
+    }
+
+    pub fn columnInt64(self: Statement, col: c_int) i64 {
+        return c.sqlite3_column_int64(self.handle, col);
     }
 
     pub fn columnText(self: Statement, col: c_int) ?[]const u8 {
@@ -241,6 +262,121 @@ test "drainLeakedStatements is safe when nothing is leaked" {
     const db = try Database.open(":memory:");
     db.drainLeakedStatements();
     db.close();
+}
+
+test "reset enables statement reuse" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);");
+
+    {
+        var stmt = try db.prepare("INSERT INTO test (name) VALUES (?);");
+        defer stmt.finalize();
+
+        try stmt.bindText(1, "first");
+        _ = try stmt.step();
+        stmt.reset();
+
+        try stmt.bindText(1, "second");
+        _ = try stmt.step();
+    }
+
+    var count_stmt = try db.prepare("SELECT COUNT(*) FROM test;");
+    defer count_stmt.finalize();
+    _ = try count_stmt.step();
+    try std.testing.expectEqual(@as(i32, 2), count_stmt.columnInt(0));
+}
+
+test "clearBindings sets parameters to NULL" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);");
+
+    {
+        var stmt = try db.prepare("INSERT INTO test (name) VALUES (?);");
+        defer stmt.finalize();
+
+        try stmt.bindText(1, "hello");
+        _ = try stmt.step();
+        stmt.reset();
+
+        stmt.clearBindings();
+        _ = try stmt.step();
+    }
+
+    var count_stmt = try db.prepare("SELECT COUNT(*) FROM test WHERE name IS NULL;");
+    defer count_stmt.finalize();
+    _ = try count_stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), count_stmt.columnInt(0));
+}
+
+test "lastInsertRowId returns auto-generated id" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);");
+
+    try db.exec("INSERT INTO test (name) VALUES ('first');");
+    try std.testing.expectEqual(@as(i64, 1), db.lastInsertRowId());
+
+    try db.exec("INSERT INTO test (name) VALUES ('second');");
+    try std.testing.expectEqual(@as(i64, 2), db.lastInsertRowId());
+}
+
+test "bindNull inserts NULL value" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);");
+
+    {
+        var stmt = try db.prepare("INSERT INTO test (name) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindNull(1);
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT name FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expect(stmt.columnText(0) == null);
+}
+
+test "columnInt64 reads large i64 values" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, amount INTEGER);");
+
+    // 10,000.50 scaled by 10^8 = 1_000_050_000_000 (exceeds i32 max)
+    const large_amount: i64 = 1_000_050_000_000;
+    {
+        var stmt = try db.prepare("INSERT INTO test (amount) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindInt(1, large_amount);
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT amount FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(large_amount, stmt.columnInt64(0));
+}
+
+test "columnInt64 handles negative values" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, amount INTEGER);");
+
+    const negative: i64 = -500_000_000_000;
+    {
+        var stmt = try db.prepare("INSERT INTO test (amount) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindInt(1, negative);
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT amount FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(negative, stmt.columnInt64(0));
 }
 
 test "transaction commit persists, rollback discards" {
