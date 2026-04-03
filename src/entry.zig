@@ -190,12 +190,21 @@ pub const Entry = struct {
         try database.commit();
     }
 
+    const amt_buf_len = 24;
+
     pub fn editLine(database: db.Database, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, performed_by: []const u8) !void {
-        // Fetch line's entry and verify draft
+        // Fetch line's entry, verify draft, and read old values
         var entry_book_id: i64 = 0;
+        var old_debit: i64 = 0;
+        var old_credit: i64 = 0;
+        var old_fx: i64 = 0;
+        var old_account: i64 = 0;
+        var old_currency_buf: [8]u8 = undefined;
+        var old_currency_len: usize = 0;
         {
             var stmt = try database.prepare(
-                \\SELECT e.status, e.book_id
+                \\SELECT e.status, e.book_id, el.debit_amount, el.credit_amount,
+                \\  el.transaction_currency, el.fx_rate, el.account_id
                 \\FROM ledger_entry_lines el
                 \\JOIN ledger_entries e ON e.id = el.entry_id
                 \\WHERE el.id = ?;
@@ -206,6 +215,13 @@ pub const Entry = struct {
             if (!has_row) return error.NotFound;
             if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
             entry_book_id = stmt.columnInt64(1);
+            old_debit = stmt.columnInt64(2);
+            old_credit = stmt.columnInt64(3);
+            const cur = stmt.columnText(4).?;
+            @memcpy(old_currency_buf[0..cur.len], cur);
+            old_currency_len = cur.len;
+            old_fx = stmt.columnInt64(5);
+            old_account = stmt.columnInt64(6);
         }
 
         // Verify account exists, is active, and belongs to same book
@@ -242,7 +258,33 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "entry_line", line_id, "update", null, null, null, performed_by, entry_book_id);
+        // Audit each changed field with old/new values
+        var old_buf: [amt_buf_len]u8 = undefined;
+        var new_buf: [amt_buf_len]u8 = undefined;
+
+        if (old_debit != debit_amount) {
+            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_debit}) catch unreachable;
+            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{debit_amount}) catch unreachable;
+            try audit.log(database, "entry_line", line_id, "update", "debit_amount", old_s, new_s, performed_by, entry_book_id);
+        }
+        if (old_credit != credit_amount) {
+            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_credit}) catch unreachable;
+            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{credit_amount}) catch unreachable;
+            try audit.log(database, "entry_line", line_id, "update", "credit_amount", old_s, new_s, performed_by, entry_book_id);
+        }
+        if (!std.mem.eql(u8, old_currency_buf[0..old_currency_len], transaction_currency)) {
+            try audit.log(database, "entry_line", line_id, "update", "transaction_currency", old_currency_buf[0..old_currency_len], transaction_currency, performed_by, entry_book_id);
+        }
+        if (old_fx != fx_rate) {
+            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_fx}) catch unreachable;
+            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{fx_rate}) catch unreachable;
+            try audit.log(database, "entry_line", line_id, "update", "fx_rate", old_s, new_s, performed_by, entry_book_id);
+        }
+        if (old_account != account_id) {
+            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_account}) catch unreachable;
+            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{account_id}) catch unreachable;
+            try audit.log(database, "entry_line", line_id, "update", "account_id", old_s, new_s, performed_by, entry_book_id);
+        }
 
         try database.commit();
     }
@@ -1768,20 +1810,65 @@ test "editLine rejects nonexistent line" {
     try std.testing.expectError(error.NotFound, result);
 }
 
-test "editLine writes audit log" {
+test "editLine writes rich audit log with field names and old/new values" {
     const database = try setupTestDb();
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
     const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
 
-    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+    // Change debit from 1000 to 2000 and account from 1 to 2
+    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 2, "admin");
 
-    var stmt = try database.prepare("SELECT entity_type, action FROM ledger_audit_log WHERE entity_type = 'entry_line' AND action = 'update';");
+    // Should have 2 audit entries: debit_amount + account_id
+    {
+        var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'entry_line' AND action = 'update' AND field_changed = 'debit_amount';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("debit_amount", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("100000000000", stmt.columnText(1).?);
+        try std.testing.expectEqualStrings("200000000000", stmt.columnText(2).?);
+    }
+    {
+        var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'entry_line' AND action = 'update' AND field_changed = 'account_id';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("account_id", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("1", stmt.columnText(1).?);
+        try std.testing.expectEqualStrings("2", stmt.columnText(2).?);
+    }
+}
+
+test "editLine no audit when values unchanged" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+
+    // Edit with same values — no audit entries for update
+    try Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry_line' AND action = 'update';");
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqualStrings("entry_line", stmt.columnText(0).?);
-    try std.testing.expectEqualStrings("update", stmt.columnText(1).?);
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "editLine currency change logged with old and new currency" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+
+    try Entry.editLine(database, line_id, 10_000_000_000, 0, "USD", 565_000_000_000, 1, "admin");
+
+    var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE field_changed = 'transaction_currency';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("PHP", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("USD", stmt.columnText(1).?);
 }
 
 test "editLine then post: edited amount used in base computation" {
@@ -1849,6 +1936,20 @@ test "void entry excluded from transaction_history view" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "post rejects entry when FX computation overflows i64" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    // Amount near i64 max with fx_rate > 1.0 will overflow
+    const huge: i64 = std.math.maxInt(i64);
+    _ = try Entry.addLine(database, 1, 1, huge, 0, "USD", 20_000_000_000, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, huge, "USD", 20_000_000_000, 2, null, "admin");
+
+    const result = Entry.post(database, 1, "admin");
+    try std.testing.expectError(error.AmountOverflow, result);
 }
 
 test "post entries in two periods: cache independent per period" {
