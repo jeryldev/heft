@@ -76,7 +76,6 @@ pub const PeriodGranularity = enum {
 pub const Period = struct {
     const date_buf_len = 16;
     const name_buf_len = 48;
-    const id_buf_len = 20;
 
     const create_sql: [*:0]const u8 =
         \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, period_type, book_id)
