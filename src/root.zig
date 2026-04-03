@@ -12,8 +12,8 @@ comptime {
     _ = db;
     _ = schema;
     _ = audit;
-    _ = @import("book.zig");
-    _ = @import("account.zig");
-    _ = @import("period.zig");
+    _ = book;
+    _ = account;
+    _ = period;
     _ = @import("error.zig");
 }

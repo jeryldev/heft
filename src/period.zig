@@ -102,6 +102,21 @@ pub const Period = struct {
             if (stmt.columnInt(0) == 0) return error.NotFound;
         }
 
+        // Overlap detection for regular periods
+        if (std.mem.eql(u8, period_type, "regular")) {
+            var overlap_stmt = try database.prepare(
+                \\SELECT COUNT(*) FROM ledger_periods
+                \\WHERE book_id = ? AND period_type = 'regular'
+                \\  AND start_date <= ? AND end_date >= ?;
+            );
+            defer overlap_stmt.finalize();
+            try overlap_stmt.bindInt(1, book_id);
+            try overlap_stmt.bindText(2, end_date);
+            try overlap_stmt.bindText(3, start_date);
+            _ = try overlap_stmt.step();
+            if (overlap_stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
         try database.beginTransaction();
         errdefer database.rollback();
 
@@ -413,8 +428,9 @@ test "create period rejects duplicate period_number+year in same book" {
     defer database.close();
 
     _ = try Period.create(database, 1, "January 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    // Same dates trigger overlap detection before UNIQUE constraint
     const result = Period.create(database, 1, "Also January", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
-    try std.testing.expectError(error.DuplicateNumber, result);
+    try std.testing.expectError(error.InvalidInput, result);
 }
 
 test "create adjustment period accepted" {
@@ -922,6 +938,47 @@ test "adjustment period coexists with bulk quarterly" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 5), stmt.columnInt(0));
+}
+
+// ── Period overlap detection tests ───────────────────────────────
+
+test "regular periods with overlapping dates rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Period.create(database, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Overlapping dates with different period_number
+    const result = Period.create(database, 1, "Mid Jan", 2, 2026, "2026-01-15", "2026-02-15", "regular", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "adjustment period overlapping regular period allowed" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Period.create(database, 1, "Dec 2026", 12, 2026, "2026-12-01", "2026-12-31", "regular", "admin");
+
+    // Adjustment period with same dates — allowed
+    _ = try Period.create(database, 1, "Year-End Adj", 13, 2026, "2026-12-01", "2026-12-31", "adjustment", "admin");
+}
+
+test "regular periods in different books can overlap" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try book.Book.create(database, "Book B", "USD", 2, "admin");
+
+    _ = try Period.create(database, 1, "Jan A", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try Period.create(database, 2, "Jan B", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+}
+
+test "non-overlapping regular periods accepted" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Period.create(database, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
 }
 
 // ── Account status lifecycle tests ──────────────────────────────

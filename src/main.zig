@@ -264,3 +264,86 @@ test "ledger_open is idempotent on existing file" {
     try std.testing.expect(h2 != null);
     if (h2) |h| ledger_close(h);
 }
+
+// ── Sprint 2: C ABI integration tests ──────────────────────────
+
+test "C ABI: full lifecycle book -> account -> period -> transition" {
+    defer cleanupTestFile("test-cabi-lifecycle.ledger");
+    const handle = ledger_open("test-cabi-lifecycle.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        try std.testing.expect(book_id > 0);
+
+        const acct_id = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        try std.testing.expect(acct_id > 0);
+
+        const period_id = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        try std.testing.expect(period_id > 0);
+
+        try std.testing.expect(ledger_transition_period(h, period_id, "soft_closed", "admin"));
+        try std.testing.expect(ledger_update_account_status(h, acct_id, "inactive", "admin"));
+        try std.testing.expect(ledger_set_rounding_account(h, book_id, acct_id, "admin"));
+    }
+}
+
+test "C ABI: bulk create periods via C boundary" {
+    defer cleanupTestFile("test-cabi-bulk.ledger");
+    const handle = ledger_open("test-cabi-bulk.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        try std.testing.expect(book_id > 0);
+
+        try std.testing.expect(ledger_bulk_create_periods(h, book_id, 2026, 1, "monthly", "admin"));
+
+        var stmt = try h.sqlite.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
+    }
+}
+
+test "C ABI: null handle returns error values" {
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_book(null, "Test", "PHP", 2, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_account(null, 1, "1000", "Cash", "asset", 0, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_period(null, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin"));
+    try std.testing.expect(!ledger_update_account_status(null, 1, "inactive", "admin"));
+    try std.testing.expect(!ledger_transition_period(null, 1, "soft_closed", "admin"));
+    try std.testing.expect(!ledger_set_rounding_account(null, 1, 1, "admin"));
+    try std.testing.expect(!ledger_bulk_create_periods(null, 1, 2026, 1, "monthly", "admin"));
+}
+
+test "C ABI: invalid account_type string returns -1" {
+    defer cleanupTestFile("test-cabi-bad-type.ledger");
+    const handle = ledger_open("test-cabi-bad-type.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        const result = ledger_create_account(h, book_id, "1000", "Cash", "invalid_type", 0, "admin");
+        try std.testing.expectEqual(@as(i64, -1), result);
+    }
+}
+
+test "C ABI: invalid granularity string returns false" {
+    defer cleanupTestFile("test-cabi-bad-gran.ledger");
+    const handle = ledger_open("test-cabi-bad-gran.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        try std.testing.expect(!ledger_bulk_create_periods(h, book_id, 2026, 1, "weekly", "admin"));
+    }
+}
