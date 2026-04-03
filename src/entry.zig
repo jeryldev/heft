@@ -1215,6 +1215,98 @@ test "multi-currency void reverses base amounts correctly" {
     try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
 }
 
+test "addLine writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type, action FROM ledger_audit_log WHERE entity_type = 'entry_line';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry_line", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+}
+
+test "reverse writes audit log for both entries" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+
+    // Original entry: reverse action
+    {
+        var stmt = try database.prepare("SELECT action, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'reverse';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("reverse", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("posted", stmt.columnText(1).?);
+        try std.testing.expectEqualStrings("reversed", stmt.columnText(2).?);
+    }
+
+    // Reversal entry: create action
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'create';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        // 2 creates: original draft + reversal entry
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+}
+
+test "full posting lifecycle audit trail in order" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create draft + lines + post + void
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    try Entry.voidEntry(database, 1, "Error", "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT entity_type, action FROM ledger_audit_log
+        \\WHERE entity_type IN ('entry', 'entry_line')
+        \\ORDER BY id;
+    );
+    defer stmt.finalize();
+
+    // 1: entry create
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+
+    // 2: line 1 create
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry_line", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+
+    // 3: line 2 create
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry_line", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+
+    // 4: entry post
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("post", stmt.columnText(1).?);
+
+    // 5: entry void
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("void", stmt.columnText(1).?);
+
+    // No more rows
+    const more = try stmt.step();
+    try std.testing.expect(!more);
+}
+
 test "post entry then close period — entry stays posted" {
     const database = try setupTestDb();
     defer database.close();
