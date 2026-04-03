@@ -154,6 +154,41 @@ pub export fn ledger_edit_line(handle: ?*LedgerDB, line_id: i64, debit_amount: i
     return true;
 }
 
+pub export fn ledger_trial_balance(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8) ?*heft.report.ReportResult {
+    const h = handle orelse return null;
+    return heft.report.trialBalance(h.sqlite, book_id, std.mem.span(as_of_date)) catch null;
+}
+
+pub export fn ledger_income_statement(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.ReportResult {
+    const h = handle orelse return null;
+    return heft.report.incomeStatement(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, fy_start_date: [*:0]const u8) ?*heft.report.ReportResult {
+    const h = handle orelse return null;
+    return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch null;
+}
+
+pub export fn ledger_free_result(result: ?*heft.report.ReportResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
+pub export fn ledger_result_row_count(result: ?*heft.report.ReportResult) i32 {
+    const r = result orelse return 0;
+    return @intCast(r.rows.len);
+}
+
+pub export fn ledger_result_total_debits(result: ?*heft.report.ReportResult) i64 {
+    const r = result orelse return 0;
+    return r.total_debits;
+}
+
+pub export fn ledger_result_total_credits(result: ?*heft.report.ReportResult) i64 {
+    const r = result orelse return 0;
+    return r.total_credits;
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
@@ -589,4 +624,101 @@ test "C ABI: remove line and delete draft through C boundary" {
         try std.testing.expect(ledger_remove_line(h, line_id, "admin"));
         try std.testing.expect(ledger_delete_draft(h, entry_id, "admin"));
     }
+}
+
+// ── Sprint 4 C ABI: Report tests ───────────────────────────────
+
+test "C ABI: trial balance through C boundary" {
+    defer cleanupTestFile("test-cabi-tb.ledger");
+    const handle = ledger_open("test-cabi-tb.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "2000", "AP", "liability", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const result = ledger_trial_balance(h, book_id, "2026-01-31");
+        try std.testing.expect(result != null);
+
+        if (result) |r| {
+            defer ledger_free_result(r);
+            try std.testing.expect(ledger_result_row_count(r) >= 2);
+            try std.testing.expectEqual(ledger_result_total_debits(r), ledger_result_total_credits(r));
+        }
+    }
+}
+
+test "C ABI: income statement through C boundary" {
+    defer cleanupTestFile("test-cabi-is.ledger");
+    const handle = ledger_open("test-cabi-is.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "4000", "Revenue", "revenue", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const result = ledger_income_statement(h, book_id, "2026-01-01", "2026-01-31");
+        try std.testing.expect(result != null);
+
+        if (result) |r| {
+            defer ledger_free_result(r);
+            try std.testing.expectEqual(@as(i64, 5_000_000_000_00), ledger_result_total_credits(r));
+        }
+    }
+}
+
+test "C ABI: balance sheet through C boundary" {
+    defer cleanupTestFile("test-cabi-bs.ledger");
+    const handle = ledger_open("test-cabi-bs.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const result = ledger_balance_sheet(h, book_id, "2026-01-31", "2026-01-01");
+        try std.testing.expect(result != null);
+
+        if (result) |r| {
+            defer ledger_free_result(r);
+            try std.testing.expectEqual(ledger_result_total_debits(r), ledger_result_total_credits(r));
+        }
+    }
+}
+
+test "C ABI: null handle returns null for reports" {
+    try std.testing.expect(ledger_trial_balance(null, 1, "2026-01-31") == null);
+    try std.testing.expect(ledger_income_statement(null, 1, "2026-01-01", "2026-01-31") == null);
+    try std.testing.expect(ledger_balance_sheet(null, 1, "2026-01-31", "2026-01-01") == null);
+}
+
+test "C ABI: free null result is safe" {
+    ledger_free_result(null);
 }
