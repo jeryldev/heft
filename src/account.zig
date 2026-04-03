@@ -100,6 +100,14 @@ pub const Account = struct {
         return false;
     }
 
+    fn isValidTransition(from: []const u8, to: []const u8) bool {
+        if (std.mem.eql(u8, from, to)) return false;
+        if (std.mem.eql(u8, from, "archived")) return false;
+        if (std.mem.eql(u8, from, "active")) return true;
+        if (std.mem.eql(u8, from, "inactive")) return true;
+        return false;
+    }
+
     pub fn updateStatus(database: db.Database, account_id: i64, new_status: []const u8, performed_by: []const u8) !void {
         if (!isValidStatus(new_status)) return error.InvalidInput;
 
@@ -119,6 +127,8 @@ pub const Account = struct {
             acct_book_id = stmt.columnInt64(1);
         }
         const old_status = old_status_buf[0..old_status_len];
+
+        if (!isValidTransition(old_status, new_status)) return error.InvalidTransition;
 
         try database.beginTransaction();
         errdefer database.rollback();

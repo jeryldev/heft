@@ -101,9 +101,10 @@ pub export fn ledger_set_rounding_account(handle: ?*LedgerDB, book_id: i64, acco
     return true;
 }
 
-pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, year: i32, month_count: i32, performed_by: [*:0]const u8) bool {
+pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, fiscal_year: i32, start_month: i32, granularity: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.period.Period.bulkCreate(h.sqlite, book_id, year, month_count, std.mem.span(performed_by)) catch return false;
+    const gran = heft.period.PeriodGranularity.fromString(std.mem.span(granularity)) orelse return false;
+    heft.period.Period.bulkCreate(h.sqlite, book_id, fiscal_year, start_month, gran, std.mem.span(performed_by)) catch return false;
     return true;
 }
 

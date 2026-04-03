@@ -35,6 +35,44 @@ pub const PeriodStatus = enum {
     }
 };
 
+pub const PeriodGranularity = enum {
+    monthly,
+    quarterly,
+    semi_annual,
+    annual,
+
+    pub fn periodCount(self: PeriodGranularity) u8 {
+        return switch (self) {
+            .monthly => 12,
+            .quarterly => 4,
+            .semi_annual => 2,
+            .annual => 1,
+        };
+    }
+
+    pub fn monthsPerPeriod(self: PeriodGranularity) u8 {
+        return switch (self) {
+            .monthly => 1,
+            .quarterly => 3,
+            .semi_annual => 6,
+            .annual => 12,
+        };
+    }
+
+    pub fn fromString(s: []const u8) ?PeriodGranularity {
+        const map = .{
+            .{ "monthly", PeriodGranularity.monthly },
+            .{ "quarterly", PeriodGranularity.quarterly },
+            .{ "semi_annual", PeriodGranularity.semi_annual },
+            .{ "annual", PeriodGranularity.annual },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
+};
+
 pub const Period = struct {
     const create_sql: [*:0]const u8 =
         \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, period_type, book_id)
@@ -143,8 +181,17 @@ pub const Period = struct {
         return days_in_month[month - 1];
     }
 
-    pub fn bulkCreate(database: db.Database, book_id: i64, year: i32, month_count: i32, performed_by: []const u8) !void {
-        if (month_count < 1 or month_count > 12) return error.InvalidInput;
+    fn calendarMonth(start_month: u8, offset: u8) u8 {
+        return (start_month + offset - 1) % 12 + 1;
+    }
+
+    fn calendarYear(fiscal_year: i32, start_month: u8, actual_month: u8) u32 {
+        if (start_month == 1) return @intCast(fiscal_year);
+        return if (actual_month >= start_month) @as(u32, @intCast(fiscal_year)) - 1 else @intCast(fiscal_year);
+    }
+
+    pub fn bulkCreate(database: db.Database, book_id: i64, fiscal_year: i32, start_month: i32, granularity: PeriodGranularity, performed_by: []const u8) !void {
+        if (start_month < 1 or start_month > 12) return error.InvalidInput;
 
         // Verify book exists
         {
@@ -173,19 +220,31 @@ pub const Period = struct {
         var end_buf: [16]u8 = undefined;
         var name_buf: [48]u8 = undefined;
 
-        const count: u8 = @intCast(month_count);
-        for (1..@as(u9, count) + 1) |m| {
-            const month: u8 = @intCast(m);
-            const last = lastDay(month, year);
+        const period_count = granularity.periodCount();
+        const months_per = granularity.monthsPerPeriod();
+        const sm: u8 = @intCast(start_month);
 
-            const yr: u32 = @intCast(year);
-            const start_date = std.fmt.bufPrint(&start_buf, "{d:0>4}-{d:0>2}-01", .{ yr, month }) catch unreachable;
-            const end_date = std.fmt.bufPrint(&end_buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ yr, month, last }) catch unreachable;
-            const period_name = std.fmt.bufPrint(&name_buf, "{s} {d}", .{ month_names[month - 1], yr }) catch unreachable;
+        for (0..period_count) |p| {
+            const period_num: u8 = @intCast(p + 1);
+            const month_offset: u8 = @intCast(p * months_per);
+
+            // Start date: first day of the first month in this period
+            const first_month = calendarMonth(sm, month_offset);
+            const first_year = calendarYear(fiscal_year, sm, first_month);
+
+            // End date: last day of the last month in this period
+            const last_month_offset: u8 = month_offset + months_per - 1;
+            const end_month = calendarMonth(sm, last_month_offset);
+            const end_year = calendarYear(fiscal_year, sm, end_month);
+            const end_day = lastDay(end_month, @intCast(end_year));
+
+            const start_date = std.fmt.bufPrint(&start_buf, "{d:0>4}-{d:0>2}-01", .{ first_year, first_month }) catch unreachable;
+            const end_date = std.fmt.bufPrint(&end_buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ end_year, end_month, end_day }) catch unreachable;
+            const period_name = std.fmt.bufPrint(&name_buf, "P{d} FY{d}", .{ period_num, @as(u32, @intCast(fiscal_year)) }) catch unreachable;
 
             try insert_stmt.bindText(1, period_name);
-            try insert_stmt.bindInt(2, @intCast(month));
-            try insert_stmt.bindInt(3, @intCast(year));
+            try insert_stmt.bindInt(2, @intCast(period_num));
+            try insert_stmt.bindInt(3, @intCast(fiscal_year));
             try insert_stmt.bindText(4, start_date);
             try insert_stmt.bindText(5, end_date);
             try insert_stmt.bindText(6, "regular");
@@ -212,6 +271,7 @@ pub const Period = struct {
 
 const schema = @import("schema.zig");
 const book = @import("book.zig");
+const account_mod = @import("account.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -480,7 +540,7 @@ test "bulkCreate creates 12 monthly periods" {
     const database = try setupTestDb();
     defer database.close();
 
-    try Period.bulkCreate(database, 1, 2026, 12, "admin");
+    try Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
 
     var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
     defer stmt.finalize();
@@ -488,11 +548,11 @@ test "bulkCreate creates 12 monthly periods" {
     try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
 }
 
-test "bulkCreate sets correct period numbers and dates" {
+test "bulkCreate monthly sets correct dates for Jan, Feb, Dec" {
     const database = try setupTestDb();
     defer database.close();
 
-    try Period.bulkCreate(database, 1, 2026, 3, "admin");
+    try Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
 
     {
         var stmt = try database.prepare("SELECT period_number, start_date, end_date FROM ledger_periods WHERE period_number = 1;");
@@ -512,11 +572,11 @@ test "bulkCreate sets correct period numbers and dates" {
     }
 
     {
-        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 3;");
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 12;");
         defer stmt.finalize();
         _ = try stmt.step();
-        try std.testing.expectEqualStrings("2026-03-01", stmt.columnText(0).?);
-        try std.testing.expectEqualStrings("2026-03-31", stmt.columnText(1).?);
+        try std.testing.expectEqualStrings("2026-12-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-12-31", stmt.columnText(1).?);
     }
 }
 
@@ -524,12 +584,12 @@ test "bulkCreate writes audit log for each period" {
     const database = try setupTestDb();
     defer database.close();
 
-    try Period.bulkCreate(database, 1, 2026, 3, "admin");
+    try Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
 
     var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'period';");
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
 }
 
 test "bulkCreate is atomic — all or nothing" {
@@ -540,7 +600,7 @@ test "bulkCreate is atomic — all or nothing" {
     _ = try Period.create(database, 1, "Already Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
     // bulkCreate should fail because period 1 already exists
-    const result = Period.bulkCreate(database, 1, 2026, 12, "admin");
+    const result = Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
     try std.testing.expectError(error.DuplicateNumber, result);
 
     // Only the manually created period should exist (bulk was rolled back)
@@ -554,7 +614,7 @@ test "bulkCreate rejects nonexistent book" {
     const database = try setupTestDb();
     defer database.close();
 
-    const result = Period.bulkCreate(database, 999, 2026, 12, "admin");
+    const result = Period.bulkCreate(database, 999, 2026, 1, .monthly, "admin");
     try std.testing.expectError(error.NotFound, result);
 }
 
@@ -562,10 +622,410 @@ test "bulkCreate handles leap year February" {
     const database = try setupTestDb();
     defer database.close();
 
-    try Period.bulkCreate(database, 1, 2024, 2, "admin");
+    try Period.bulkCreate(database, 1, 2024, 1, .monthly, "admin");
 
     var stmt = try database.prepare("SELECT end_date FROM ledger_periods WHERE period_number = 2;");
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqualStrings("2024-02-29", stmt.columnText(0).?);
+}
+
+// ── Non-calendar fiscal year tests ──────────────────────────────
+
+test "bulkCreate monthly FY Apr-Mar: dates span two calendar years" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // FY2027 starting April: Apr 2026 - Mar 2027
+    try Period.bulkCreate(database, 1, 2027, 4, .monthly, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
+}
+
+test "bulkCreate monthly FY Apr-Mar: period 1 is April, period 12 is March" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2027, 4, .monthly, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-04-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-04-30", stmt.columnText(1).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 12;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2027-03-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2027-03-31", stmt.columnText(1).?);
+    }
+}
+
+test "bulkCreate monthly FY Jul-Jun (Australia)" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2027, 7, .monthly, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-07-01", stmt.columnText(0).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 12;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2027-06-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2027-06-30", stmt.columnText(1).?);
+    }
+}
+
+test "bulkCreate monthly FY Oct-Sep (US Federal)" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2027, 10, .monthly, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-10-01", stmt.columnText(0).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 12;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2027-09-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2027-09-30", stmt.columnText(1).?);
+    }
+}
+
+test "bulkCreate non-calendar FY with leap year Feb" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // FY2024 starting Oct: period 5 = Feb 2024 (leap year)
+    try Period.bulkCreate(database, 1, 2024, 10, .monthly, "admin");
+
+    var stmt = try database.prepare("SELECT end_date FROM ledger_periods WHERE period_number = 5;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("2024-02-29", stmt.columnText(0).?);
+}
+
+// ── Quarterly tests ─────────────────────────────────────────────
+
+test "bulkCreate quarterly calendar year: 4 periods" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .quarterly, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+}
+
+test "bulkCreate quarterly calendar year: correct date ranges" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .quarterly, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-01-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-03-31", stmt.columnText(1).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 4;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-10-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-12-31", stmt.columnText(1).?);
+    }
+}
+
+test "bulkCreate quarterly FY Apr: Q1=Apr-Jun, Q4=Jan-Mar" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2027, 4, .quarterly, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-04-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-06-30", stmt.columnText(1).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 4;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2027-01-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2027-03-31", stmt.columnText(1).?);
+    }
+}
+
+// ── Semi-annual tests ───────────────────────────────────────────
+
+test "bulkCreate semi-annual calendar year: 2 periods" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .semi_annual, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+}
+
+test "bulkCreate semi-annual calendar year: correct date ranges" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .semi_annual, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-01-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-06-30", stmt.columnText(1).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 2;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-07-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-12-31", stmt.columnText(1).?);
+    }
+}
+
+test "bulkCreate semi-annual FY Jul: H1=Jul-Dec, H2=Jan-Jun" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2027, 7, .semi_annual, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2026-07-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2026-12-31", stmt.columnText(1).?);
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 2;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("2027-01-01", stmt.columnText(0).?);
+        try std.testing.expectEqualStrings("2027-06-30", stmt.columnText(1).?);
+    }
+}
+
+// ── Annual tests ────────────────────────────────────────────────
+
+test "bulkCreate annual calendar year: 1 period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .annual, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "bulkCreate annual calendar year: Jan-Dec" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .annual, "admin");
+
+    var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("2026-01-01", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("2026-12-31", stmt.columnText(1).?);
+}
+
+test "bulkCreate annual FY Apr: Apr-Mar" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2027, 4, .annual, "admin");
+
+    var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE period_number = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("2026-04-01", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("2027-03-31", stmt.columnText(1).?);
+}
+
+// ── Validation tests ────────────────────────────────────────────
+
+test "bulkCreate rejects start_month 0" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Period.bulkCreate(database, 1, 2026, 0, .monthly, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "bulkCreate rejects start_month 13" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Period.bulkCreate(database, 1, 2026, 13, .monthly, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "adjustment period coexists with bulk monthly" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
+    _ = try Period.create(database, 1, "Year-End Adj", 13, 2026, "2026-12-01", "2026-12-31", "adjustment", "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 13), stmt.columnInt(0));
+}
+
+test "adjustment period coexists with bulk quarterly" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2026, 1, .quarterly, "admin");
+    _ = try Period.create(database, 1, "Year-End Adj", 13, 2026, "2026-12-01", "2026-12-31", "adjustment", "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 5), stmt.columnInt(0));
+}
+
+// ── Account status lifecycle tests ──────────────────────────────
+
+test "account archived rejects further transitions" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try account_mod.Account.updateStatus(database, 1, "archived", "admin");
+
+    const to_active = account_mod.Account.updateStatus(database, 1, "active", "admin");
+    try std.testing.expectError(error.InvalidTransition, to_active);
+
+    const to_inactive = account_mod.Account.updateStatus(database, 1, "inactive", "admin");
+    try std.testing.expectError(error.InvalidTransition, to_inactive);
+}
+
+test "account full lifecycle: active -> inactive -> active -> archived" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try account_mod.Account.updateStatus(database, 1, "inactive", "admin");
+    try account_mod.Account.updateStatus(database, 1, "active", "admin");
+    try account_mod.Account.updateStatus(database, 1, "archived", "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+test "account same-status transition rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+
+    const result = account_mod.Account.updateStatus(database, 1, "active", "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
+}
+
+// ── Audit chronological tests ───────────────────────────────────
+
+test "audit records for multiple transitions in chronological order" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Period.create(database, 1, "January 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try Period.transition(database, 1, .soft_closed, "admin");
+    try Period.transition(database, 1, .closed, "admin");
+    try Period.transition(database, 1, .locked, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT old_value, new_value FROM ledger_audit_log
+        \\WHERE entity_type = 'period' AND action = 'transition'
+        \\ORDER BY id;
+    );
+    defer stmt.finalize();
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("open", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("soft_closed", stmt.columnText(1).?);
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("soft_closed", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("closed", stmt.columnText(1).?);
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("closed", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("locked", stmt.columnText(1).?);
+}
+
+test "full lifecycle audit trail: book -> account -> period -> transitions" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // setupTestDb already created a book (id=1)
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try Period.create(database, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try Period.transition(database, 1, .soft_closed, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type, action FROM ledger_audit_log ORDER BY id;");
+    defer stmt.finalize();
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("book", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("account", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("period", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("create", stmt.columnText(1).?);
+
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("period", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("transition", stmt.columnText(1).?);
 }
