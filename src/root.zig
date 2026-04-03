@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const db = @import("db.zig");
-const schema = @import("schema.zig");
+pub const schema = @import("schema.zig");
 
 comptime {
     _ = db;
