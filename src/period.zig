@@ -144,6 +144,8 @@ pub const Period = struct {
     }
 
     pub fn bulkCreate(database: db.Database, book_id: i64, year: i32, month_count: i32, performed_by: []const u8) !void {
+        if (month_count < 1 or month_count > 12) return error.InvalidInput;
+
         // Verify book exists
         {
             var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");

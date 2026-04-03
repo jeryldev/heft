@@ -12,6 +12,20 @@ pub const AccountType = enum {
     pub fn toString(self: AccountType) []const u8 {
         return @tagName(self);
     }
+
+    pub fn fromString(s: []const u8) ?AccountType {
+        const map = .{
+            .{ "asset", AccountType.asset },
+            .{ "liability", AccountType.liability },
+            .{ "equity", AccountType.equity },
+            .{ "revenue", AccountType.revenue },
+            .{ "expense", AccountType.expense },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
 };
 
 pub const NormalBalance = enum {

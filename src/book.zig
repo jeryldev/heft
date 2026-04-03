@@ -32,9 +32,6 @@ pub const Book = struct {
     }
 
     pub fn setRoundingAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
-
         // Verify book exists
         {
             var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
@@ -53,6 +50,9 @@ pub const Book = struct {
             if (!has_row) return error.NotFound;
             if (stmt.columnInt64(0) != book_id) return error.InvalidInput;
         }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
 
         // Update book
         {

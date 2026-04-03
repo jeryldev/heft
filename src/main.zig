@@ -64,6 +64,49 @@ pub export fn ledger_version() [*:0]const u8 {
     return "0.0.1";
 }
 
+// ── Sprint 2: Entity C ABI Exports ─────────────────────────────
+
+pub export fn ledger_create_book(handle: ?*LedgerDB, name: [*:0]const u8, base_currency: [*:0]const u8, decimal_places: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.book.Book.create(h.sqlite, std.mem.span(name), std.mem.span(base_currency), decimal_places, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_create_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, is_contra: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const at = heft.account.AccountType.fromString(std.mem.span(account_type)) orelse return -1;
+    return heft.account.Account.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), at, is_contra != 0, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_create_period(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, period_number: i32, year: i32, start_date: [*:0]const u8, end_date: [*:0]const u8, period_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.period.Period.create(h.sqlite, book_id, std.mem.span(name), period_number, year, std.mem.span(start_date), std.mem.span(end_date), std.mem.span(period_type), std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_update_account_status(handle: ?*LedgerDB, account_id: i64, new_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.account.Account.updateStatus(h.sqlite, account_id, std.mem.span(new_status), std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_transition_period(handle: ?*LedgerDB, period_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const ts = heft.period.PeriodStatus.fromString(std.mem.span(target_status)) orelse return false;
+    heft.period.Period.transition(h.sqlite, period_id, ts, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_set_rounding_account(handle: ?*LedgerDB, book_id: i64, account_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.setRoundingAccount(h.sqlite, book_id, account_id, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, year: i32, month_count: i32, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.period.Period.bulkCreate(h.sqlite, book_id, year, month_count, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 fn cleanupTestFile(name: [*:0]const u8) void {
