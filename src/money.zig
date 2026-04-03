@@ -348,3 +348,59 @@ test "formatDecimal: amount that rounds to visible digits" {
     const result = try formatDecimal(&buf, 100_000_000, 2);
     try std.testing.expectEqualStrings("1.00", result);
 }
+
+// ── Round-trip tests ────────────────────────────────────────────
+
+test "parseDecimal -> formatDecimal round-trip: 10000.50" {
+    const parsed = try parseDecimal("10000.50", AMOUNT_SCALE);
+    var buf: [32]u8 = undefined;
+    const formatted = try formatDecimal(&buf, parsed, 2);
+    try std.testing.expectEqualStrings("10000.50", formatted);
+}
+
+test "parseDecimal -> formatDecimal round-trip: 0.01" {
+    const parsed = try parseDecimal("0.01", AMOUNT_SCALE);
+    var buf: [32]u8 = undefined;
+    const formatted = try formatDecimal(&buf, parsed, 2);
+    try std.testing.expectEqualStrings("0.01", formatted);
+}
+
+test "parseDecimal -> formatDecimal round-trip: negative" {
+    const parsed = try parseDecimal("-1234.56", AMOUNT_SCALE);
+    var buf: [32]u8 = undefined;
+    const formatted = try formatDecimal(&buf, parsed, 2);
+    try std.testing.expectEqualStrings("-1234.56", formatted);
+}
+
+test "parseDecimal -> formatDecimal round-trip: whole number" {
+    const parsed = try parseDecimal("500", AMOUNT_SCALE);
+    var buf: [32]u8 = undefined;
+    const formatted = try formatDecimal(&buf, parsed, 2);
+    try std.testing.expectEqualStrings("500.00", formatted);
+}
+
+// ── Additional edge cases ───────────────────────────────────────
+
+test "computeBaseAmount: both operands negative" {
+    // (-100) * (-2.0) = 200 (positive result from two negatives)
+    // But fx_rate should always be positive (CHECK constraint)
+    // This tests the math, not the business rule
+    const result = try computeBaseAmount(-10_000_000_000, -20_000_000_000);
+    try std.testing.expectEqual(@as(i64, 20_000_000_000), result);
+}
+
+test "computeBaseAmount: amount = 1 (smallest unit)" {
+    const result = try computeBaseAmount(1, FX_RATE_SCALE);
+    try std.testing.expectEqual(@as(i64, 1), result);
+}
+
+test "computeBaseAmount: FX truncation with unequal sides" {
+    // 33.33 * 1.0 = 33.33 on both sides, but what about:
+    // 100.00 / 3 = 33.333333... per line (truncated differently)
+    // This tests that two lines with the same FX rate but different
+    // amounts still balance if the input amounts balance
+    const line1 = try computeBaseAmount(33_33_000_000, FX_RATE_SCALE); // 33.33
+    const line2 = try computeBaseAmount(66_67_000_000, FX_RATE_SCALE); // 66.67
+    // 33.33 + 66.67 = 100.00 — should balance
+    try std.testing.expectEqual(@as(i64, 100_00_000_000), line1 + line2);
+}

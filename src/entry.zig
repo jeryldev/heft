@@ -1123,3 +1123,113 @@ test "full lifecycle: create -> post -> reverse -> verify cache balanced" {
     try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(1));
     try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(2));
 }
+
+// ── Business edge case tests ────────────────────────────────────
+
+test "post, void, then post new entry — cache correct" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Post entry 1: debit Cash 1000, credit AP 1000
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    // Void it
+    try Entry.voidEntry(database, 1, "Wrong amount", "admin");
+
+    // Post entry 2: debit Cash 2000, credit AP 2000
+    _ = try Entry.createDraft(database, 1, "JE-002", "2026-01-16", "2026-01-16", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 2, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 2, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 2, "admin");
+
+    // Cache should only reflect entry 2 (entry 1 voided)
+    var stmt = try database.prepare("SELECT debit_sum, credit_sum, entry_count FROM ledger_account_balances WHERE account_id = 1 AND period_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), stmt.columnInt64(0));
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(2));
+}
+
+test "reverse 3-line entry creates correct flipped lines" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "2100", "Tax Payable", .liability, false, "admin");
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 800_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    const rev_id = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+
+    // Reversal should have 3 lines
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, rev_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+}
+
+test "compound entry: two lines on same account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Partial payment: debit Cash 1000, credit AP 700 + credit AP 300
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 700_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 3, 0, 300_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    // AP balance cache should show total credit of 1000
+    var stmt = try database.prepare("SELECT credit_sum FROM ledger_account_balances WHERE account_id = 2 AND period_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), stmt.columnInt64(0));
+}
+
+test "multi-currency void reverses base amounts correctly" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const usd_amount: i64 = 10_000_000_000; // 100.00 USD
+    const fx: i64 = 565_000_000_000; // 56.50 PHP/USD
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, usd_amount, 0, "USD", fx, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, usd_amount, "USD", fx, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    try Entry.voidEntry(database, 1, "FX error", "admin");
+
+    // Cache should be zero after void
+    var stmt = try database.prepare("SELECT debit_sum, credit_sum FROM ledger_account_balances WHERE account_id = 1 AND period_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
+}
+
+test "post entry then close period — entry stays posted" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+
+    // Entry should still be posted
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}

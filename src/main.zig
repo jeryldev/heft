@@ -443,3 +443,90 @@ test "C ABI: archive book with open periods returns false" {
         try std.testing.expect(!ledger_archive_book(h, book_id, "admin"));
     }
 }
+
+// ── Sprint 3 C ABI integration tests ───────────────────────────
+
+test "C ABI: full posting lifecycle through C boundary" {
+    defer cleanupTestFile("test-cabi-posting.ledger");
+    const handle = ledger_open("test-cabi-posting.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "2000", "AP", "liability", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        try std.testing.expect(entry_id > 0);
+
+        const line1 = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        try std.testing.expect(line1 > 0);
+
+        const line2 = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        try std.testing.expect(line2 > 0);
+
+        try std.testing.expect(ledger_post_entry(h, entry_id, "admin"));
+
+        var stmt = try h.sqlite.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, entry_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+    }
+}
+
+test "C ABI: void entry through C boundary" {
+    defer cleanupTestFile("test-cabi-void.ledger");
+    const handle = ledger_open("test-cabi-void.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "2000", "AP", "liability", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        try std.testing.expect(ledger_void_entry(h, entry_id, "Error", "admin"));
+    }
+}
+
+test "C ABI: reverse entry through C boundary" {
+    defer cleanupTestFile("test-cabi-reverse.ledger");
+    const handle = ledger_open("test-cabi-reverse.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "2000", "AP", "liability", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const reversal_id = ledger_reverse_entry(h, entry_id, "Accrual reversal", "2026-01-31", "admin");
+        try std.testing.expect(reversal_id > 0);
+    }
+}
+
+test "C ABI: null handle returns error for Sprint 3 exports" {
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_draft(null, 1, "JE-001", "2026-01-15", "2026-01-15", 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_line(null, 1, 1, 100, 0, "PHP", 10_000_000_000, 1, "admin"));
+    try std.testing.expect(!ledger_post_entry(null, 1, "admin"));
+    try std.testing.expect(!ledger_void_entry(null, 1, "Error", "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_reverse_entry(null, 1, "Reason", "2026-01-31", "admin"));
+}
