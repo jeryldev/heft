@@ -109,6 +109,12 @@ pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, fisca
     return true;
 }
 
+pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 fn cleanupTestFile(name: [*:0]const u8) void {
@@ -320,6 +326,7 @@ test "C ABI: null handle returns error values" {
     try std.testing.expect(!ledger_transition_period(null, 1, "soft_closed", "admin"));
     try std.testing.expect(!ledger_set_rounding_account(null, 1, 1, "admin"));
     try std.testing.expect(!ledger_bulk_create_periods(null, 1, 2026, 1, "monthly", "admin"));
+    try std.testing.expect(!ledger_archive_book(null, 1, "admin"));
 }
 
 test "C ABI: invalid account_type string returns -1" {
@@ -346,5 +353,66 @@ test "C ABI: invalid granularity string returns false" {
 
         const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
         try std.testing.expect(!ledger_bulk_create_periods(h, book_id, 2026, 1, "weekly", "admin"));
+    }
+}
+
+test "C ABI: invalid account status string returns false" {
+    defer cleanupTestFile("test-cabi-bad-acct-status.ledger");
+    const handle = ledger_open("test-cabi-bad-acct-status.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        const acct_id = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        try std.testing.expect(!ledger_update_account_status(h, acct_id, "deleted", "admin"));
+    }
+}
+
+test "C ABI: invalid period status string returns false" {
+    defer cleanupTestFile("test-cabi-bad-period-status.ledger");
+    const handle = ledger_open("test-cabi-bad-period-status.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        try std.testing.expect(!ledger_transition_period(h, 1, "deleted", "admin"));
+    }
+}
+
+test "C ABI: archive book via C boundary" {
+    defer cleanupTestFile("test-cabi-archive.ledger");
+    const handle = ledger_open("test-cabi-archive.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        try std.testing.expect(ledger_archive_book(h, book_id, "admin"));
+
+        var stmt = try h.sqlite.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+    }
+}
+
+test "C ABI: archive book with open periods returns false" {
+    defer cleanupTestFile("test-cabi-archive-fail.ledger");
+    const handle = ledger_open("test-cabi-archive-fail.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "FY2026", "PHP", 2, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        try std.testing.expect(!ledger_archive_book(h, book_id, "admin"));
     }
 }

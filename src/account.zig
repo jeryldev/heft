@@ -90,13 +90,15 @@ pub const Account = struct {
         if (number.len == 0 or number.len > max_number_len) return error.InvalidInput;
         if (name.len == 0) return error.InvalidInput;
 
-        // Verify book exists
+        // Verify book exists and is active
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const book_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, book_status, "archived")) return error.InvalidInput;
         }
 
         const normal_balance = deriveNormalBalance(account_type, is_contra);
@@ -329,6 +331,16 @@ test "create account rejects nonexistent book" {
 
     const result = Account.create(database, 999, "1000", "Cash", .asset, false, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "create account rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try book.Book.archive(database, 1, "admin");
+
+    const result = Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
 }
 
 // ── updateStatus tests ──────────────────────────────────────────

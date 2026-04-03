@@ -96,13 +96,15 @@ pub const Period = struct {
         if (period_number < 1 or period_number > 16) return error.InvalidInput;
         if (!isValidType(period_type)) return error.InvalidInput;
 
-        // Verify book exists
+        // Verify book exists and is active
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const book_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, book_status, "archived")) return error.InvalidInput;
         }
 
         // Overlap detection for regular periods
@@ -200,13 +202,15 @@ pub const Period = struct {
     pub fn bulkCreate(database: db.Database, book_id: i64, fiscal_year: i32, start_month: i32, granularity: PeriodGranularity, performed_by: []const u8) !void {
         if (start_month < 1 or start_month > 12) return error.InvalidInput;
 
-        // Verify book exists
+        // Verify book exists and is active
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const book_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, book_status, "archived")) return error.InvalidInput;
         }
 
         try database.beginTransaction();
@@ -418,6 +422,26 @@ test "create period rejects nonexistent book" {
 
     const result = Period.create(database, 999, "January", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "create period rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try book.Book.archive(database, 1, "admin");
+
+    const result = Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "bulkCreate rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try book.Book.archive(database, 1, "admin");
+
+    const result = Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
 }
 
 test "create period rejects duplicate period_number+year in same book" {
