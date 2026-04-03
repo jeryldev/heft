@@ -31,6 +31,7 @@ fn internal_open(path: [*:0]const u8) !*LedgerDB {
 }
 
 fn internal_close(handle: *LedgerDB) void {
+    handle.sqlite.drainLeakedStatements();
     handle.sqlite.close();
     std.heap.c_allocator.destroy(handle);
 }

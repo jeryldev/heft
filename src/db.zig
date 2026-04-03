@@ -34,6 +34,12 @@ pub const Database = struct {
         return self;
     }
 
+    pub fn drainLeakedStatements(self: Database) void {
+        while (c.sqlite3_next_stmt(self.handle, null)) |stmt| {
+            _ = c.sqlite3_finalize(stmt);
+        }
+    }
+
     pub fn close(self: Database) void {
         const rc = c.sqlite3_close(self.handle);
         std.debug.assert(rc == c.SQLITE_OK);
@@ -213,6 +219,28 @@ test "step returns false when no rows" {
     defer stmt.finalize();
     const hasRow = try stmt.step();
     try std.testing.expect(!hasRow);
+}
+
+test "drainLeakedStatements finalizes leaked statement" {
+    const db = try Database.open(":memory:");
+    _ = try db.prepare("SELECT 1;");
+    db.drainLeakedStatements();
+    db.close();
+}
+
+test "drainLeakedStatements handles multiple leaked statements" {
+    const db = try Database.open(":memory:");
+    _ = try db.prepare("SELECT 1;");
+    _ = try db.prepare("SELECT 2;");
+    _ = try db.prepare("SELECT 3;");
+    db.drainLeakedStatements();
+    db.close();
+}
+
+test "drainLeakedStatements is safe when nothing is leaked" {
+    const db = try Database.open(":memory:");
+    db.drainLeakedStatements();
+    db.close();
 }
 
 test "transaction commit persists, rollback discards" {
