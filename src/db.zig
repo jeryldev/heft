@@ -140,6 +140,9 @@ pub const Statement = struct {
         return c.sqlite3_column_int64(self.handle, col);
     }
 
+    /// Returned slice points into SQLite's internal buffer.
+    /// Valid only until the next step(), reset(), or finalize() on this statement.
+    /// Copy the bytes if you need the value to outlive the current row.
     pub fn columnText(self: Statement, col: c_int) ?[]const u8 {
         const ptr = c.sqlite3_column_text(self.handle, col);
         if (ptr == null) return null;
@@ -377,6 +380,139 @@ test "columnInt64 handles negative values" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(negative, stmt.columnInt64(0));
+}
+
+test "bindInt handles i64 max boundary" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+
+    const max_val = std.math.maxInt(i64);
+    {
+        var stmt = try db.prepare("INSERT INTO test (val) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindInt(1, max_val);
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT val FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(max_val, stmt.columnInt64(0));
+}
+
+test "bindInt handles i64 min boundary" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+
+    const min_val = std.math.minInt(i64);
+    {
+        var stmt = try db.prepare("INSERT INTO test (val) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindInt(1, min_val);
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT val FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(min_val, stmt.columnInt64(0));
+}
+
+test "bindInt handles zero" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+
+    {
+        var stmt = try db.prepare("INSERT INTO test (val) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindInt(1, 0);
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT val FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+}
+
+test "bindText handles empty string" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);");
+
+    {
+        var stmt = try db.prepare("INSERT INTO test (name) VALUES (?);");
+        defer stmt.finalize();
+        try stmt.bindText(1, "");
+        _ = try stmt.step();
+    }
+
+    var stmt = try db.prepare("SELECT name FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    const val = stmt.columnText(0);
+    try std.testing.expect(val != null);
+    try std.testing.expectEqualStrings("", val.?);
+}
+
+test "columnInt64 returns 0 for NULL column" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+    try db.exec("INSERT INTO test (val) VALUES (NULL);");
+
+    var stmt = try db.prepare("SELECT val FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+}
+
+test "lastInsertRowId returns 0 before any insert" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try std.testing.expectEqual(@as(i64, 0), db.lastInsertRowId());
+}
+
+test "reset and rebind in a loop inserts correct count" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    try db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+
+    {
+        var stmt = try db.prepare("INSERT INTO test (val) VALUES (?);");
+        defer stmt.finalize();
+
+        for (1..101) |i| {
+            try stmt.bindInt(1, @intCast(i));
+            _ = try stmt.step();
+            stmt.reset();
+            stmt.clearBindings();
+        }
+    }
+
+    var stmt = try db.prepare("SELECT COUNT(*) FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 100), stmt.columnInt(0));
+}
+
+test "nested begin fails with SQLITE_ERROR" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+
+    try db.beginTransaction();
+    const result = db.beginTransaction();
+    try std.testing.expectError(error.SqliteExecFailed, result);
+    db.rollback();
+}
+
+test "rollback outside transaction is safe" {
+    const db = try Database.open(":memory:");
+    defer db.close();
+    db.rollback();
 }
 
 test "transaction commit persists, rollback discards" {
