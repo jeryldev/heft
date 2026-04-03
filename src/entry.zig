@@ -54,6 +54,8 @@ pub const Entry = struct {
     ;
 
     pub fn createDraft(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, performed_by: []const u8) !i64 {
+        if (document_number.len == 0) return error.InvalidInput;
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -64,14 +66,19 @@ pub const Entry = struct {
             if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
         }
 
-        // Verify period exists
+        // Verify period exists and posting_date falls within range
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE id = ? AND book_id = ?;");
+            var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE id = ? AND book_id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, period_id);
             try stmt.bindInt(2, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const start = stmt.columnText(0).?;
+            const end = stmt.columnText(1).?;
+            if (std.mem.order(u8, posting_date, start) == .lt or std.mem.order(u8, posting_date, end) == .gt) {
+                return error.InvalidInput;
+            }
         }
 
         try database.beginTransaction();
@@ -145,6 +152,79 @@ pub const Entry = struct {
 
         try database.commit();
         return id;
+    }
+
+    pub fn removeLine(database: db.Database, line_id: i64, performed_by: []const u8) !void {
+        // Fetch line's entry_id and verify entry is draft
+        var entry_id: i64 = 0;
+        var entry_book_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT el.entry_id, e.status, e.book_id
+                \\FROM ledger_entry_lines el
+                \\JOIN ledger_entries e ON e.id = el.entry_id
+                \\WHERE el.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, line_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            entry_id = stmt.columnInt64(0);
+            const status = stmt.columnText(1).?;
+            if (!std.mem.eql(u8, status, "draft")) return error.AlreadyPosted;
+            entry_book_id = stmt.columnInt64(2);
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_entry_lines WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, line_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "entry_line", line_id, "delete", null, null, null, performed_by, entry_book_id);
+
+        try database.commit();
+    }
+
+    pub fn deleteDraft(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
+        var entry_book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, status, "draft")) return error.AlreadyPosted;
+            entry_book_id = stmt.columnInt64(1);
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        // Delete all lines first (FK constraint)
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_entry_lines WHERE entry_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            _ = try stmt.step();
+        }
+
+        // Delete the entry
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_entries WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "entry", entry_id, "delete", null, null, null, performed_by, entry_book_id);
+
+        try database.commit();
     }
 
     pub fn post(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
@@ -337,6 +417,7 @@ pub const Entry = struct {
         }
 
         try audit.log(database, "entry", entry_id, "void", "status", "posted", "void", performed_by, entry_book_id);
+        try audit.log(database, "entry", entry_id, "void", "void_reason", null, reason, performed_by, entry_book_id);
 
         try database.commit();
     }
@@ -450,6 +531,7 @@ pub const Entry = struct {
         }
 
         try audit.log(database, "entry", entry_id, "reverse", "status", "posted", "reversed", performed_by, entry_book_id);
+        try audit.log(database, "entry", entry_id, "reverse", "reversed_reason", null, reason, performed_by, entry_book_id);
         try audit.log(database, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
 
         try database.commit();
@@ -1297,7 +1379,12 @@ test "full posting lifecycle audit trail in order" {
     try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
     try std.testing.expectEqualStrings("post", stmt.columnText(1).?);
 
-    // 5: entry void
+    // 5: entry void (status change)
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("void", stmt.columnText(1).?);
+
+    // 6: entry void (reason)
     _ = try stmt.step();
     try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
     try std.testing.expectEqualStrings("void", stmt.columnText(1).?);
@@ -1305,6 +1392,216 @@ test "full posting lifecycle audit trail in order" {
     // No more rows
     const more = try stmt.step();
     try std.testing.expect(!more);
+}
+
+// ── Validation gap tests ────────────────────────────────────────
+
+test "createDraft rejects empty document_number" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Entry.createDraft(database, 1, "", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "createDraft rejects posting_date outside period range" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Period is Jan 2026 (01-01 to 01-31), posting_date is Feb
+    const result = Entry.createDraft(database, 1, "JE-001", "2026-02-15", "2026-02-15", null, 1, null, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "createDraft accepts posting_date at period boundaries" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Start of period
+    const id1 = try Entry.createDraft(database, 1, "JE-001", "2026-01-01", "2026-01-01", null, 1, null, "admin");
+    try std.testing.expect(id1 > 0);
+
+    // End of period
+    const id2 = try Entry.createDraft(database, 1, "JE-002", "2026-01-31", "2026-01-31", null, 1, null, "admin");
+    try std.testing.expect(id2 > 0);
+}
+
+// ── Draft editing tests ─────────────────────────────────────────
+
+test "removeLine removes line from draft" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+
+    try Entry.removeLine(database, line_id, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "removeLine rejects line on posted entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    const result = Entry.removeLine(database, line_id, "admin");
+    try std.testing.expectError(error.AlreadyPosted, result);
+}
+
+test "removeLine writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+
+    try Entry.removeLine(database, line_id, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type, action FROM ledger_audit_log WHERE entity_type = 'entry_line' AND action = 'delete';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry_line", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("delete", stmt.columnText(1).?);
+}
+
+test "removeLine rejects nonexistent line" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Entry.removeLine(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "deleteDraft deletes entry and all lines" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+
+    try Entry.deleteDraft(database, 1, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entries;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+}
+
+test "deleteDraft rejects posted entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    const result = Entry.deleteDraft(database, 1, "admin");
+    try std.testing.expectError(error.AlreadyPosted, result);
+}
+
+test "deleteDraft writes audit log for entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    try Entry.deleteDraft(database, 1, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type, action FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'delete';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entry", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("delete", stmt.columnText(1).?);
+}
+
+test "deleteDraft rejects nonexistent entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Entry.deleteDraft(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── Multi-currency cross-currency test ──────────────────────────
+
+test "post with different currencies per line balances in base" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Line 1: Debit Cash-USD 100.00 at 56.50 PHP/USD = 5,650.00 PHP base
+    // Line 2: Credit Revenue 5,650.00 PHP at 1.00 = 5,650.00 PHP base
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 565_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+
+    try Entry.post(database, 1, "admin");
+
+    // Both base amounts should be 565_000_000_000
+    var stmt = try database.prepare("SELECT base_debit_amount, base_credit_amount FROM ledger_entry_lines WHERE entry_id = 1 ORDER BY line_number;");
+    defer stmt.finalize();
+
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 565_000_000_000), stmt.columnInt64(0));
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
+
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+    try std.testing.expectEqual(@as(i64, 565_000_000_000), stmt.columnInt64(1));
+}
+
+// ── Void/Reverse reason audit tests ─────────────────────────────
+
+test "voidEntry records reason in audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    try Entry.voidEntry(database, 1, "Entered in error", "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, new_value FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'void' AND field_changed = 'void_reason';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("void_reason", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("Entered in error", stmt.columnText(1).?);
+}
+
+test "reverse records reason in audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    try Entry.post(database, 1, "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, new_value FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'reverse' AND field_changed = 'reversed_reason';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("reversed_reason", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("Accrual reversal", stmt.columnText(1).?);
 }
 
 test "post entry then close period — entry stays posted" {
