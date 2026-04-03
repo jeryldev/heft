@@ -164,11 +164,6 @@ pub const Period = struct {
         try database.commit();
     }
 
-    const month_names = [_][]const u8{
-        "January", "February", "March",     "April",   "May",      "June",
-        "July",    "August",   "September", "October", "November", "December",
-    };
-
     const days_in_month = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
     fn isLeapYear(y: i32) bool {
