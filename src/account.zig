@@ -69,7 +69,6 @@ pub const AccountStatus = enum {
 
 pub const Account = struct {
     const max_number_len = 50;
-    const max_status_len = 10; // "archived" = 8, padded
 
     pub fn deriveNormalBalance(account_type: AccountType, is_contra: bool) NormalBalance {
         const base: NormalBalance = switch (account_type) {

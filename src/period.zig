@@ -74,7 +74,6 @@ pub const PeriodGranularity = enum {
 };
 
 pub const Period = struct {
-    const max_status_len = 12; // "soft_closed" = 11, padded
     const date_buf_len = 16;
     const name_buf_len = 48;
     const id_buf_len = 20;
