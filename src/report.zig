@@ -824,6 +824,312 @@ test "account_balances: void zeros out specific period cache" {
     try std.testing.expectEqual(@as(i64, 2_000_000_000_00), cash.?.debit_balance);
 }
 
+// ── Comprehensive: all 10 account type+contra combinations ─────
+
+fn setupAll10Db() !db.Database {
+    const database = try db.Database.open(":memory:");
+    try @import("schema.zig").createAll(database);
+    _ = try book_mod.Book.create(database, "All 10 Types", "PHP", 2, "admin");
+
+    // 1. Asset (debit normal) — Cash
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    // 2. Contra Asset (credit normal) — Accumulated Depreciation
+    _ = try account_mod.Account.create(database, 1, "1900", "Accum Depreciation", .asset, true, "admin");
+    // 3. Liability (credit normal) — Accounts Payable
+    _ = try account_mod.Account.create(database, 1, "2000", "Accounts Payable", .liability, false, "admin");
+    // 4. Contra Liability (debit normal) — Discount on Bonds Payable
+    _ = try account_mod.Account.create(database, 1, "2900", "Discount on Bonds", .liability, true, "admin");
+    // 5. Equity (credit normal) — Capital
+    _ = try account_mod.Account.create(database, 1, "3000", "Capital", .equity, false, "admin");
+    // 6. Contra Equity (debit normal) — Treasury Stock
+    _ = try account_mod.Account.create(database, 1, "3900", "Treasury Stock", .equity, true, "admin");
+    // 7. Revenue (credit normal) — Sales Revenue
+    _ = try account_mod.Account.create(database, 1, "4000", "Sales Revenue", .revenue, false, "admin");
+    // 8. Contra Revenue (debit normal) — Sales Returns
+    _ = try account_mod.Account.create(database, 1, "4900", "Sales Returns", .revenue, true, "admin");
+    // 9. Expense (debit normal) — COGS
+    _ = try account_mod.Account.create(database, 1, "5000", "COGS", .expense, false, "admin");
+    // 10. Contra Expense (credit normal) — Purchase Discounts
+    _ = try account_mod.Account.create(database, 1, "5900", "Purchase Discounts", .expense, true, "admin");
+
+    _ = try period_mod.Period.create(database, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    return database;
+}
+
+// Helper to post entry with specific FX rate
+fn postFxEntry(database: db.Database, doc: []const u8, date: []const u8, period_id: i64, debit_acct: i64, debit_amt: i64, credit_acct: i64, credit_amt: i64, currency: []const u8, fx_rate: i64) !i64 {
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, doc, date, date, null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, debit_amt, 0, currency, fx_rate, debit_acct, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, credit_amt, currency, fx_rate, credit_acct, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+    return entry_id;
+}
+
+test "all 10 account types: realistic entries flow through cache, view, and reports" {
+    const database = try setupAll10Db();
+    defer database.close();
+
+    const scale = money.FX_RATE_SCALE;
+    // Account IDs: 1=Cash, 2=AccumDep, 3=AP, 4=DiscBonds, 5=Capital,
+    //              6=Treasury, 7=Revenue, 8=SalesReturns, 9=COGS, 10=PurchDisc
+
+    // 1. Capital contribution: Debit Cash 100,000, Credit Capital 100,000
+    _ = try postFxEntry(database, "JE-001", "2026-01-02", 1, 1, 10_000_000_000_000, 5, 10_000_000_000_000, "PHP", scale);
+
+    // 2. Sale: Debit Cash 50,000, Credit Sales Revenue 50,000
+    _ = try postFxEntry(database, "JE-002", "2026-01-05", 1, 1, 5_000_000_000_000, 7, 5_000_000_000_000, "PHP", scale);
+
+    // 3. Sales return: Debit Sales Returns 5,000, Credit Cash 5,000
+    _ = try postFxEntry(database, "JE-003", "2026-01-06", 1, 8, 500_000_000_000, 1, 500_000_000_000, "PHP", scale);
+
+    // 4. Purchase inventory: Debit COGS 30,000, Credit AP 30,000
+    _ = try postFxEntry(database, "JE-004", "2026-01-10", 1, 9, 3_000_000_000_000, 3, 3_000_000_000_000, "PHP", scale);
+
+    // 5. Purchase discount: Debit AP 1,000, Credit Purchase Discounts 1,000
+    _ = try postFxEntry(database, "JE-005", "2026-01-11", 1, 3, 100_000_000_000, 10, 100_000_000_000, "PHP", scale);
+
+    // 6. Depreciation: Debit Depreciation Expense (use COGS for simplicity), Credit Accum Dep 10,000
+    _ = try postFxEntry(database, "JE-006", "2026-01-15", 1, 9, 1_000_000_000_000, 2, 1_000_000_000_000, "PHP", scale);
+
+    // 7a. Bond issued at discount: Debit Cash 20,000, Credit Bonds Payable (AP) 25,000, Debit Discount on Bonds 5,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, 1, "JE-007a", "2026-01-18", "2026-01-18", null, 1, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 2_000_000_000_000, 0, "PHP", scale, 1, null, "admin"); // debit Cash 20k
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 500_000_000_000, 0, "PHP", scale, 4, null, "admin"); // debit Disc on Bonds 5k
+        _ = try entry_mod.Entry.addLine(database, eid, 3, 0, 2_500_000_000_000, "PHP", scale, 3, null, "admin"); // credit AP (as bonds payable) 25k
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+    // 7b. Bond discount amortization: Debit Interest Expense, Credit Discount 2,000
+    _ = try postFxEntry(database, "JE-007b", "2026-01-20", 1, 9, 200_000_000_000, 4, 200_000_000_000, "PHP", scale);
+
+    // 8. Treasury stock purchase: Debit Treasury Stock 15,000, Credit Cash 15,000
+    _ = try postFxEntry(database, "JE-008", "2026-01-25", 1, 6, 1_500_000_000_000, 1, 1_500_000_000_000, "PHP", scale);
+
+    // === TRIAL BALANCE ===
+    const tb = try trialBalance(database, 1, "2026-01-31");
+    defer tb.deinit();
+
+    // Must balance
+    try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+
+    // Verify each account shows on correct side
+    // 1. Cash (asset, debit normal): 100k + 50k - 5k - 15k = 130k debit
+    const cash = findRow(tb.rows, "1000").?;
+    try std.testing.expect(cash.debit_balance > 0);
+    try std.testing.expectEqual(@as(i64, 0), cash.credit_balance);
+
+    // 2. Accum Dep (contra asset, credit normal): 10k credit
+    const accum = findRow(tb.rows, "1900").?;
+    try std.testing.expect(accum.credit_balance > 0);
+    try std.testing.expectEqual(@as(i64, 0), accum.debit_balance);
+
+    // 3. AP (liability, credit normal): 30k - 1k = 29k credit
+    const ap = findRow(tb.rows, "2000").?;
+    try std.testing.expect(ap.credit_balance > 0);
+
+    // 4. Discount on Bonds (contra liability, debit normal): 5k established - 2k amortized = 3k debit
+    const disc = findRow(tb.rows, "2900").?;
+    try std.testing.expect(disc.debit_balance > 0);
+    try std.testing.expectEqual(@as(i64, 300_000_000_000), disc.debit_balance);
+
+    // 5. Capital (equity, credit normal): 100k credit
+    const capital = findRow(tb.rows, "3000").?;
+    try std.testing.expect(capital.credit_balance > 0);
+
+    // 6. Treasury Stock (contra equity, debit normal): 15k debit
+    const treasury = findRow(tb.rows, "3900").?;
+    try std.testing.expect(treasury.debit_balance > 0);
+
+    // 7. Revenue (credit normal): 50k credit
+    const revenue = findRow(tb.rows, "4000").?;
+    try std.testing.expect(revenue.credit_balance > 0);
+
+    // 8. Sales Returns (contra revenue, debit normal): 5k debit
+    const returns = findRow(tb.rows, "4900").?;
+    try std.testing.expect(returns.debit_balance > 0);
+
+    // 9. COGS (expense, debit normal): 30k + 10k + 2k = 42k debit
+    const cogs = findRow(tb.rows, "5000").?;
+    try std.testing.expect(cogs.debit_balance > 0);
+
+    // 10. Purchase Discounts (contra expense, credit normal): 1k credit
+    const pdisc = findRow(tb.rows, "5900").?;
+    try std.testing.expect(pdisc.credit_balance > 0);
+
+    // === INCOME STATEMENT ===
+    const is_result = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
+    defer is_result.deinit();
+
+    // Should contain Revenue, Sales Returns, COGS, Purchase Discounts (4 accounts)
+    try std.testing.expectEqual(@as(usize, 4), is_result.rows.len);
+
+    // Net income = (Revenue 50k - Sales Returns 5k) - (COGS 42k - Purchase Discounts 1k) = 45k - 41k = 4k
+    const net_income = is_result.total_credits - is_result.total_debits;
+    try std.testing.expect(net_income > 0);
+
+    // === BALANCE SHEET ===
+    const bs = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer bs.deinit();
+
+    // Must balance: A = L + E (with net income)
+    try std.testing.expectEqual(bs.total_debits, bs.total_credits);
+
+    // BS should have 6 rows (A/L/E accounts only: Cash, AccumDep, AP, DiscBonds, Capital, Treasury)
+    try std.testing.expectEqual(@as(usize, 6), bs.rows.len);
+
+    // === TRANSACTION HISTORY VIEW ===
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_transaction_history;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        // 9 entries: 8 with 2 lines + 1 with 3 lines = 19 lines
+        try std.testing.expectEqual(@as(i32, 19), stmt.columnInt(0));
+    }
+
+    // === ACCOUNT BALANCES CACHE ===
+    {
+        // Every account with activity should have a cache entry
+        var stmt = try database.prepare("SELECT COUNT(DISTINCT account_id) FROM ledger_account_balances WHERE book_id = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 10), stmt.columnInt(0));
+    }
+}
+
+test "all entry statuses x account types: correct representation everywhere" {
+    const database = try setupAll10Db();
+    defer database.close();
+
+    const scale = money.FX_RATE_SCALE;
+    // IDs: 1=Cash, 2=AccumDep, 3=AP, 4=DiscBonds, 5=Capital,
+    //      6=Treasury, 7=Revenue, 8=SalesRet, 9=COGS, 10=PurchDisc
+
+    // POSTED entry: Debit Cash 1000, Credit Revenue 1000
+    _ = try postFxEntry(database, "POSTED-001", "2026-01-10", 1, 1, 100_000_000_000, 7, 100_000_000_000, "PHP", scale);
+
+    // DRAFT entry: Debit COGS 500, Credit AP 500 (not posted)
+    {
+        const eid = try entry_mod.Entry.createDraft(database, 1, "DRAFT-001", "2026-01-12", "2026-01-12", null, 1, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 50_000_000_000, 0, "PHP", scale, 9, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 50_000_000_000, "PHP", scale, 3, null, "admin");
+    }
+
+    // VOIDED entry: Debit Cash 2000, Credit Capital 2000 (then voided)
+    {
+        const eid = try postFxEntry(database, "VOID-001", "2026-01-15", 1, 1, 200_000_000_000, 5, 200_000_000_000, "PHP", scale);
+        try entry_mod.Entry.voidEntry(database, eid, "Wrong amount", "admin");
+    }
+
+    // REVERSED entry: Debit Cash 3000, Credit Revenue 3000 (then reversed)
+    {
+        const eid = try postFxEntry(database, "REV-001", "2026-01-20", 1, 1, 300_000_000_000, 7, 300_000_000_000, "PHP", scale);
+        _ = try entry_mod.Entry.reverse(database, eid, "Accrual reversal", "2026-01-25", "admin");
+    }
+
+    // === ACCOUNT BALANCES CACHE ===
+    // Only POSTED entries affect cache. VOID zeros it. REVERSE adds flipped entry.
+    // Net: POSTED-001 (1000 debit Cash, 1000 credit Revenue) remains
+    // VOID-001: zeroed. REV-001 + REV reversal: net zero. DRAFT: no cache.
+    {
+        var stmt = try database.prepare("SELECT debit_sum, credit_sum FROM ledger_account_balances WHERE account_id = 1 AND period_id = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        // Cash: POSTED 1000 debit + VOID (zeroed: +2000 then -2000) + REV (net zero)
+        const debit = stmt.columnInt64(0);
+        const credit = stmt.columnInt64(1);
+        try std.testing.expectEqual(@as(i64, 100_000_000_000), debit - credit); // net 1000 debit
+    }
+
+    // === TRANSACTION HISTORY VIEW ===
+    // Only status='posted' entries. POSTED-001 (2 lines) + REV reversal (2 lines) = 4
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_transaction_history;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+    }
+
+    // Verify draft not in view
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_transaction_history WHERE document_number = 'DRAFT-001';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+
+    // Verify void not in view
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_transaction_history WHERE document_number = 'VOID-001';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+
+    // Verify reversed original not in view
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_transaction_history WHERE document_number = 'REV-001';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+
+    // === TRIAL BALANCE ===
+    const tb = try trialBalance(database, 1, "2026-01-31");
+    defer tb.deinit();
+
+    // Only POSTED-001 affects TB (void zeroed, reverse netted, draft excluded)
+    try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    try std.testing.expectEqual(@as(i64, 100_000_000_000), tb.total_debits);
+
+    // === INCOME STATEMENT ===
+    const is_result = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
+    defer is_result.deinit();
+
+    // Revenue: POSTED-001 credit 1000 + REV-001 credit 3000 = 4000 raw credits
+    // Reversal adds debit 3000 to revenue, so total_debits from revenue reversal
+    // Net revenue = credits - debits = 4000 - 3000 = 1000
+    const net_income = is_result.total_credits - is_result.total_debits;
+    try std.testing.expectEqual(@as(i64, 100_000_000_000), net_income);
+
+    // === BALANCE SHEET ===
+    const bs = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer bs.deinit();
+
+    try std.testing.expectEqual(bs.total_debits, bs.total_credits);
+}
+
+test "reports across fiscal year with quarterly periods" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try @import("schema.zig").createAll(database);
+    _ = try book_mod.Book.create(database, "FY Test", "PHP", 2, "admin");
+
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "4000", "Revenue", .revenue, false, "admin");
+
+    // Quarterly periods for non-calendar FY (Apr-Mar)
+    try period_mod.Period.bulkCreate(database, 1, 2027, 4, .quarterly, "admin");
+
+    const scale = money.FX_RATE_SCALE;
+    // Post in Q1 (Apr-Jun 2026)
+    _ = try postFxEntry(database, "JE-Q1", "2026-04-15", 1, 1, 100_000_000_000, 2, 100_000_000_000, "PHP", scale);
+    // Post in Q3 (Oct-Dec 2026)
+    _ = try postFxEntry(database, "JE-Q3", "2026-10-15", 3, 1, 200_000_000_000, 2, 200_000_000_000, "PHP", scale);
+
+    // TB as of Dec 2026 should include Q1 + Q3
+    const tb = try trialBalance(database, 1, "2026-12-31");
+    defer tb.deinit();
+
+    try std.testing.expectEqual(@as(i64, 300_000_000_000), tb.total_debits);
+    try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+
+    // TB as of Jun 2026 should only include Q1
+    const tb_q1 = try trialBalance(database, 1, "2026-06-30");
+    defer tb_q1.deinit();
+
+    try std.testing.expectEqual(@as(i64, 100_000_000_000), tb_q1.total_debits);
+}
+
 test "post in soft_closed period: entry visible in reports" {
     const database = try setupFullDb();
     defer database.close();
