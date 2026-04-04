@@ -345,6 +345,34 @@ test "setRoundingAccount rejects nonexistent book" {
     try std.testing.expectError(error.NotFound, result);
 }
 
+test "setRoundingAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try database.exec(
+        \\INSERT INTO ledger_accounts (number, name, account_type, normal_balance, book_id)
+        \\VALUES ('9999', 'FX Rounding', 'expense', 'debit', 1);
+    );
+    try Book.archive(database, book_id, "admin");
+
+    const result = Book.setRoundingAccount(database, book_id, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setRoundingAccount rejects inactive account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const account_mod = @import("account.zig");
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try account_mod.Account.updateStatus(database, 1, .inactive, "admin");
+
+    const result = Book.setRoundingAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.AccountInactive, result);
+}
+
 // ── archive tests ───────────────────────────────────────────────
 
 const period_mod = @import("period.zig");
