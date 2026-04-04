@@ -259,6 +259,14 @@ pub export fn ledger_delete_classification(handle: ?*LedgerDB, classification_id
     return true;
 }
 
+pub export fn ledger_verify(handle: ?*LedgerDB, book_id: i64, out_errors: *u32, out_warnings: *u32) bool {
+    const h = handle orelse return false;
+    const result = heft.verify_mod.verify(h.sqlite, book_id) catch return false;
+    out_errors.* = result.errors;
+    out_warnings.* = result.warnings;
+    return result.passed();
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
