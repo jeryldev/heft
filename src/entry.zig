@@ -365,91 +365,61 @@ pub const Entry = struct {
             if (line_count < 2) return error.TooFewLines;
         }
 
-        // Step 3b: Control account enforcement (subledger)
-        // Single query joins lines with subledger groups to check control account rules
-        {
-            var check_stmt = try database.prepare(
-                \\SELECT el.account_id, el.counterparty_id,
-                \\  (SELECT COUNT(*) FROM ledger_subledger_groups sg WHERE sg.gl_account_id = el.account_id) AS is_control
-                \\FROM ledger_entry_lines el
-                \\WHERE el.entry_id = ?;
-            );
-            defer check_stmt.finalize();
-            try check_stmt.bindInt(1, entry_id);
-
-            while (try check_stmt.step()) {
-                const has_counterparty = check_stmt.columnText(1) != null;
-                const is_control = check_stmt.columnInt(2) > 0;
-
-                if (is_control and !has_counterparty) return error.MissingCounterparty;
-                if (!is_control and has_counterparty) return error.InvalidCounterparty;
-            }
-        }
-
+        // Step 3b + 4 + 5 + 7: Single read of all lines, compute base amounts,
+        // verify control accounts, check balance, update cache — all in one pass
         try database.beginTransaction();
         errdefer database.rollback();
 
-        // Step 4: Compute base amounts for each line
+        // Read all lines ONCE with control account info
         {
-            var read_stmt = try database.prepare("SELECT id, debit_amount, credit_amount, fx_rate FROM ledger_entry_lines WHERE entry_id = ?;");
+            var read_stmt = try database.prepare(
+                \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.fx_rate,
+                \\  el.counterparty_id,
+                \\  (SELECT COUNT(*) FROM ledger_subledger_groups sg WHERE sg.gl_account_id = el.account_id)
+                \\FROM ledger_entry_lines el
+                \\WHERE el.entry_id = ?;
+            );
             defer read_stmt.finalize();
             try read_stmt.bindInt(1, entry_id);
 
             var update_stmt = try database.prepare("UPDATE ledger_entry_lines SET base_debit_amount = ?, base_credit_amount = ? WHERE id = ?;");
             defer update_stmt.finalize();
 
+            var cache_stmt = try database.prepare(balance_sql);
+            defer cache_stmt.finalize();
+
+            var total_base_debits: i64 = 0;
+            var total_base_credits: i64 = 0;
+
             while (try read_stmt.step()) {
                 const line_id = read_stmt.columnInt64(0);
-                const debit = read_stmt.columnInt64(1);
-                const credit = read_stmt.columnInt64(2);
-                const fx_rate = read_stmt.columnInt64(3);
+                const acct_id = read_stmt.columnInt64(1);
+                const debit = read_stmt.columnInt64(2);
+                const credit = read_stmt.columnInt64(3);
+                const fx_rate = read_stmt.columnInt64(4);
+                const has_counterparty = read_stmt.columnText(5) != null;
+                const is_control = read_stmt.columnInt(6) > 0;
 
+                // Control account enforcement
+                if (is_control and !has_counterparty) return error.MissingCounterparty;
+                if (!is_control and has_counterparty) return error.InvalidCounterparty;
+
+                // Compute base amounts
                 const base_debit = try money.computeBaseAmount(debit, fx_rate);
                 const base_credit = try money.computeBaseAmount(credit, fx_rate);
 
+                // Update line with computed base amounts
                 try update_stmt.bindInt(1, base_debit);
                 try update_stmt.bindInt(2, base_credit);
                 try update_stmt.bindInt(3, line_id);
                 _ = try update_stmt.step();
                 update_stmt.reset();
                 update_stmt.clearBindings();
-            }
-        }
 
-        // Step 5: Verify balance equation
-        {
-            var stmt = try database.prepare("SELECT SUM(base_debit_amount), SUM(base_credit_amount) FROM ledger_entry_lines WHERE entry_id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, entry_id);
-            _ = try stmt.step();
-            const total_debits = stmt.columnInt64(0);
-            const total_credits = stmt.columnInt64(1);
-            if (total_debits != total_credits) return error.UnbalancedEntry;
-        }
+                total_base_debits += base_debit;
+                total_base_credits += base_credit;
 
-        // Step 6: Update entry status to 'posted'
-        {
-            var stmt = try database.prepare("UPDATE ledger_entries SET status = 'posted', posted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), posted_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindText(1, performed_by);
-            try stmt.bindInt(2, entry_id);
-            _ = try stmt.step();
-        }
-
-        // Step 7: Update balance cache
-        {
-            var line_stmt = try database.prepare("SELECT account_id, base_debit_amount, base_credit_amount FROM ledger_entry_lines WHERE entry_id = ?;");
-            defer line_stmt.finalize();
-            try line_stmt.bindInt(1, entry_id);
-
-            var cache_stmt = try database.prepare(balance_sql);
-            defer cache_stmt.finalize();
-
-            while (try line_stmt.step()) {
-                const acct_id = line_stmt.columnInt64(0);
-                const base_debit = line_stmt.columnInt64(1);
-                const base_credit = line_stmt.columnInt64(2);
-
+                // Update balance cache
                 try cache_stmt.bindInt(1, acct_id);
                 try cache_stmt.bindInt(2, period_id);
                 try cache_stmt.bindInt(3, base_debit);
@@ -461,6 +431,18 @@ pub const Entry = struct {
                 cache_stmt.reset();
                 cache_stmt.clearBindings();
             }
+
+            // Verify balance equation
+            if (total_base_debits != total_base_credits) return error.UnbalancedEntry;
+        }
+
+        // Step 6: Update entry status to 'posted'
+        {
+            var stmt = try database.prepare("UPDATE ledger_entries SET status = 'posted', posted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), posted_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, performed_by);
+            try stmt.bindInt(2, entry_id);
+            _ = try stmt.step();
         }
 
         // Step 8: Mark future periods stale
