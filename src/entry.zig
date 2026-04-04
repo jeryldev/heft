@@ -702,7 +702,8 @@ pub const Entry = struct {
 
         // Create reversal entry
         var rev_doc_buf: [136]u8 = undefined;
-        const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REV-{s}", .{doc_number_buf[0..doc_number_len]}) catch return error.InvalidInput;
+        const max_doc_for_rev = @min(doc_number_len, 96); // REV- prefix + 96 = 100 (schema max)
+        const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REV-{s}", .{doc_number_buf[0..max_doc_for_rev]}) catch return error.InvalidInput;
         {
             var stmt = try database.prepare(
                 \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, status, reverses_entry_id, posted_at, posted_by, period_id, book_id)

@@ -1723,7 +1723,7 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
         },
         .json => {
             const meta = std.fmt.bufPrint(buf[pos..], "{{\"total\":{d},\"limit\":{d},\"offset\":{d},\"has_more\":{s},\"opening_balance\":{d},\"rows\":[", .{
-                total, limit, offset, if (offset + limit < total) "true" else "false", opening_balance,
+                total, limit, offset, if (@as(i64, offset) + @as(i64, limit) < total) "true" else "false", opening_balance,
             }) catch return error.InvalidInput;
             pos += meta.len;
 

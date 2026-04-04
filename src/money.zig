@@ -142,6 +142,7 @@ pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
 
     var pos: usize = 0;
     if (negative) {
+        if (pos >= buf.len) return error.InvalidAmount;
         buf[pos] = '-';
         pos += 1;
     }
@@ -149,9 +150,11 @@ pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
     const int_str = std.fmt.bufPrint(buf[pos..], "{d}", .{int_part}) catch return error.InvalidAmount;
     pos += int_str.len;
 
+    if (pos >= buf.len) return error.InvalidAmount;
     buf[pos] = '.';
     pos += 1;
 
+    if (pos + frac_len > buf.len) return error.InvalidAmount;
     @memcpy(buf[pos .. pos + frac_len], frac_buf[0..frac_len]);
     pos += frac_len;
 
