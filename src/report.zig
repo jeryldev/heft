@@ -753,7 +753,7 @@ test "TB: reversed entry — both original and reversal affect balances" {
     defer database.close();
 
     try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 3 }});
-    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
     const result = try trialBalance(database, 1, "2026-01-31");
     defer result.deinit();
@@ -873,7 +873,7 @@ test "transaction_history: posted entries visible, draft/void/reversed excluded"
 
     // Reversed entry (original becomes 'reversed', reversal is 'posted')
     try postEntry(database, "REV-SRC", "2026-01-20", 1, &.{.{ .amount = 200_000_000_00, .account_id = 1 }}, &.{.{ .amount = 200_000_000_00, .account_id = 3 }});
-    _ = try entry_mod.Entry.reverse(database, 4, "Reversal", "2026-01-25", "admin");
+    _ = try entry_mod.Entry.reverse(database, 4, "Reversal", "2026-01-25", null, "admin");
 
     // View should show: POST-001 (2 lines) + reversal entry (2 lines) = 4 lines
     // Excluded: DRAFT-001 (draft), VOID-001 (void), REV-SRC (reversed)
@@ -1177,7 +1177,7 @@ test "all entry statuses x account types: correct representation everywhere" {
     // REVERSED entry: Debit Cash 3000, Credit Revenue 3000 (then reversed)
     {
         const eid = try postFxEntry(database, "REV-001", "2026-01-20", 1, 1, 300_000_000_000, 7, 300_000_000_000, "PHP", scale);
-        _ = try entry_mod.Entry.reverse(database, eid, "Accrual reversal", "2026-01-25", "admin");
+        _ = try entry_mod.Entry.reverse(database, eid, "Accrual reversal", "2026-01-25", null, "admin");
     }
 
     // === ACCOUNT BALANCES CACHE ===
@@ -1442,7 +1442,7 @@ test "GL: reversed entry — reversal visible, original excluded" {
     defer database.close();
 
     try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
-    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-20", "admin");
+    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-20", null, "admin");
 
     const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
     defer result.deinit();

@@ -462,8 +462,69 @@ pub const Entry = struct {
                 cache_stmt.clearBindings();
             }
 
-            // Verify balance equation
-            if (total_base_debits != total_base_credits) return error.UnbalancedEntry;
+            // Verify balance equation — auto-post rounding if book has rounding account
+            if (total_base_debits != total_base_credits) {
+                const diff = total_base_debits - total_base_credits;
+                const abs_diff = if (diff < 0) -diff else diff;
+                const max_rounding: i64 = 100; // 0.000001 in 10^8 scale — sub-cent tolerance
+
+                if (abs_diff > max_rounding) return error.UnbalancedEntry;
+
+                // Check if book has a rounding account
+                var rounding_acct_id: ?i64 = null;
+                {
+                    var ra_stmt = try database.prepare("SELECT rounding_account_id FROM ledger_books WHERE id = ?;");
+                    defer ra_stmt.finalize();
+                    try ra_stmt.bindInt(1, entry_book_id);
+                    _ = try ra_stmt.step();
+                    const ra = ra_stmt.columnInt64(0);
+                    if (ra > 0) rounding_acct_id = ra;
+                }
+
+                if (rounding_acct_id) |ra_id| {
+                    // Auto-add rounding line
+                    const next_line = line_count + 1;
+                    var rounding_debit: i64 = 0;
+                    var rounding_credit: i64 = 0;
+                    if (diff > 0) {
+                        rounding_credit = diff; // credits > debits needed
+                    } else {
+                        rounding_debit = -diff; // debits > credits needed
+                    }
+
+                    var round_stmt = try database.prepare(
+                        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+                        \\  base_debit_amount, base_credit_amount, transaction_currency, fx_rate,
+                        \\  account_id, entry_id, description)
+                        \\VALUES (?, ?, ?, ?, ?, (SELECT base_currency FROM ledger_books WHERE id = ?),
+                        \\  10000000000, ?, ?, 'FX rounding adjustment');
+                    );
+                    defer round_stmt.finalize();
+                    try round_stmt.bindInt(1, @intCast(next_line));
+                    try round_stmt.bindInt(2, rounding_debit);
+                    try round_stmt.bindInt(3, rounding_credit);
+                    try round_stmt.bindInt(4, rounding_debit);
+                    try round_stmt.bindInt(5, rounding_credit);
+                    try round_stmt.bindInt(6, entry_book_id);
+                    try round_stmt.bindInt(7, ra_id);
+                    try round_stmt.bindInt(8, entry_id);
+                    _ = try round_stmt.step();
+
+                    // Update cache for rounding line
+                    try cache_stmt.bindInt(1, ra_id);
+                    try cache_stmt.bindInt(2, period_id);
+                    try cache_stmt.bindInt(3, rounding_debit);
+                    try cache_stmt.bindInt(4, rounding_credit);
+                    try cache_stmt.bindInt(5, rounding_debit);
+                    try cache_stmt.bindInt(6, rounding_credit);
+                    try cache_stmt.bindInt(7, entry_book_id);
+                    _ = try cache_stmt.step();
+                    cache_stmt.reset();
+                    cache_stmt.clearBindings();
+                } else {
+                    return error.UnbalancedEntry;
+                }
+            }
         }
 
         // Step 6: Update entry status to 'posted'
@@ -583,10 +644,10 @@ pub const Entry = struct {
         try database.commit();
     }
 
-    pub fn reverse(database: db.Database, entry_id: i64, reason: []const u8, reversal_date: []const u8, performed_by: []const u8) !i64 {
+    pub fn reverse(database: db.Database, entry_id: i64, reason: []const u8, reversal_date: []const u8, target_period_id: ?i64, performed_by: []const u8) !i64 {
         if (reason.len == 0) return error.ReverseReasonRequired;
 
-        var period_id: i64 = 0;
+        var original_period_id: i64 = 0;
         var entry_book_id: i64 = 0;
         var doc_number_buf: [128]u8 = undefined;
         var doc_number_len: usize = 0;
@@ -598,7 +659,7 @@ pub const Entry = struct {
             if (!has_row) return error.NotFound;
             const status = EntryStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             if (status != .posted) return error.InvalidTransition;
-            period_id = stmt.columnInt64(1);
+            original_period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
             const dn = stmt.columnText(3).?;
             const copy_len = @min(dn.len, doc_number_buf.len);
@@ -606,15 +667,25 @@ pub const Entry = struct {
             doc_number_len = copy_len;
         }
 
-        // Verify period is open or soft_closed
+        // Reversal period: use target if provided, otherwise original
+        const reversal_period_id = target_period_id orelse original_period_id;
+
+        // Verify reversal period is open or soft_closed and reversal_date is within range
         {
-            var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, start_date, end_date FROM ledger_periods WHERE id = ? AND book_id = ?;");
             defer stmt.finalize();
-            try stmt.bindInt(1, period_id);
-            _ = try stmt.step();
+            try stmt.bindInt(1, reversal_period_id);
+            try stmt.bindInt(2, entry_book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
             const period_status = stmt.columnText(0).?;
             if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
             if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
+            const start = stmt.columnText(1).?;
+            const end = stmt.columnText(2).?;
+            if (std.mem.order(u8, reversal_date, start) == .lt or std.mem.order(u8, reversal_date, end) == .gt) {
+                return error.InvalidInput;
+            }
         }
 
         try database.beginTransaction();
@@ -644,7 +715,7 @@ pub const Entry = struct {
             try stmt.bindText(4, reason);
             try stmt.bindInt(5, entry_id);
             try stmt.bindText(6, performed_by);
-            try stmt.bindInt(7, period_id);
+            try stmt.bindInt(7, reversal_period_id);
             try stmt.bindInt(8, entry_book_id);
             _ = try stmt.step();
         }
@@ -693,9 +764,9 @@ pub const Entry = struct {
                 write_stmt.reset();
                 write_stmt.clearBindings();
 
-                // Update balance cache with flipped amounts
+                // Update balance cache with flipped amounts in reversal period
                 try cache_stmt.bindInt(1, acct_id);
-                try cache_stmt.bindInt(2, period_id);
+                try cache_stmt.bindInt(2, reversal_period_id);
                 try cache_stmt.bindInt(3, orig_base_credit); // flipped debit
                 try cache_stmt.bindInt(4, orig_base_debit); // flipped credit
                 try cache_stmt.bindInt(5, orig_base_credit);
@@ -716,7 +787,7 @@ pub const Entry = struct {
             );
             defer stale_stmt.finalize();
             try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, period_id);
+            try stale_stmt.bindInt(2, reversal_period_id);
             _ = try stale_stmt.step();
         }
 
@@ -1384,7 +1455,7 @@ test "reverse creates new entry with flipped lines" {
     _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const reversal_id = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    const reversal_id = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
     try std.testing.expect(reversal_id > 1);
 
     // Original entry should be 'reversed'
@@ -1430,7 +1501,7 @@ test "reverse rejects draft entry" {
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
 
-    const result = Entry.reverse(database, 1, "Reason", "2026-01-31", "admin");
+    const result = Entry.reverse(database, 1, "Reason", "2026-01-31", null, "admin");
     try std.testing.expectError(error.InvalidTransition, result);
 }
 
@@ -1443,7 +1514,7 @@ test "reverse rejects empty reason" {
     _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const result = Entry.reverse(database, 1, "", "2026-01-31", "admin");
+    const result = Entry.reverse(database, 1, "", "2026-01-31", null, "admin");
     try std.testing.expectError(error.ReverseReasonRequired, result);
 }
 
@@ -1456,7 +1527,7 @@ test "reverse balance cache nets to zero" {
     _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
     // Cash account: debit 1000 from original + credit 1000 from reversal = net 0
     var stmt = try database.prepare("SELECT debit_sum, credit_sum FROM ledger_account_balances WHERE account_id = 1 AND period_id = 1;");
@@ -1512,9 +1583,9 @@ test "reverse already-reversed entry rejected" {
     _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
-    const result = Entry.reverse(database, 1, "Double reverse", "2026-01-31", "admin");
+    const result = Entry.reverse(database, 1, "Double reverse", "2026-01-31", null, "admin");
     try std.testing.expectError(error.InvalidTransition, result);
 }
 
@@ -1599,7 +1670,7 @@ test "full lifecycle: create -> post -> reverse -> verify cache balanced" {
     _ = try Entry.addLine(database, 1, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     _ = try Entry.addLine(database, 1, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
 
     // For each account, debit_sum should equal credit_sum (net zero)
     var stmt = try database.prepare("SELECT account_id, debit_sum, credit_sum FROM ledger_account_balances ORDER BY account_id;");
@@ -1658,7 +1729,7 @@ test "reverse 3-line entry creates correct flipped lines" {
     _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const rev_id = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    const rev_id = try Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
     // Reversal should have 3 lines
     var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
@@ -1729,7 +1800,7 @@ test "reverse writes audit log for both entries" {
     _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
 
     // Original entry: reverse action
     {
@@ -2005,7 +2076,7 @@ test "reverse records reason in audit log" {
     _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
 
     var stmt = try database.prepare("SELECT field_changed, new_value FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'reverse' AND field_changed = 'reversed_reason';");
     defer stmt.finalize();

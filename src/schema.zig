@@ -23,6 +23,7 @@ pub fn createAll(database: db.Database) !void {
     for (tables) |ddl| try database.exec(ddl);
     for (indexes) |idx| try database.exec(idx);
     for (views) |v| try database.exec(v);
+    for (triggers) |trg| try database.exec(trg);
     try database.exec("PRAGMA user_version = 1;");
 
     try database.commit();
@@ -380,6 +381,24 @@ const views = [_][*:0]const u8{
     \\LEFT JOIN ledger_subledger_accounts sa ON sa.id = l.counterparty_id
     \\LEFT JOIN ledger_subledger_groups sg ON sg.id = sa.group_id
     \\WHERE e.status = 'posted';
+    ,
+};
+
+// ── Triggers (2) ───────────────────────────────────────────────
+// Protect audit log from modification. GoBD requires WORM compliance.
+
+const triggers = [_][*:0]const u8{
+    \\CREATE TRIGGER IF NOT EXISTS protect_audit_log_delete
+    \\BEFORE DELETE ON ledger_audit_log
+    \\BEGIN
+    \\  SELECT RAISE(ABORT, 'audit log is immutable: DELETE not allowed');
+    \\END;
+    ,
+    \\CREATE TRIGGER IF NOT EXISTS protect_audit_log_update
+    \\BEFORE UPDATE ON ledger_audit_log
+    \\BEGIN
+    \\  SELECT RAISE(ABORT, 'audit log is immutable: UPDATE not allowed');
+    \\END;
     ,
 };
 

@@ -222,7 +222,10 @@ test "verify: detects missing audit record" {
     defer database.close();
 
     try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    // Temporarily drop trigger to simulate audit gap (trigger prevents DELETE)
+    try database.exec("DROP TRIGGER IF EXISTS protect_audit_log_delete;");
     try database.exec("DELETE FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'post';");
+    try database.exec("CREATE TRIGGER protect_audit_log_delete BEFORE DELETE ON ledger_audit_log BEGIN SELECT RAISE(ABORT, 'audit log is immutable: DELETE not allowed'); END;");
 
     const result = try verify(database, 1);
     try std.testing.expect(result.warnings > 0);

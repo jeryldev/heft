@@ -1064,6 +1064,155 @@ pub fn listEntryLines(database: db_mod.Database, entry_id: i64, buf: []u8, forma
     return buf[0..pos];
 }
 
+// ── getClassification ──────────────────────────────────────────
+
+pub fn getClassification(database: db_mod.Database, classification_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var stmt = try database.prepare("SELECT id, name, report_type FROM ledger_classifications WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, classification_id);
+    if (!(try stmt.step())) return error.NotFound;
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            const header = "id,name,report_type\n";
+            if (pos + header.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            pos += id_s.len;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = ',';
+            pos += 1;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = '\n';
+            pos += 1;
+        },
+        .json => {
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            pos += j1.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
+            const j2 = "\",\"report_type\":\"";
+            if (pos + j2.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + j2.len], j2);
+            pos += j2.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+            const j3 = "\"}";
+            if (pos + j3.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + j3.len], j3);
+            pos += j3.len;
+        },
+    }
+    return buf[0..pos];
+}
+
+// ── getSubledgerGroup ─────────────────────────────────────────
+
+pub fn getSubledgerGroup(database: db_mod.Database, group_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var stmt = try database.prepare(
+        \\SELECT sg.id, sg.name, sg.type, sg.group_number, a.number
+        \\FROM ledger_subledger_groups sg
+        \\JOIN ledger_accounts a ON a.id = sg.gl_account_id
+        \\WHERE sg.id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, group_id);
+    if (!(try stmt.step())) return error.NotFound;
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            const header = "id,name,type,group_number,control_account_number\n";
+            if (pos + header.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            pos += id_s.len;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = ',';
+            pos += 1;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+            const gn = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt(3)}) catch return error.InvalidInput;
+            pos += gn.len;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = '\n';
+            pos += 1;
+        },
+        .json => {
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            pos += j1.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
+            const j2 = "\",\"type\":\"";
+            if (pos + j2.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + j2.len], j2);
+            pos += j2.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"group_number\":{d},\"control_account_number\":\"", .{stmt.columnInt(3)}) catch return error.InvalidInput;
+            pos += j3.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
+            const j4 = "\"}";
+            if (pos + j4.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + j4.len], j4);
+            pos += j4.len;
+        },
+    }
+    return buf[0..pos];
+}
+
+// ── getSubledgerAccount ───────────────────────────────────────
+
+pub fn getSubledgerAccount(database: db_mod.Database, account_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var stmt = try database.prepare("SELECT id, number, name, type, group_id FROM ledger_subledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, account_id);
+    if (!(try stmt.step())) return error.NotFound;
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            const header = "id,number,name,type,group_id\n";
+            if (pos + header.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            pos += id_s.len;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = ',';
+            pos += 1;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = ',';
+            pos += 1;
+            pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
+            const gid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(4)}) catch return error.InvalidInput;
+            pos += gid.len;
+        },
+        .json => {
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            pos += j1.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
+            const j2 = "\",\"name\":\"";
+            if (pos + j2.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + j2.len], j2);
+            pos += j2.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+            const j3 = "\",\"type\":\"";
+            if (pos + j3.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + j3.len], j3);
+            pos += j3.len;
+            pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
+            const j4 = std.fmt.bufPrint(buf[pos..], "\",\"group_id\":{d}}}", .{stmt.columnInt64(4)}) catch return error.InvalidInput;
+            pos += j4.len;
+        },
+    }
+    return buf[0..pos];
+}
+
 // ── listClassifications ────────────────────────────────────────
 
 pub fn listClassifications(database: db_mod.Database, book_id: i64, type_filter: ?[]const u8, order: SortOrder, limit_raw: i32, offset_raw: i32, buf: []u8, format: export_mod.ExportFormat) ![]u8 {

@@ -68,7 +68,7 @@ pub export fn ledger_version() [*:0]const u8 {
 
 pub export fn ledger_create_book(handle: ?*LedgerDB, name: [*:0]const u8, base_currency: [*:0]const u8, decimal_places: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.book.Book.create(h.sqlite, std.mem.span(name), std.mem.span(base_currency), decimal_places, std.mem.span(performed_by)) catch -1;
+    return heft.book.Book.create(h.sqlite, std.mem.span(name), std.mem.span(base_currency), decimal_places, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_create_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, is_contra: i32, performed_by: [*:0]const u8) i64 {
@@ -138,7 +138,7 @@ pub export fn ledger_edit_posted(handle: ?*LedgerDB, entry_id: i64, description:
 
 pub export fn ledger_post_entry(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.post(h.sqlite, entry_id, std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.post(h.sqlite, entry_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
@@ -150,7 +150,7 @@ pub export fn ledger_void_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]
 
 pub export fn ledger_reverse_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]const u8, reversal_date: [*:0]const u8, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.entry.Entry.reverse(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(reversal_date), std.mem.span(performed_by)) catch -1;
+    return heft.entry.Entry.reverse(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(reversal_date), null, std.mem.span(performed_by)) catch -1;
 }
 
 pub export fn ledger_remove_line(handle: ?*LedgerDB, line_id: i64, performed_by: [*:0]const u8) bool {
@@ -288,6 +288,48 @@ pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
     return true;
+}
+
+// ── Error Reporting ────────────────────────────────────────────
+
+var last_error_code: i32 = 0;
+
+pub export fn ledger_last_error() i32 {
+    return last_error_code;
+}
+
+fn setError(code: i32) void {
+    last_error_code = code;
+}
+
+// Error codes for C consumers
+// 0 = no error, 1 = not found, 2 = invalid input, 3 = period closed,
+// 4 = period locked, 5 = already posted, 6 = unbalanced entry,
+// 7 = duplicate number, 8 = invalid transition, 9 = account inactive,
+// 10 = missing counterparty, 99 = unknown
+
+fn mapError(err: anyerror) i32 {
+    return switch (err) {
+        error.NotFound => 1,
+        error.InvalidInput => 2,
+        error.PeriodClosed => 3,
+        error.PeriodLocked => 4,
+        error.AlreadyPosted => 5,
+        error.UnbalancedEntry => 6,
+        error.DuplicateNumber => 7,
+        error.InvalidTransition => 8,
+        error.AccountInactive => 9,
+        error.MissingCounterparty => 10,
+        error.InvalidCounterparty => 11,
+        error.AmountOverflow => 12,
+        error.VoidReasonRequired => 13,
+        error.ReverseReasonRequired => 14,
+        error.CircularReference => 15,
+        error.TooFewLines => 16,
+        error.SchemaVersionMismatch => 17,
+        error.OutOfMemory => 18,
+        else => 99,
+    };
 }
 
 // ── Helpers ────────────────────────────────────────────────────
