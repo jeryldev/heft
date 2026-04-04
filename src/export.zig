@@ -5,7 +5,7 @@ const db_mod = @import("db.zig");
 
 pub const ExportFormat = enum { csv, json };
 
-fn csvField(dest: []u8, src: []const u8) !usize {
+pub fn csvField(dest: []u8, src: []const u8) !usize {
     var needs_quoting = false;
     for (src) |c| {
         if (c == ',' or c == '"' or c == '\n' or c == '\r') {
@@ -40,7 +40,7 @@ fn csvField(dest: []u8, src: []const u8) !usize {
     return pos;
 }
 
-fn jsonString(dest: []u8, src: []const u8) !usize {
+pub fn jsonString(dest: []u8, src: []const u8) !usize {
     var pos: usize = 0;
     for (src) |c| {
         switch (c) {
