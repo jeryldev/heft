@@ -219,6 +219,36 @@ pub export fn ledger_create_subledger_account(handle: ?*LedgerDB, book_id: i64, 
     return heft.subledger.SubledgerAccount.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), std.mem.span(account_type), group_id, std.mem.span(performed_by)) catch -1;
 }
 
+pub export fn ledger_create_classification(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, report_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.classification.Classification.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(report_type), std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_add_group_node(handle: ?*LedgerDB, classification_id: i64, label: [*:0]const u8, parent_id: i64, position: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const pid: ?i64 = if (parent_id == 0) null else parent_id;
+    return heft.classification.ClassificationNode.addGroup(h.sqlite, classification_id, std.mem.span(label), pid, position, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_add_account_node(handle: ?*LedgerDB, classification_id: i64, account_id: i64, parent_id: i64, position: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const pid: ?i64 = if (parent_id == 0) null else parent_id;
+    return heft.classification.ClassificationNode.addAccount(h.sqlite, classification_id, account_id, pid, position, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_move_node(handle: ?*LedgerDB, node_id: i64, new_parent_id: i64, new_position: i32, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const pid: ?i64 = if (new_parent_id == 0) null else new_parent_id;
+    heft.classification.ClassificationNode.move(h.sqlite, node_id, pid, new_position, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_delete_classification(handle: ?*LedgerDB, classification_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.classification.Classification.delete(h.sqlite, classification_id, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
