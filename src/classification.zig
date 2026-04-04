@@ -119,36 +119,22 @@ pub const ClassificationNode = struct {
     const is_types = [_][]const u8{ "revenue", "expense" };
 
     fn validateAccountType(database: db.Database, classification_id: i64, account_id: i64) !void {
-        var report_type_buf: [20]u8 = undefined;
-        var report_type_len: usize = 0;
-        {
-            var stmt = try database.prepare("SELECT report_type FROM ledger_classifications WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, classification_id);
-            _ = try stmt.step();
-            const rt = stmt.columnText(0).?;
-            const copy_len = @min(rt.len, report_type_buf.len);
-            @memcpy(report_type_buf[0..copy_len], rt[0..copy_len]);
-            report_type_len = copy_len;
-        }
-        const report_type = report_type_buf[0..report_type_len];
+        // Single query: join classification + account to validate type match
+        var stmt = try database.prepare(
+            \\SELECT c.report_type, a.account_type
+            \\FROM ledger_classifications c, ledger_accounts a
+            \\WHERE c.id = ? AND a.id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+        try stmt.bindInt(2, account_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
 
-        if (std.mem.eql(u8, report_type, "trial_balance")) return; // accepts all types
+        const report_type = stmt.columnText(0).?;
+        const acct_type = stmt.columnText(1).?;
 
-        var acct_type_buf: [12]u8 = undefined;
-        var acct_type_len: usize = 0;
-        {
-            var stmt = try database.prepare("SELECT account_type FROM ledger_accounts WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, account_id);
-            const has_row = try stmt.step();
-            if (!has_row) return error.NotFound;
-            const at = stmt.columnText(0).?;
-            const at_copy_len = @min(at.len, acct_type_buf.len);
-            @memcpy(acct_type_buf[0..at_copy_len], at[0..at_copy_len]);
-            acct_type_len = at_copy_len;
-        }
-        const acct_type = acct_type_buf[0..acct_type_len];
+        if (std.mem.eql(u8, report_type, "trial_balance")) return;
 
         if (std.mem.eql(u8, report_type, "balance_sheet")) {
             for (bs_types) |t| {
@@ -188,20 +174,26 @@ pub const ClassificationNode = struct {
     }
 
     pub fn addAccount(database: db.Database, classification_id: i64, account_id: i64, parent_id: ?i64, position: i32, performed_by: []const u8) !i64 {
-        const book_id = try getBookId(database, classification_id);
-
-        // Validate account type matches report_type
-        try validateAccountType(database, classification_id, account_id);
-
-        // Check for duplicate account in same classification
+        // Single query: get book_id + check duplicate in one pass
+        var book_id: i64 = 0;
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_classification_nodes WHERE classification_id = ? AND account_id = ?;");
+            var stmt = try database.prepare(
+                \\SELECT c.book_id,
+                \\  (SELECT COUNT(*) FROM ledger_classification_nodes WHERE classification_id = ? AND account_id = ?)
+                \\FROM ledger_classifications c WHERE c.id = ?;
+            );
             defer stmt.finalize();
             try stmt.bindInt(1, classification_id);
             try stmt.bindInt(2, account_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) > 0) return error.DuplicateNumber;
+            try stmt.bindInt(3, classification_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+            if (stmt.columnInt(1) > 0) return error.DuplicateNumber;
         }
+
+        // Validate account type matches report_type (1 query)
+        try validateAccountType(database, classification_id, account_id);
 
         const depth = try computeDepth(database, parent_id);
 
@@ -560,4 +552,92 @@ test "contra account under parent group in balance sheet" {
     try stmt.bindInt(1, fixed);
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+}
+
+test "addGroup writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    _ = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type FROM ledger_audit_log WHERE entity_type = 'classification_node';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("classification_node", stmt.columnText(0).?);
+}
+
+test "addAccount writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, group, 0, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'classification_node';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0)); // group + account
+}
+
+test "move writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const g1 = try ClassificationNode.addGroup(database, cls_id, "Current", null, 0, "admin");
+    const g2 = try ClassificationNode.addGroup(database, cls_id, "Non-Current", null, 1, "admin");
+    const acct = try ClassificationNode.addAccount(database, cls_id, 1, g1, 0, "admin");
+
+    try ClassificationNode.move(database, acct, g2, 0, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'classification_node' AND action = 'move';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "node position ordering among siblings" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const assets = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, assets, 0, "admin"); // Cash pos 0
+    _ = try ClassificationNode.addAccount(database, cls_id, 2, assets, 1, "admin"); // AR pos 1
+    _ = try ClassificationNode.addAccount(database, cls_id, 3, assets, 2, "admin"); // Equipment pos 2
+
+    var stmt = try database.prepare("SELECT position FROM ledger_classification_nodes WHERE node_type = 'account' ORDER BY position;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+}
+
+test "delete classification after entries posted — safe (presentation only)" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, group, 0, "admin");
+
+    // Post an entry (classification is presentation, not data)
+    _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 5, null, "admin");
+    try entry_mod.Entry.post(database, 1, "admin");
+
+    // Delete classification — should succeed (no FK from entries to classifications)
+    try Classification.delete(database, cls_id, "admin");
+
+    // Entries and balances unaffected
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
 }
