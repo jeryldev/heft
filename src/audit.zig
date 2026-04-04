@@ -37,6 +37,11 @@ pub fn log(
     try bindAndStep(&stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
 }
 
+/// Use when a function writes multiple audit entries in sequence (e.g., editLine
+/// logs up to 5 field changes, voidEntry logs status + reason, reverse logs 3).
+/// The caller prepares the statement once with audit.insert_sql, passes it here
+/// for each entry, and finalizes once at the end. Saves N-1 prepare/finalize
+/// cycles per function call.
 pub fn logWithStmt(
     stmt: *db.Statement,
     entity_type: []const u8,

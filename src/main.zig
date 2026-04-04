@@ -219,6 +219,46 @@ pub export fn ledger_create_subledger_account(handle: ?*LedgerDB, book_id: i64, 
     return heft.subledger.SubledgerAccount.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), std.mem.span(account_type), group_id, std.mem.span(performed_by)) catch -1;
 }
 
+pub export fn ledger_create_classification(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, report_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.classification.Classification.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(report_type), std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_add_group_node(handle: ?*LedgerDB, classification_id: i64, label: [*:0]const u8, parent_id: i64, position: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const pid: ?i64 = if (parent_id == 0) null else parent_id;
+    return heft.classification.ClassificationNode.addGroup(h.sqlite, classification_id, std.mem.span(label), pid, position, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_add_account_node(handle: ?*LedgerDB, classification_id: i64, account_id: i64, parent_id: i64, position: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const pid: ?i64 = if (parent_id == 0) null else parent_id;
+    return heft.classification.ClassificationNode.addAccount(h.sqlite, classification_id, account_id, pid, position, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_move_node(handle: ?*LedgerDB, node_id: i64, new_parent_id: i64, new_position: i32, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const pid: ?i64 = if (new_parent_id == 0) null else new_parent_id;
+    heft.classification.ClassificationNode.move(h.sqlite, node_id, pid, new_position, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_classified_report(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
+    const h = handle orelse return null;
+    return heft.classification.classifiedReport(h.sqlite, classification_id, std.mem.span(as_of_date)) catch null;
+}
+
+pub export fn ledger_free_classified_result(result: ?*heft.classification.ClassifiedResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
+pub export fn ledger_delete_classification(handle: ?*LedgerDB, classification_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.classification.Classification.delete(h.sqlite, classification_id, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
@@ -752,6 +792,48 @@ test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expect(ledger_journal_register(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expectEqual(@as(i64, -1), ledger_create_subledger_group(null, 1, "X", "customer", 1, 1, "admin"));
     try std.testing.expectEqual(@as(i64, -1), ledger_create_subledger_account(null, 1, "X", "X", "customer", 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_classification(null, 1, "X", "balance_sheet", "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_group_node(null, 1, "X", 0, 0, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_account_node(null, 1, 1, 0, 0, "admin"));
+    try std.testing.expect(!ledger_move_node(null, 1, 0, 0, "admin"));
+    try std.testing.expect(!ledger_delete_classification(null, 1, "admin"));
+    try std.testing.expect(ledger_classified_report(null, 1, "2026-01-31") == null);
+}
+
+test "C ABI: free null classified result is safe" {
+    ledger_free_classified_result(null);
+}
+
+test "C ABI: classified report through C boundary" {
+    defer cleanupTestFile("test-cabi-cls.ledger");
+    const handle = ledger_open("test-cabi-cls.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const cls_id = ledger_create_classification(h, book_id, "BS", "balance_sheet", "admin");
+        try std.testing.expect(cls_id > 0);
+
+        const group = ledger_add_group_node(h, cls_id, "Assets", 0, 0, "admin");
+        try std.testing.expect(group > 0);
+
+        _ = ledger_add_account_node(h, cls_id, 1, group, 0, "admin");
+
+        const result = ledger_classified_report(h, cls_id, "2026-01-31");
+        try std.testing.expect(result != null);
+        if (result) |r| ledger_free_classified_result(r);
+    }
 }
 
 test "C ABI: free null results is safe" {

@@ -3,6 +3,11 @@ const std = @import("std");
 pub const AMOUNT_SCALE: i64 = 100_000_000; // 10^8
 pub const FX_RATE_SCALE: i64 = 10_000_000_000; // 10^10
 
+/// Convert a transaction amount to base currency using the FX rate.
+/// Uses i128 intermediate to prevent overflow: the product of two i64 values
+/// can exceed i64 range (e.g., 9.2e18 * 2e10 = 1.84e28). The division by
+/// FX_RATE_SCALE brings the result back to i64 range. Returns AmountOverflow
+/// if the final result still exceeds i64 (amount too large for the FX rate).
 pub fn computeBaseAmount(amount: i64, fx_rate: i64) !i64 {
     if (amount == 0) return 0;
     const wide_amount: i128 = @as(i128, amount);
@@ -77,6 +82,11 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
     return if (negative) -result else result;
 }
 
+/// Format a scaled i64 amount into a decimal string written to caller's buffer.
+/// Special-cases minInt(i64) to avoid signed negation overflow: -(-2^63) exceeds
+/// i64 range. Computes abs_val as maxInt(i64) + 1 via unsigned arithmetic.
+/// Builds the fractional part manually with leading zeros (Zig 0.15 bufPrint
+/// doesn't support runtime-width zero-padding).
 pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
     if (decimal_places == 0) {
         const int_val = @divTrunc(value, AMOUNT_SCALE);

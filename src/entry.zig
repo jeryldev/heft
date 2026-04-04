@@ -369,12 +369,13 @@ pub const Entry = struct {
             if (line_count < 2) return error.TooFewLines;
         }
 
-        // Step 3b + 4 + 5 + 7: Single read of all lines, compute base amounts,
-        // verify control accounts, check balance, update cache — all in one pass
+        // Steps 3b + 4 + 5 + 7 combined into a single pass over entry_lines.
+        // Previously this was 3 separate SELECT queries + 1 SUM query on the same table.
+        // Single-pass approach: one SELECT with correlated subquery for control account
+        // check, then compute base amounts, verify balance, and update cache in the same
+        // iteration. Reduces DB round-trips from 6 to 3 (1 read + 1 update reuse + 1 cache reuse).
         try database.beginTransaction();
         errdefer database.rollback();
-
-        // Read all lines ONCE with control account info
         {
             var read_stmt = try database.prepare(
                 \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.fx_rate,
