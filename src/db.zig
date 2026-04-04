@@ -30,6 +30,7 @@ pub const Database = struct {
 
         try self.exec("PRAGMA foreign_keys = ON;");
         try self.exec("PRAGMA journal_mode = WAL;");
+        try self.exec("PRAGMA busy_timeout = 5000;");
 
         return self;
     }

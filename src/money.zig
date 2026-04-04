@@ -50,7 +50,8 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
 
     var int_part: i64 = 0;
     for (int_str) |ch| {
-        int_part = int_part * 10 + @as(i64, ch - '0');
+        int_part = std.math.mul(i64, int_part, 10) catch return error.AmountOverflow;
+        int_part = std.math.add(i64, int_part, @as(i64, ch - '0')) catch return error.AmountOverflow;
     }
 
     // Parse fractional part

@@ -114,9 +114,26 @@ pub export fn ledger_create_draft(handle: ?*LedgerDB, book_id: i64, document_num
     return heft.entry.Entry.createDraft(h.sqlite, book_id, std.mem.span(document_number), std.mem.span(transaction_date), std.mem.span(posting_date), null, period_id, null, std.mem.span(performed_by)) catch -1;
 }
 
-pub export fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, performed_by: [*:0]const u8) i64 {
+pub export fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, counterparty_id: i64, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.entry.Entry.addLine(h.sqlite, entry_id, line_number, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, null, std.mem.span(performed_by)) catch -1;
+    const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;
+    return heft.entry.Entry.addLine(h.sqlite, entry_id, line_number, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, cp, null, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_edit_draft(handle: ?*LedgerDB, entry_id: i64, document_number: [*:0]const u8, transaction_date: [*:0]const u8, posting_date: [*:0]const u8, description: ?[*:0]const u8, metadata: ?[*:0]const u8, period_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
+    const meta: ?[]const u8 = if (metadata) |m| std.mem.span(m) else null;
+    heft.entry.Entry.editDraft(h.sqlite, entry_id, std.mem.span(document_number), std.mem.span(transaction_date), std.mem.span(posting_date), desc, meta, period_id, std.mem.span(performed_by)) catch return false;
+    return true;
+}
+
+pub export fn ledger_edit_posted(handle: ?*LedgerDB, entry_id: i64, description: ?[*:0]const u8, metadata: ?[*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
+    const meta: ?[]const u8 = if (metadata) |m| std.mem.span(m) else null;
+    heft.entry.Entry.editPosted(h.sqlite, entry_id, desc, meta, std.mem.span(performed_by)) catch return false;
+    return true;
 }
 
 pub export fn ledger_post_entry(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
@@ -150,7 +167,7 @@ pub export fn ledger_delete_draft(handle: ?*LedgerDB, entry_id: i64, performed_b
 
 pub export fn ledger_edit_line(handle: ?*LedgerDB, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, null, null, std.mem.span(performed_by)) catch return false;
     return true;
 }
 
@@ -450,8 +467,8 @@ test "C ABI: full lifecycle book -> account -> period -> transition" {
         try std.testing.expect(period_id > 0);
 
         try std.testing.expect(ledger_transition_period(h, period_id, "soft_closed", "admin"));
-        try std.testing.expect(ledger_update_account_status(h, acct_id, "archived", "admin"));
         try std.testing.expect(ledger_set_rounding_account(h, book_id, acct_id, "admin"));
+        try std.testing.expect(ledger_update_account_status(h, acct_id, "archived", "admin"));
     }
 }
 
@@ -593,10 +610,10 @@ test "C ABI: full posting lifecycle through C boundary" {
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
         try std.testing.expect(entry_id > 0);
 
-        const line1 = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        const line1 = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
         try std.testing.expect(line1 > 0);
 
-        const line2 = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        const line2 = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         try std.testing.expect(line2 > 0);
 
         try std.testing.expect(ledger_post_entry(h, entry_id, "admin"));
@@ -623,8 +640,8 @@ test "C ABI: void entry through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         try std.testing.expect(ledger_void_entry(h, entry_id, "Error", "admin"));
@@ -645,8 +662,8 @@ test "C ABI: reverse entry through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const reversal_id = ledger_reverse_entry(h, entry_id, "Accrual reversal", "2026-01-31", "admin");
@@ -656,7 +673,7 @@ test "C ABI: reverse entry through C boundary" {
 
 test "C ABI: null handle returns error for Sprint 3 exports" {
     try std.testing.expectEqual(@as(i64, -1), ledger_create_draft(null, 1, "JE-001", "2026-01-15", "2026-01-15", 1, "admin"));
-    try std.testing.expectEqual(@as(i64, -1), ledger_add_line(null, 1, 1, 100, 0, "PHP", 10_000_000_000, 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_line(null, 1, 1, 100, 0, "PHP", 10_000_000_000, 1, 0, "admin"));
     try std.testing.expect(!ledger_post_entry(null, 1, "admin"));
     try std.testing.expect(!ledger_void_entry(null, 1, "Error", "admin"));
     try std.testing.expectEqual(@as(i64, -1), ledger_reverse_entry(null, 1, "Reason", "2026-01-31", "admin"));
@@ -678,7 +695,7 @@ test "C ABI: edit line through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
 
         try std.testing.expect(ledger_edit_line(h, line_id, 2_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin"));
     }
@@ -697,7 +714,7 @@ test "C ABI: remove line and delete draft through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
 
         try std.testing.expect(ledger_remove_line(h, line_id, "admin"));
         try std.testing.expect(ledger_delete_draft(h, entry_id, "admin"));
@@ -720,8 +737,8 @@ test "C ABI: trial balance through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const result = ledger_trial_balance(h, book_id, "2026-01-31");
@@ -749,8 +766,8 @@ test "C ABI: income statement through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const result = ledger_income_statement(h, book_id, "2026-01-01", "2026-01-31");
@@ -777,8 +794,8 @@ test "C ABI: balance sheet through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const result = ledger_balance_sheet(h, book_id, "2026-01-31", "2026-01-01");
@@ -826,8 +843,8 @@ test "C ABI: classified report through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const cls_id = ledger_create_classification(h, book_id, "BS", "balance_sheet", "admin");
@@ -863,8 +880,8 @@ test "C ABI: GL through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const gl = ledger_general_ledger(h, book_id, "2026-01-01", "2026-01-31");

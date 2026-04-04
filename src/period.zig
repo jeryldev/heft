@@ -94,6 +94,7 @@ pub const Period = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, period_number: i32, year: i32, start_date: []const u8, end_date: []const u8, period_type: []const u8, performed_by: []const u8) !i64 {
         if (name.len == 0) return error.InvalidInput;
         if (period_number < 1 or period_number > 16) return error.InvalidInput;
+        if (year < 1) return error.InvalidInput;
         if (!isValidType(period_type)) return error.InvalidInput;
 
         // Verify book exists and is active
@@ -201,6 +202,7 @@ pub const Period = struct {
 
     pub fn bulkCreate(database: db.Database, book_id: i64, fiscal_year: i32, start_month: i32, granularity: PeriodGranularity, performed_by: []const u8) !void {
         if (start_month < 1 or start_month > 12) return error.InvalidInput;
+        if (fiscal_year < 1) return error.InvalidInput;
 
         // Verify book exists and is active
         {

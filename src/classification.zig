@@ -40,6 +40,40 @@ pub const Classification = struct {
         return id;
     }
 
+    pub fn updateName(database: db.Database, classification_id: i64, new_name: []const u8, performed_by: []const u8) !void {
+        if (new_name.len == 0) return error.InvalidInput;
+
+        var old_name_buf: [256]u8 = undefined;
+        var old_name_len: usize = 0;
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT name, book_id FROM ledger_classifications WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, classification_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const old = stmt.columnText(0).?;
+            old_name_len = @min(old.len, old_name_buf.len);
+            @memcpy(old_name_buf[0..old_name_len], old[0..old_name_len]);
+            book_id = stmt.columnInt64(1);
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_classifications SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, new_name);
+            try stmt.bindInt(2, classification_id);
+            _ = stmt.step() catch return error.DuplicateNumber;
+        }
+
+        try audit.log(database, "classification", classification_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
+
+        try database.commit();
+    }
+
     pub fn delete(database: db.Database, classification_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
         {
@@ -251,6 +285,87 @@ pub const ClassificationNode = struct {
         }
 
         try audit.log(database, "classification_node", node_id, "move", "parent_id", null, null, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn updateLabel(database: db.Database, node_id: i64, new_label: []const u8, performed_by: []const u8) !void {
+        if (new_label.len == 0) return error.InvalidInput;
+
+        var old_label_buf: [256]u8 = undefined;
+        var old_label_len: usize = 0;
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT n.label, c.book_id, n.node_type FROM ledger_classification_nodes n
+                \\JOIN ledger_classifications c ON c.id = n.classification_id WHERE n.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, node_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const old = stmt.columnText(0) orelse "";
+            old_label_len = @min(old.len, old_label_buf.len);
+            @memcpy(old_label_buf[0..old_label_len], old[0..old_label_len]);
+            book_id = stmt.columnInt64(1);
+            const node_type = stmt.columnText(2).?;
+            if (std.mem.eql(u8, node_type, "account")) return error.InvalidInput;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_classification_nodes SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, new_label);
+            try stmt.bindInt(2, node_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "classification_node", node_id, "update", "label", old_label_buf[0..old_label_len], new_label, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn delete(database: db.Database, node_id: i64, performed_by: []const u8) !void {
+        var book_id: i64 = 0;
+        var classification_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT n.classification_id, c.book_id FROM ledger_classification_nodes n
+                \\JOIN ledger_classifications c ON c.id = n.classification_id WHERE n.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, node_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            classification_id = stmt.columnInt64(0);
+            book_id = stmt.columnInt64(1);
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        // Delete node and all descendants recursively
+        {
+            var stmt = try database.prepare(
+                \\WITH RECURSIVE descendants(id) AS (
+                \\  SELECT id FROM ledger_classification_nodes WHERE id = ?
+                \\  UNION ALL
+                \\  SELECT n.id FROM ledger_classification_nodes n
+                \\  INNER JOIN descendants d ON n.parent_id = d.id
+                \\  WHERE n.classification_id = ?
+                \\)
+                \\DELETE FROM ledger_classification_nodes WHERE id IN (SELECT id FROM descendants);
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, node_id);
+            try stmt.bindInt(2, classification_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "classification_node", node_id, "delete", null, null, null, performed_by, book_id);
 
         try database.commit();
     }
@@ -863,8 +978,8 @@ test "delete classification after entries posted — safe (presentation only)" {
 
     // Post an entry (classification is presentation, not data)
     _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 5, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 5, null, null, "admin");
     try entry_mod.Entry.post(database, 1, "admin");
 
     // Delete classification — should succeed (no FK from entries to classifications)
@@ -881,8 +996,8 @@ test "delete classification after entries posted — safe (presentation only)" {
 
 fn postTestEntry(database: db.Database, doc: []const u8, debit_acct: i64, debit_amt: i64, credit_acct: i64, credit_amt: i64) !void {
     const eid = try entry_mod.Entry.createDraft(database, 1, doc, "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, eid, 1, debit_amt, 0, "PHP", money.FX_RATE_SCALE, debit_acct, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, credit_amt, "PHP", money.FX_RATE_SCALE, credit_acct, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, debit_amt, 0, "PHP", money.FX_RATE_SCALE, debit_acct, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, credit_amt, "PHP", money.FX_RATE_SCALE, credit_acct, null, null, "admin");
     try entry_mod.Entry.post(database, eid, "admin");
 }
 
@@ -1161,5 +1276,180 @@ test "classified report: nonexistent classification returns NotFound" {
     defer database.close();
 
     const result = classifiedReport(database, 999, "2026-01-31");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── Classification.updateName tests ────────────────────────────
+
+test "updateName changes classification name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "Old Layout", "balance_sheet", "admin");
+    try Classification.updateName(database, cid, "New Layout", "admin");
+
+    var stmt = try database.prepare("SELECT name FROM ledger_classifications WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, cid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("New Layout", stmt.columnText(0).?);
+}
+
+test "updateName writes audit with old and new" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "Old", "balance_sheet", "admin");
+    try Classification.updateName(database, cid, "New", "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'classification' AND field_changed = 'name';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Old", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("New", stmt.columnText(2).?);
+}
+
+test "updateName rejects empty name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "Layout", "balance_sheet", "admin");
+    const result = Classification.updateName(database, cid, "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "updateName rejects nonexistent classification" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Classification.updateName(database, 999, "New", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "updateName rejects duplicate name in same book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Classification.create(database, 1, "Layout A", "balance_sheet", "admin");
+    const cid2 = try Classification.create(database, 1, "Layout B", "income_statement", "admin");
+    const result = Classification.updateName(database, cid2, "Layout A", "admin");
+    try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+// ── ClassificationNode.updateLabel tests ───────────────────────
+
+test "updateLabel changes group node label" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const gid = try ClassificationNode.addGroup(database, cid, "Old Label", null, 1, "admin");
+    try ClassificationNode.updateLabel(database, gid, "New Label", "admin");
+
+    var stmt = try database.prepare("SELECT label FROM ledger_classification_nodes WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, gid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("New Label", stmt.columnText(0).?);
+}
+
+test "updateLabel writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const gid = try ClassificationNode.addGroup(database, cid, "Assets", null, 1, "admin");
+    try ClassificationNode.updateLabel(database, gid, "Current Assets", "admin");
+
+    var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE entity_type = 'classification_node' AND field_changed = 'label';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Assets", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("Current Assets", stmt.columnText(1).?);
+}
+
+test "updateLabel rejects account nodes" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const gid = try ClassificationNode.addGroup(database, cid, "Assets", null, 1, "admin");
+    const aid = try ClassificationNode.addAccount(database, cid, 1, gid, 1, "admin");
+    const result = ClassificationNode.updateLabel(database, aid, "New", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "updateLabel rejects empty label" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const gid = try ClassificationNode.addGroup(database, cid, "Assets", null, 1, "admin");
+    const result = ClassificationNode.updateLabel(database, gid, "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "updateLabel rejects nonexistent node" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = ClassificationNode.updateLabel(database, 999, "New", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── ClassificationNode.delete tests ────────────────────────────
+
+test "node delete removes a node" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const gid = try ClassificationNode.addGroup(database, cid, "Assets", null, 1, "admin");
+    try ClassificationNode.delete(database, gid, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_classification_nodes WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, gid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "node delete cascades children" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const parent = try ClassificationNode.addGroup(database, cid, "Assets", null, 1, "admin");
+    _ = try ClassificationNode.addAccount(database, cid, 1, parent, 1, "admin");
+    _ = try ClassificationNode.addGroup(database, cid, "Sub", parent, 2, "admin");
+
+    try ClassificationNode.delete(database, parent, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_classification_nodes WHERE classification_id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, cid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "node delete writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cid = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const gid = try ClassificationNode.addGroup(database, cid, "Assets", null, 1, "admin");
+    try ClassificationNode.delete(database, gid, "admin");
+
+    var stmt = try database.prepare("SELECT action FROM ledger_audit_log WHERE entity_type = 'classification_node' AND action = 'delete';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("delete", stmt.columnText(0).?);
+}
+
+test "node delete rejects nonexistent node" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = ClassificationNode.delete(database, 999, "admin");
     try std.testing.expectError(error.NotFound, result);
 }
