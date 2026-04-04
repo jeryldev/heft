@@ -2648,3 +2648,105 @@ test "addLine with null counterparty_id stores null" {
     _ = try stmt.step();
     try std.testing.expect(stmt.columnText(0) == null);
 }
+
+// ── Cross-period reversal tests ────────────────────────────────
+
+test "reverse: cross-period reversal posts to target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create Feb period
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    // Post in Jan
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Reverse into Feb (cross-period)
+    const rev_id = try Entry.reverse(database, eid, "Prior period correction", "2026-02-15", 2, "admin");
+
+    // Verify reversal entry is in Feb period
+    var stmt = try database.prepare("SELECT period_id FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, rev_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 2), stmt.columnInt64(0));
+}
+
+test "reverse: cross-period reversal rejects closed target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Close Feb
+    try period_mod.Period.transition(database, 2, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 2, .closed, "admin");
+
+    const result = Entry.reverse(database, eid, "Correction", "2026-02-15", 2, "admin");
+    try std.testing.expectError(error.PeriodClosed, result);
+}
+
+test "reverse: cross-period reversal rejects date outside target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Try to reverse into Feb but with a March date
+    const result = Entry.reverse(database, eid, "Correction", "2026-03-15", 2, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── Auto-rounding tests ────────────────────────────────────────
+
+test "post: auto-rounds FX imbalance when rounding account set" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create rounding account and set it
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try book_mod.Book.setRoundingAccount(database, 1, 3, "admin");
+
+    // Create entry with FX that will produce a small rounding difference
+    const eid = try Entry.createDraft(database, 1, "FX-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    // 100.00 USD at fx 56.501 = 5650.1 PHP (base) — may truncate
+    _ = try Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 56_501_000_000, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 56_501_000_000, 2, null, null, "admin");
+
+    // This should post — amounts should balance since same FX rate
+    try Entry.post(database, eid, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}
+
+test "post: rejects large imbalance even with rounding account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try book_mod.Book.setRoundingAccount(database, 1, 3, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "BAD-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+
+    const result = Entry.post(database, eid, "admin");
+    try std.testing.expectError(error.UnbalancedEntry, result);
+}

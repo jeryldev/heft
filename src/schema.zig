@@ -2181,3 +2181,41 @@ test "each table exists with correct name" {
         try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
     }
 }
+
+test "audit log trigger prevents DELETE" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    // Insert a test audit record
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
+
+    // Attempt to DELETE should fail
+    const result = database.exec("DELETE FROM ledger_audit_log WHERE id = 1;");
+    try std.testing.expectError(error.SqliteExecFailed, result);
+}
+
+test "audit log trigger prevents UPDATE" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
+
+    // Attempt to UPDATE should fail
+    const result = database.exec("UPDATE ledger_audit_log SET action = 'delete' WHERE id = 1;");
+    try std.testing.expectError(error.SqliteExecFailed, result);
+}
+
+test "createAll creates 2 audit protection triggers" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'protect_audit_log%';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+}

@@ -1378,3 +1378,41 @@ test "C ABI: null handle returns false for all CRUD exports" {
     try std.testing.expect(!ledger_delete_subledger_account(null, 1, "admin"));
     try std.testing.expect(!ledger_edit_line_full(null, 1, 100, 0, "PHP", 10_000_000_000, 1, 0, null, "admin"));
 }
+
+test "C ABI: ledger_last_error returns error code after failure" {
+    defer cleanupTestFile("test-cabi-lasterr.ledger");
+    const handle = ledger_open("test-cabi-lasterr.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        // Create book succeeds — error should be 0
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        try std.testing.expect(book_id > 0);
+
+        // Try to create book with invalid currency — should fail and set error
+        const bad = ledger_create_book(h, "Bad", "XX", 2, "admin");
+        try std.testing.expectEqual(@as(i64, -1), bad);
+        const err = ledger_last_error();
+        try std.testing.expect(err > 0); // should be non-zero (InvalidInput = 2)
+    }
+}
+
+test "C ABI: ledger_last_error after post failure" {
+    defer cleanupTestFile("test-cabi-lasterr2.ledger");
+    const handle = ledger_open("test-cabi-lasterr2.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_period(h, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const eid = ledger_create_draft(h, 1, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        // Only 1 line — post should fail with TooFewLines
+        _ = ledger_add_line(h, eid, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        const posted = ledger_post_entry(h, eid, "admin");
+        try std.testing.expect(!posted);
+        const err = ledger_last_error();
+        try std.testing.expect(err > 0); // TooFewLines = 16
+    }
+}

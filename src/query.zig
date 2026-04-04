@@ -2973,3 +2973,75 @@ test "subledgerReport: name search filter" {
     try std.testing.expect(std.mem.indexOf(u8, json, "Acme Corp") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "Beta LLC") == null);
 }
+
+// ── getClassification tests ────────────────────────────────────
+
+test "getClassification: returns data as JSON" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    const cid = try classification_mod.Classification.create(database, 1, "BS Layout", "balance_sheet", "admin");
+
+    var buf: [4096]u8 = undefined;
+    const json = try getClassification(database, cid, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"BS Layout\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"report_type\":\"balance_sheet\"") != null);
+}
+
+test "getClassification: NotFound" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    var buf: [4096]u8 = undefined;
+    try std.testing.expectError(error.NotFound, getClassification(database, 999, &buf, .json));
+}
+
+// ── getSubledgerGroup tests ────────────────────────────────────
+
+test "getSubledgerGroup: returns data as JSON" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1200", "AR", .asset, false, "admin");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 1, null, null, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const json = try getSubledgerGroup(database, gid, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Customers\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"customer\"") != null);
+}
+
+test "getSubledgerGroup: NotFound" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    var buf: [4096]u8 = undefined;
+    try std.testing.expectError(error.NotFound, getSubledgerGroup(database, 999, &buf, .json));
+}
+
+// ── getSubledgerAccount tests ──────────────────────────────────
+
+test "getSubledgerAccount: returns data as JSON" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1200", "AR", .asset, false, "admin");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 1, null, null, "admin");
+    const aid = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme Corp", "customer", gid, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const json = try getSubledgerAccount(database, aid, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Acme Corp\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"number\":\"C001\"") != null);
+}
+
+test "getSubledgerAccount: NotFound" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    var buf: [4096]u8 = undefined;
+    try std.testing.expectError(error.NotFound, getSubledgerAccount(database, 999, &buf, .json));
+}
