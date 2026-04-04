@@ -259,32 +259,36 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        // Audit each changed field with old/new values
+        // Audit each changed field — prepare audit statement ONCE, reuse for all fields
         var old_buf: [amt_buf_len]u8 = undefined;
         var new_buf: [amt_buf_len]u8 = undefined;
+        {
+            var audit_stmt = try database.prepare(audit.insert_sql);
+            defer audit_stmt.finalize();
 
-        if (old_debit != debit_amount) {
-            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_debit}) catch unreachable;
-            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{debit_amount}) catch unreachable;
-            try audit.log(database, "entry_line", line_id, "update", "debit_amount", old_s, new_s, performed_by, entry_book_id);
-        }
-        if (old_credit != credit_amount) {
-            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_credit}) catch unreachable;
-            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{credit_amount}) catch unreachable;
-            try audit.log(database, "entry_line", line_id, "update", "credit_amount", old_s, new_s, performed_by, entry_book_id);
-        }
-        if (!std.mem.eql(u8, old_currency_buf[0..old_currency_len], transaction_currency)) {
-            try audit.log(database, "entry_line", line_id, "update", "transaction_currency", old_currency_buf[0..old_currency_len], transaction_currency, performed_by, entry_book_id);
-        }
-        if (old_fx != fx_rate) {
-            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_fx}) catch unreachable;
-            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{fx_rate}) catch unreachable;
-            try audit.log(database, "entry_line", line_id, "update", "fx_rate", old_s, new_s, performed_by, entry_book_id);
-        }
-        if (old_account != account_id) {
-            const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_account}) catch unreachable;
-            const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{account_id}) catch unreachable;
-            try audit.log(database, "entry_line", line_id, "update", "account_id", old_s, new_s, performed_by, entry_book_id);
+            if (old_debit != debit_amount) {
+                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_debit}) catch unreachable;
+                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{debit_amount}) catch unreachable;
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "debit_amount", old_s, new_s, performed_by, entry_book_id);
+            }
+            if (old_credit != credit_amount) {
+                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_credit}) catch unreachable;
+                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{credit_amount}) catch unreachable;
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "credit_amount", old_s, new_s, performed_by, entry_book_id);
+            }
+            if (!std.mem.eql(u8, old_currency_buf[0..old_currency_len], transaction_currency)) {
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "transaction_currency", old_currency_buf[0..old_currency_len], transaction_currency, performed_by, entry_book_id);
+            }
+            if (old_fx != fx_rate) {
+                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_fx}) catch unreachable;
+                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{fx_rate}) catch unreachable;
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "fx_rate", old_s, new_s, performed_by, entry_book_id);
+            }
+            if (old_account != account_id) {
+                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_account}) catch unreachable;
+                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{account_id}) catch unreachable;
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "account_id", old_s, new_s, performed_by, entry_book_id);
+            }
         }
 
         try database.commit();
@@ -519,8 +523,12 @@ pub const Entry = struct {
             }
         }
 
-        try audit.log(database, "entry", entry_id, "void", "status", "posted", "void", performed_by, entry_book_id);
-        try audit.log(database, "entry", entry_id, "void", "void_reason", null, reason, performed_by, entry_book_id);
+        {
+            var audit_stmt = try database.prepare(audit.insert_sql);
+            defer audit_stmt.finalize();
+            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "void", "status", "posted", "void", performed_by, entry_book_id);
+            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "void", "void_reason", null, reason, performed_by, entry_book_id);
+        }
 
         try database.commit();
     }
@@ -634,9 +642,13 @@ pub const Entry = struct {
             }
         }
 
-        try audit.log(database, "entry", entry_id, "reverse", "status", "posted", "reversed", performed_by, entry_book_id);
-        try audit.log(database, "entry", entry_id, "reverse", "reversed_reason", null, reason, performed_by, entry_book_id);
-        try audit.log(database, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
+        {
+            var audit_stmt = try database.prepare(audit.insert_sql);
+            defer audit_stmt.finalize();
+            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "reverse", "status", "posted", "reversed", performed_by, entry_book_id);
+            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "reverse", "reversed_reason", null, reason, performed_by, entry_book_id);
+            try audit.logWithStmt(&audit_stmt, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
+        }
 
         try database.commit();
         return reversal_id;
