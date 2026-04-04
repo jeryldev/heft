@@ -85,7 +85,12 @@ pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
     }
 
     const negative = value < 0;
-    const abs_val: u64 = if (negative) @intCast(-value) else @intCast(value);
+    const abs_val: u64 = if (value == std.math.minInt(i64))
+        @as(u64, std.math.maxInt(i64)) + 1
+    else if (negative)
+        @intCast(-value)
+    else
+        @intCast(value);
 
     // Compute divisor for display: 10^(8 - decimal_places)
     var display_divisor: u64 = 1;
@@ -380,6 +385,14 @@ test "parseDecimal -> formatDecimal round-trip: whole number" {
 }
 
 // ── Additional edge cases ───────────────────────────────────────
+
+test "formatDecimal: i64 min value does not overflow" {
+    var buf: [32]u8 = undefined;
+    // This would panic without the minInt special case
+    const result = try formatDecimal(&buf, std.math.minInt(i64), 2);
+    try std.testing.expect(result.len > 0);
+    try std.testing.expect(result[0] == '-');
+}
 
 test "computeBaseAmount: both operands negative" {
     // (-100) * (-2.0) = 200 (positive result from two negatives)
