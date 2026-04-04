@@ -797,6 +797,43 @@ test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expectEqual(@as(i64, -1), ledger_add_account_node(null, 1, 1, 0, 0, "admin"));
     try std.testing.expect(!ledger_move_node(null, 1, 0, 0, "admin"));
     try std.testing.expect(!ledger_delete_classification(null, 1, "admin"));
+    try std.testing.expect(ledger_classified_report(null, 1, "2026-01-31") == null);
+}
+
+test "C ABI: free null classified result is safe" {
+    ledger_free_classified_result(null);
+}
+
+test "C ABI: classified report through C boundary" {
+    defer cleanupTestFile("test-cabi-cls.ledger");
+    const handle = ledger_open("test-cabi-cls.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const cls_id = ledger_create_classification(h, book_id, "BS", "balance_sheet", "admin");
+        try std.testing.expect(cls_id > 0);
+
+        const group = ledger_add_group_node(h, cls_id, "Assets", 0, 0, "admin");
+        try std.testing.expect(group > 0);
+
+        _ = ledger_add_account_node(h, cls_id, 1, group, 0, "admin");
+
+        const result = ledger_classified_report(h, cls_id, "2026-01-31");
+        try std.testing.expect(result != null);
+        if (result) |r| ledger_free_classified_result(r);
+    }
 }
 
 test "C ABI: free null results is safe" {
