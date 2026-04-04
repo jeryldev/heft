@@ -169,6 +169,26 @@ pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date:
     return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch null;
 }
 
+pub export fn ledger_general_ledger(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
+    const h = handle orelse return null;
+    return heft.report.generalLedger(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_account_ledger(handle: ?*LedgerDB, book_id: i64, account_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
+    const h = handle orelse return null;
+    return heft.report.accountLedger(h.sqlite, book_id, account_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_journal_register(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
+    const h = handle orelse return null;
+    return heft.report.journalRegister(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_free_ledger_result(result: ?*heft.report.LedgerResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
 pub export fn ledger_free_result(result: ?*heft.report.ReportResult) void {
     const r = result orelse return;
     r.deinit();

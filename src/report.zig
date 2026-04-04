@@ -25,6 +25,186 @@ pub const ReportResult = struct {
     }
 };
 
+pub const TransactionRow = struct {
+    posting_date: [10]u8,
+    posting_date_len: usize,
+    document_number: [100]u8,
+    document_number_len: usize,
+    description: [256]u8,
+    description_len: usize,
+    account_id: i64,
+    account_number: [50]u8,
+    account_number_len: usize,
+    account_name: [256]u8,
+    account_name_len: usize,
+    debit_amount: i64,
+    credit_amount: i64,
+    running_balance: i64,
+};
+
+pub const LedgerResult = struct {
+    arena: std.heap.ArenaAllocator,
+    rows: []TransactionRow,
+    opening_balance: i64,
+    closing_balance: i64,
+    total_debits: i64,
+    total_credits: i64,
+
+    pub fn deinit(self: *LedgerResult) void {
+        self.arena.deinit();
+        std.heap.c_allocator.destroy(self);
+    }
+};
+
+fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, compute_running: bool) !*LedgerResult {
+    const result = try std.heap.c_allocator.create(LedgerResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    var rows = std.ArrayListUnmanaged(TransactionRow){};
+    var stmt = try database.prepare(sql);
+    defer stmt.finalize();
+
+    inline for (binds, 0..) |bind, i| {
+        const col: c_int = @intCast(i + 1);
+        switch (@TypeOf(bind)) {
+            i64 => try stmt.bindInt(col, bind),
+            []const u8 => try stmt.bindText(col, bind),
+            else => @compileError("unsupported bind type"),
+        }
+    }
+
+    var total_debits: i64 = 0;
+    var total_credits: i64 = 0;
+    var running: i64 = 0;
+
+    while (try stmt.step()) {
+        var row: TransactionRow = undefined;
+        row.posting_date_len = copyText(&row.posting_date, stmt.columnText(0));
+        row.document_number_len = copyText(&row.document_number, stmt.columnText(1));
+        row.description_len = copyText(&row.description, stmt.columnText(2));
+        row.account_id = stmt.columnInt64(3);
+        row.account_number_len = copyText(&row.account_number, stmt.columnText(4));
+        row.account_name_len = copyText(&row.account_name, stmt.columnText(5));
+        row.debit_amount = stmt.columnInt64(6);
+        row.credit_amount = stmt.columnInt64(7);
+
+        if (compute_running) {
+            // For account ledger: debit increases, credit decreases (for debit-normal)
+            // We compute running as debit - credit (caller interprets based on normal_balance)
+            running += row.debit_amount - row.credit_amount;
+            row.running_balance = running;
+        } else {
+            row.running_balance = 0;
+        }
+
+        total_debits += row.debit_amount;
+        total_credits += row.credit_amount;
+        try rows.append(allocator, row);
+    }
+
+    result.rows = try rows.toOwnedSlice(allocator);
+    result.opening_balance = 0;
+    result.closing_balance = running;
+    result.total_debits = total_debits;
+    result.total_credits = total_credits;
+    return result;
+}
+
+const gl_sql: [*:0]const u8 =
+    \\SELECT th.posting_date, th.document_number,
+    \\  th.entry_description, th.account_id, th.account_number,
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\FROM ledger_transaction_history th
+    \\WHERE th.book_id = ? AND th.posting_date >= ? AND th.posting_date <= ?
+    \\ORDER BY th.posting_date, th.line_id;
+;
+
+const al_sql: [*:0]const u8 =
+    \\SELECT th.posting_date, th.document_number,
+    \\  th.entry_description, th.account_id, th.account_number,
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\FROM ledger_transaction_history th
+    \\WHERE th.book_id = ? AND th.account_id = ?
+    \\  AND th.posting_date >= ? AND th.posting_date <= ?
+    \\ORDER BY th.posting_date, th.line_id;
+;
+
+pub fn generalLedger(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
+    try verifyBookExists(database, book_id);
+    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, false);
+}
+
+pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
+    try verifyBookExists(database, book_id);
+
+    // Determine if account is credit-normal (flip sign for running balance)
+    var credit_normal = false;
+    {
+        var stmt = try database.prepare("SELECT normal_balance FROM ledger_accounts WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, account_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        credit_normal = std.mem.eql(u8, stmt.columnText(0).?, "credit");
+    }
+
+    const result = try std.heap.c_allocator.create(LedgerResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    var rows = std.ArrayListUnmanaged(TransactionRow){};
+    var stmt = try database.prepare(al_sql);
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, account_id);
+    try stmt.bindText(3, start_date);
+    try stmt.bindText(4, end_date);
+
+    var total_debits: i64 = 0;
+    var total_credits: i64 = 0;
+    var running: i64 = 0;
+
+    while (try stmt.step()) {
+        var row: TransactionRow = undefined;
+        row.posting_date_len = copyText(&row.posting_date, stmt.columnText(0));
+        row.document_number_len = copyText(&row.document_number, stmt.columnText(1));
+        row.description_len = copyText(&row.description, stmt.columnText(2));
+        row.account_id = stmt.columnInt64(3);
+        row.account_number_len = copyText(&row.account_number, stmt.columnText(4));
+        row.account_name_len = copyText(&row.account_name, stmt.columnText(5));
+        row.debit_amount = stmt.columnInt64(6);
+        row.credit_amount = stmt.columnInt64(7);
+
+        if (credit_normal) {
+            running += row.credit_amount - row.debit_amount;
+        } else {
+            running += row.debit_amount - row.credit_amount;
+        }
+        row.running_balance = running;
+
+        total_debits += row.debit_amount;
+        total_credits += row.credit_amount;
+        try rows.append(allocator, row);
+    }
+
+    result.rows = try rows.toOwnedSlice(allocator);
+    result.opening_balance = 0;
+    result.closing_balance = running;
+    result.total_debits = total_debits;
+    result.total_credits = total_credits;
+    return result;
+}
+
+pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
+    try verifyBookExists(database, book_id);
+    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, false);
+}
+
 fn verifyBookExists(database: db.Database, book_id: i64) !void {
     var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
     defer stmt.finalize();
@@ -1142,4 +1322,157 @@ test "post in soft_closed period: entry visible in reports" {
     defer result.deinit();
 
     try std.testing.expectEqual(@as(i64, 1_000_000_000_00), result.total_debits);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Sprint 5: General Ledger, Account Ledger, Journal Register tests
+// ══════════════════════════════════════════════════════════════════
+
+// ── General Ledger tests ────────────────────────────────────────
+
+test "GL: shows all transactions with running balance" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 5 }});
+    try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }});
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 6), result.rows.len);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
+test "GL: empty period returns zero rows" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 0), result.total_debits);
+}
+
+test "GL: nonexistent book returns NotFound" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const result = generalLedger(database, 999, "2026-01-01", "2026-01-31");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "GL: voided entry excluded" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+    try entry_mod.Entry.voidEntry(database, 1, "Error", "admin");
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+}
+
+test "GL: transaction rows have correct document numbers" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expect(result.rows.len >= 2);
+    try std.testing.expectEqualStrings("2026-01-15", result.rows[0].posting_date[0..result.rows[0].posting_date_len]);
+    try std.testing.expectEqualStrings("JE-001", result.rows[0].document_number[0..result.rows[0].document_number_len]);
+}
+
+// ── Account Ledger tests ────────────────────────────────────────
+
+test "AL: single account transactions with running balance" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 5 }});
+    try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }});
+
+    const result = try accountLedger(database, 1, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), result.rows[0].running_balance);
+    try std.testing.expectEqual(@as(i64, 15_000_000_000_00), result.rows[1].running_balance);
+    try std.testing.expectEqual(@as(i64, 12_000_000_000_00), result.rows[2].running_balance);
+    try std.testing.expectEqual(@as(i64, 12_000_000_000_00), result.closing_balance);
+}
+
+test "AL: account with no activity returns zero" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const result = try accountLedger(database, 1, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 0), result.closing_balance);
+}
+
+test "AL: credit-normal account running balance" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+
+    const result = try accountLedger(database, 1, 4, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), result.rows[0].running_balance);
+    try std.testing.expectEqual(@as(i64, 15_000_000_000_00), result.rows[1].running_balance);
+}
+
+// ── Journal Register tests ──────────────────────────────────────
+
+test "JR: shows all posted entries with lines" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 5 }});
+
+    const result = try journalRegister(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), result.rows.len);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
+test "JR: empty period returns zero" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const result = try journalRegister(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+}
+
+test "JR: excludes void entries" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "POST-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "VOID-001", "2026-01-15", 1, &.{.{ .amount = 500_000_000_00, .account_id = 1 }}, &.{.{ .amount = 500_000_000_00, .account_id = 4 }});
+    try entry_mod.Entry.voidEntry(database, 2, "Error", "admin");
+
+    const result = try journalRegister(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
 }
