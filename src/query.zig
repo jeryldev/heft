@@ -1344,6 +1344,394 @@ pub fn listSubledgerAccounts(database: db_mod.Database, book_id: i64, group_filt
     return buf[0..pos];
 }
 
+// ── subledgerReport ────────────────────────────────────────────
+
+pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, start_date: []const u8, end_date: []const u8, order: SortOrder, limit_raw: i32, offset_raw: i32, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    const limit = clampLimit(limit_raw);
+    const offset = clampOffset(offset_raw);
+
+    var total: i64 = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(DISTINCT counterparty_id) FROM ledger_transaction_history
+            \\WHERE book_id = ? AND counterparty_id IS NOT NULL
+            \\  AND posting_date BETWEEN ? AND ?
+            \\  AND (? IS NULL OR subledger_group_id = ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, start_date);
+        try stmt.bindText(3, end_date);
+        if (group_id) |gf| { try stmt.bindInt(4, gf); try stmt.bindInt(5, gf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+        _ = try stmt.step();
+        total = stmt.columnInt64(0);
+    }
+
+    const order_sql: [*:0]const u8 = if (order == .asc)
+        \\SELECT counterparty_id, counterparty_number, counterparty_name,
+        \\  subledger_group_name, account_number,
+        \\  SUM(base_debit_amount), SUM(base_credit_amount)
+        \\FROM ledger_transaction_history
+        \\WHERE book_id = ? AND counterparty_id IS NOT NULL
+        \\  AND posting_date BETWEEN ? AND ?
+        \\  AND (? IS NULL OR subledger_group_id = ?)
+        \\GROUP BY counterparty_id
+        \\ORDER BY counterparty_number ASC LIMIT ? OFFSET ?;
+    else
+        \\SELECT counterparty_id, counterparty_number, counterparty_name,
+        \\  subledger_group_name, account_number,
+        \\  SUM(base_debit_amount), SUM(base_credit_amount)
+        \\FROM ledger_transaction_history
+        \\WHERE book_id = ? AND counterparty_id IS NOT NULL
+        \\  AND posting_date BETWEEN ? AND ?
+        \\  AND (? IS NULL OR subledger_group_id = ?)
+        \\GROUP BY counterparty_id
+        \\ORDER BY counterparty_number DESC LIMIT ? OFFSET ?;
+    ;
+
+    var stmt = try database.prepare(order_sql);
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindText(2, start_date);
+    try stmt.bindText(3, end_date);
+    if (group_id) |gf| { try stmt.bindInt(4, gf); try stmt.bindInt(5, gf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+    try stmt.bindInt(6, limit);
+    try stmt.bindInt(7, offset);
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            pos += try writeCsvMeta(buf[pos..], total, limit, offset);
+            const header = "counterparty_id,counterparty_number,counterparty_name,group_name,control_account,debit_balance,credit_balance\n";
+            if (pos + header.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            while (try stmt.step()) {
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                pos += id_s.len;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.InvalidInput;
+                pos += nums.len;
+            }
+        },
+        .json => {
+            pos += try writeJsonMeta(buf[pos..], total, limit, offset);
+            var first = true;
+            while (try stmt.step()) {
+                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                first = false;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                pos += j1.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
+                const j2 = "\",\"counterparty_name\":\"";
+                if (pos + j2.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j2.len], j2);
+                pos += j2.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+                const j3 = "\",\"group_name\":\"";
+                if (pos + j3.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j3.len], j3);
+                pos += j3.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
+                const j4 = "\",\"control_account\":\"";
+                if (pos + j4.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j4.len], j4);
+                pos += j4.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"debit_balance\":{d},\"credit_balance\":{d}}}", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.InvalidInput;
+                pos += j5.len;
+            }
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
+// ── counterpartyLedger ─────────────────────────────────────────
+
+pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_id: i64, start_date: []const u8, end_date: []const u8, order: SortOrder, limit_raw: i32, offset_raw: i32, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    const limit = clampLimit(limit_raw);
+    const offset = clampOffset(offset_raw);
+
+    var total: i64 = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_transaction_history
+            \\WHERE book_id = ? AND counterparty_id = ?
+            \\  AND posting_date BETWEEN ? AND ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, counterparty_id);
+        try stmt.bindText(3, start_date);
+        try stmt.bindText(4, end_date);
+        _ = try stmt.step();
+        total = stmt.columnInt64(0);
+    }
+
+    const order_sql: [*:0]const u8 = if (order == .asc)
+        \\SELECT posting_date, document_number, entry_description,
+        \\  account_number, account_name,
+        \\  base_debit_amount, base_credit_amount
+        \\FROM ledger_transaction_history
+        \\WHERE book_id = ? AND counterparty_id = ?
+        \\  AND posting_date BETWEEN ? AND ?
+        \\ORDER BY posting_date ASC, document_number ASC LIMIT ? OFFSET ?;
+    else
+        \\SELECT posting_date, document_number, entry_description,
+        \\  account_number, account_name,
+        \\  base_debit_amount, base_credit_amount
+        \\FROM ledger_transaction_history
+        \\WHERE book_id = ? AND counterparty_id = ?
+        \\  AND posting_date BETWEEN ? AND ?
+        \\ORDER BY posting_date DESC, document_number DESC LIMIT ? OFFSET ?;
+    ;
+
+    var stmt = try database.prepare(order_sql);
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, counterparty_id);
+    try stmt.bindText(3, start_date);
+    try stmt.bindText(4, end_date);
+    try stmt.bindInt(5, limit);
+    try stmt.bindInt(6, offset);
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            pos += try writeCsvMeta(buf[pos..], total, limit, offset);
+            const header = "posting_date,document_number,description,account_number,account_name,debit_amount,credit_amount\n";
+            if (pos + header.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            while (try stmt.step()) {
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(0) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.InvalidInput;
+                pos += nums.len;
+            }
+        },
+        .json => {
+            pos += try writeJsonMeta(buf[pos..], total, limit, offset);
+            var first = true;
+            while (try stmt.step()) {
+                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                first = false;
+                const j1 = "{\"posting_date\":\"";
+                if (pos + j1.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j1.len], j1);
+                pos += j1.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(0) orelse "");
+                const j2 = "\",\"document_number\":\"";
+                if (pos + j2.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j2.len], j2);
+                pos += j2.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
+                const j3 = "\",\"description\":\"";
+                if (pos + j3.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j3.len], j3);
+                pos += j3.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+                const j4 = "\",\"account_number\":\"";
+                if (pos + j4.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j4.len], j4);
+                pos += j4.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
+                const j5 = "\",\"account_name\":\"";
+                if (pos + j5.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j5.len], j5);
+                pos += j5.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
+                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d}}}", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.InvalidInput;
+                pos += j6.len;
+            }
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
+// ── listTransactions (paginated GL with counterparty filter) ───
+
+pub fn listTransactions(database: db_mod.Database, book_id: i64, account_filter: ?i64, counterparty_filter: ?i64, start_date: []const u8, end_date: []const u8, order: SortOrder, limit_raw: i32, offset_raw: i32, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    const limit = clampLimit(limit_raw);
+    const offset = clampOffset(offset_raw);
+
+    var total: i64 = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_transaction_history
+            \\WHERE book_id = ? AND posting_date BETWEEN ? AND ?
+            \\  AND (? IS NULL OR account_id = ?)
+            \\  AND (? IS NULL OR counterparty_id = ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, start_date);
+        try stmt.bindText(3, end_date);
+        if (account_filter) |af| { try stmt.bindInt(4, af); try stmt.bindInt(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+        if (counterparty_filter) |cf| { try stmt.bindInt(6, cf); try stmt.bindInt(7, cf); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+        _ = try stmt.step();
+        total = stmt.columnInt64(0);
+    }
+
+    const order_sql: [*:0]const u8 = if (order == .asc)
+        \\SELECT posting_date, document_number, entry_description,
+        \\  account_number, account_name, counterparty_number, counterparty_name,
+        \\  base_debit_amount, base_credit_amount
+        \\FROM ledger_transaction_history
+        \\WHERE book_id = ? AND posting_date BETWEEN ? AND ?
+        \\  AND (? IS NULL OR account_id = ?)
+        \\  AND (? IS NULL OR counterparty_id = ?)
+        \\ORDER BY posting_date ASC, document_number ASC LIMIT ? OFFSET ?;
+    else
+        \\SELECT posting_date, document_number, entry_description,
+        \\  account_number, account_name, counterparty_number, counterparty_name,
+        \\  base_debit_amount, base_credit_amount
+        \\FROM ledger_transaction_history
+        \\WHERE book_id = ? AND posting_date BETWEEN ? AND ?
+        \\  AND (? IS NULL OR account_id = ?)
+        \\  AND (? IS NULL OR counterparty_id = ?)
+        \\ORDER BY posting_date DESC, document_number DESC LIMIT ? OFFSET ?;
+    ;
+
+    var stmt = try database.prepare(order_sql);
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindText(2, start_date);
+    try stmt.bindText(3, end_date);
+    if (account_filter) |af| { try stmt.bindInt(4, af); try stmt.bindInt(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+    if (counterparty_filter) |cf| { try stmt.bindInt(6, cf); try stmt.bindInt(7, cf); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+    try stmt.bindInt(8, limit);
+    try stmt.bindInt(9, offset);
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            pos += try writeCsvMeta(buf[pos..], total, limit, offset);
+            const header = "posting_date,document_number,description,account_number,account_name,counterparty_number,counterparty_name,debit_amount,credit_amount\n";
+            if (pos + header.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            while (try stmt.step()) {
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(0) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(6) orelse "");
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(7), stmt.columnInt64(8) }) catch return error.InvalidInput;
+                pos += nums.len;
+            }
+        },
+        .json => {
+            pos += try writeJsonMeta(buf[pos..], total, limit, offset);
+            var first = true;
+            while (try stmt.step()) {
+                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                first = false;
+                const j1 = "{\"posting_date\":\"";
+                if (pos + j1.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j1.len], j1);
+                pos += j1.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(0) orelse "");
+                const j2 = "\",\"document_number\":\"";
+                if (pos + j2.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j2.len], j2);
+                pos += j2.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
+                const j3 = "\",\"description\":\"";
+                if (pos + j3.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j3.len], j3);
+                pos += j3.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+                const j4 = "\",\"account_number\":\"";
+                if (pos + j4.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j4.len], j4);
+                pos += j4.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
+                const j5 = "\",\"account_name\":\"";
+                if (pos + j5.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j5.len], j5);
+                pos += j5.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
+                const j6 = "\",\"counterparty_number\":\"";
+                if (pos + j6.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j6.len], j6);
+                pos += j6.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
+                const j7 = "\",\"counterparty_name\":\"";
+                if (pos + j7.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j7.len], j7);
+                pos += j7.len;
+                pos += try export_mod.jsonString(buf[pos..], stmt.columnText(6) orelse "");
+                const j8 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d}}}", .{ stmt.columnInt64(7), stmt.columnInt64(8) }) catch return error.InvalidInput;
+                pos += j8.len;
+            }
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.InvalidInput;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 const db = @import("db.zig");
@@ -1916,4 +2304,129 @@ test "listSubledgerAccounts: name search" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "Acme Corp") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "Beta LLC") == null);
+}
+
+// ── subledgerReport tests ──────────────────────────────────────
+
+test "subledgerReport: returns counterparty balances" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "1200", "AR", .asset, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    _ = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme Corp", "customer", gid, "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 5_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+
+    try database.exec("INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, counterparty_id) VALUES (2, 0, 500000000000, 'PHP', 10000000000, 2, 1, 1);");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try subledgerReport(database, 1, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"counterparty_name\":\"Acme Corp\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"rows\":[") != null);
+}
+
+test "subledgerReport: empty when no counterparties" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const json = try subledgerReport(database, 1, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"rows\":[]") != null);
+}
+
+// ── counterpartyLedger tests ───────────────────────────────────
+
+test "counterpartyLedger: returns transactions for counterparty" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "1200", "AR", .asset, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    _ = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", gid, "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 5_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try database.exec("INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, counterparty_id) VALUES (2, 0, 500000000000, 'PHP', 10000000000, 2, 1, 1);");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try counterpartyLedger(database, 1, 1, "2026-01-01", "2026-01-31", .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "INV-001") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"rows\":[") != null);
+}
+
+test "counterpartyLedger: empty for nonexistent counterparty" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const json = try counterpartyLedger(database, 1, 999, "2026-01-01", "2026-01-31", .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":0") != null);
+}
+
+// ── listTransactions tests ─────────────────────────────────────
+
+test "listTransactions: paginated GL with filters" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Capital", .equity, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    var buf: [16384]u8 = undefined;
+
+    // All transactions
+    const all = try listTransactions(database, 1, null, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, all, "\"total\":2") != null);
+
+    // Filter by account
+    const cash_only = try listTransactions(database, 1, 1, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, cash_only, "\"total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cash_only, "\"account_number\":\"1000\"") != null);
+}
+
+test "listTransactions: pagination with limit" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Capital", .equity, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try listTransactions(database, 1, null, null, "2026-01-01", "2026-01-31", .asc, 1, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"limit\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"has_more\":true") != null);
 }
