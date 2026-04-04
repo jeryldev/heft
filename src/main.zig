@@ -169,6 +169,26 @@ pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date:
     return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch null;
 }
 
+pub export fn ledger_general_ledger(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
+    const h = handle orelse return null;
+    return heft.report.generalLedger(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_account_ledger(handle: ?*LedgerDB, book_id: i64, account_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
+    const h = handle orelse return null;
+    return heft.report.accountLedger(h.sqlite, book_id, account_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_journal_register(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
+    const h = handle orelse return null;
+    return heft.report.journalRegister(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+}
+
+pub export fn ledger_free_ledger_result(result: ?*heft.report.LedgerResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
 pub export fn ledger_free_result(result: ?*heft.report.ReportResult) void {
     const r = result orelse return;
     r.deinit();
@@ -717,8 +737,44 @@ test "C ABI: null handle returns null for reports" {
     try std.testing.expect(ledger_trial_balance(null, 1, "2026-01-31") == null);
     try std.testing.expect(ledger_income_statement(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_balance_sheet(null, 1, "2026-01-31", "2026-01-01") == null);
+    try std.testing.expect(ledger_general_ledger(null, 1, "2026-01-01", "2026-01-31") == null);
+    try std.testing.expect(ledger_account_ledger(null, 1, 1, "2026-01-01", "2026-01-31") == null);
+    try std.testing.expect(ledger_journal_register(null, 1, "2026-01-01", "2026-01-31") == null);
 }
 
-test "C ABI: free null result is safe" {
+test "C ABI: free null results is safe" {
     ledger_free_result(null);
+    ledger_free_ledger_result(null);
+}
+
+test "C ABI: GL through C boundary" {
+    defer cleanupTestFile("test-cabi-gl.ledger");
+    const handle = ledger_open("test-cabi-gl.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const gl = ledger_general_ledger(h, book_id, "2026-01-01", "2026-01-31");
+        try std.testing.expect(gl != null);
+        if (gl) |r| ledger_free_ledger_result(r);
+
+        const al = ledger_account_ledger(h, book_id, 1, "2026-01-01", "2026-01-31");
+        try std.testing.expect(al != null);
+        if (al) |r| ledger_free_ledger_result(r);
+
+        const jr = ledger_journal_register(h, book_id, "2026-01-01", "2026-01-31");
+        try std.testing.expect(jr != null);
+        if (jr) |r| ledger_free_ledger_result(r);
+    }
 }
