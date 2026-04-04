@@ -2,17 +2,7 @@ const std = @import("std");
 const db_mod = @import("db.zig");
 const export_mod = @import("export.zig");
 
-pub const SortOrder = enum {
-    asc,
-    desc,
-
-    pub fn toSql(self: SortOrder) []const u8 {
-        return switch (self) {
-            .asc => " ASC",
-            .desc => " DESC",
-        };
-    }
-};
+pub const SortOrder = enum { asc, desc };
 
 pub const DEFAULT_LIMIT: i32 = 100;
 pub const MAX_LIMIT: i32 = 1000;

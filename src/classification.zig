@@ -16,11 +16,12 @@ pub const Classification = struct {
         if (!isValidType(report_type)) return error.InvalidInput;
 
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
         }
 
         try database.beginTransaction();
