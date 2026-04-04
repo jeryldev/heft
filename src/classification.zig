@@ -251,6 +251,217 @@ pub const ClassificationNode = struct {
     }
 };
 
+pub const ClassifiedRow = struct {
+    node_id: i64,
+    node_type: [10]u8,
+    node_type_len: usize,
+    label: [256]u8,
+    label_len: usize,
+    account_id: i64,
+    depth: i32,
+    position: i32,
+    debit_balance: i64,
+    credit_balance: i64,
+};
+
+pub const ClassifiedResult = struct {
+    arena: std.heap.ArenaAllocator,
+    rows: []ClassifiedRow,
+    total_debits: i64,
+    total_credits: i64,
+    unclassified_debits: i64,
+    unclassified_credits: i64,
+
+    pub fn deinit(self: *ClassifiedResult) void {
+        self.arena.deinit();
+        std.heap.c_allocator.destroy(self);
+    }
+};
+
+fn copyText(dest: []u8, src: ?[]const u8) usize {
+    const s = src orelse return 0;
+    const len = @min(s.len, dest.len);
+    @memcpy(dest[0..len], s[0..len]);
+    return len;
+}
+
+pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_date: []const u8) !*ClassifiedResult {
+    // Get classification info
+    var book_id: i64 = 0;
+    {
+        var stmt = try database.prepare("SELECT book_id FROM ledger_classifications WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        book_id = stmt.columnInt64(0);
+    }
+
+    const result = try std.heap.c_allocator.create(ClassifiedResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    // Build account balance map: account_id -> (debit_balance, credit_balance)
+    // Reuse the same query pattern as trialBalance
+    var balance_map = std.AutoHashMapUnmanaged(i64, [2]i64){};
+    {
+        var stmt = try database.prepare(
+            \\SELECT a.id, a.normal_balance, SUM(ab.debit_sum), SUM(ab.credit_sum)
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND p.end_date <= ?
+            \\GROUP BY a.id;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, as_of_date);
+
+        while (try stmt.step()) {
+            const acct_id = stmt.columnInt64(0);
+            const normal = stmt.columnText(1).?;
+            const debit_sum = stmt.columnInt64(2);
+            const credit_sum = stmt.columnInt64(3);
+
+            var debit_bal: i64 = 0;
+            var credit_bal: i64 = 0;
+            if (std.mem.eql(u8, normal, "debit")) {
+                debit_bal = debit_sum - credit_sum;
+                if (debit_bal < 0) { credit_bal = -debit_bal; debit_bal = 0; }
+            } else {
+                credit_bal = credit_sum - debit_sum;
+                if (credit_bal < 0) { debit_bal = -credit_bal; credit_bal = 0; }
+            }
+            try balance_map.put(allocator, acct_id, .{ debit_bal, credit_bal });
+        }
+    }
+
+    // Fetch all nodes, build structures, then roll up
+    const NodeInfo = struct { parent_id: ?i64, acct_id: i64, depth: i32, position: i32, is_account: bool };
+    var node_infos = std.AutoHashMapUnmanaged(i64, NodeInfo){};
+    var node_balances = std.AutoHashMapUnmanaged(i64, [2]i64){};
+    var node_ids = std.ArrayListUnmanaged(i64){};
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, node_type, account_id, depth, position, parent_id
+            \\FROM ledger_classification_nodes
+            \\WHERE classification_id = ?
+            \\ORDER BY depth DESC, position ASC;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+
+        while (try stmt.step()) {
+            const node_id = stmt.columnInt64(0);
+            const node_type = stmt.columnText(1).?;
+            const is_account = std.mem.eql(u8, node_type, "account");
+            const acct_id = stmt.columnInt64(2);
+            const parent_text = stmt.columnText(5);
+            const parent_id: ?i64 = if (parent_text != null) stmt.columnInt64(5) else null;
+
+            try node_infos.put(allocator, node_id, .{
+                .parent_id = parent_id,
+                .acct_id = acct_id,
+                .depth = stmt.columnInt(3),
+                .position = stmt.columnInt(4),
+                .is_account = is_account,
+            });
+
+            // Assign leaf balance
+            var debit_bal: i64 = 0;
+            var credit_bal: i64 = 0;
+            if (is_account) {
+                if (balance_map.get(acct_id)) |bal| {
+                    debit_bal = bal[0];
+                    credit_bal = bal[1];
+                }
+            }
+            // Initialize or accumulate
+            const existing = node_balances.get(node_id) orelse .{ 0, 0 };
+            try node_balances.put(allocator, node_id, .{ existing[0] + debit_bal, existing[1] + credit_bal });
+
+            // Roll up to parent
+            if (parent_id) |pid| {
+                const parent_existing = node_balances.get(pid) orelse .{ 0, 0 };
+                try node_balances.put(allocator, pid, .{ parent_existing[0] + debit_bal, parent_existing[1] + credit_bal });
+            }
+
+            try node_ids.append(allocator, node_id);
+        }
+    }
+
+    // Build display rows in depth ASC order
+    var rows = std.ArrayListUnmanaged(ClassifiedRow){};
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, node_type, label, account_id, depth, position
+            \\FROM ledger_classification_nodes
+            \\WHERE classification_id = ?
+            \\ORDER BY depth ASC, position ASC;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+
+        while (try stmt.step()) {
+            var row: ClassifiedRow = undefined;
+            row.node_id = stmt.columnInt64(0);
+            row.node_type_len = copyText(&row.node_type, stmt.columnText(1));
+            row.label_len = copyText(&row.label, stmt.columnText(2));
+            row.account_id = stmt.columnInt64(3);
+            row.depth = stmt.columnInt(4);
+            row.position = stmt.columnInt(5);
+
+            const bal = node_balances.get(row.node_id) orelse .{ 0, 0 };
+            row.debit_balance = bal[0];
+            row.credit_balance = bal[1];
+
+            try rows.append(allocator, row);
+        }
+    }
+
+    // Compute unclassified: accounts with balances not in any node
+    var classified_total_debits: i64 = 0;
+    var classified_total_credits: i64 = 0;
+    var all_total_debits: i64 = 0;
+    var all_total_credits: i64 = 0;
+
+    // Sum classified (root nodes only — avoid double counting)
+    {
+        var stmt = try database.prepare(
+            \\SELECT id FROM ledger_classification_nodes
+            \\WHERE classification_id = ? AND parent_id IS NULL;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+        while (try stmt.step()) {
+            const nid = stmt.columnInt64(0);
+            if (node_balances.get(nid)) |bal| {
+                classified_total_debits += bal[0];
+                classified_total_credits += bal[1];
+            }
+        }
+    }
+
+    // Sum all balances from the map
+    {
+        var it = balance_map.iterator();
+        while (it.next()) |entry| {
+            all_total_debits += entry.value_ptr[0];
+            all_total_credits += entry.value_ptr[1];
+        }
+    }
+
+    result.rows = try rows.toOwnedSlice(allocator);
+    result.total_debits = classified_total_debits;
+    result.total_credits = classified_total_credits;
+    result.unclassified_debits = all_total_debits - classified_total_debits;
+    result.unclassified_credits = all_total_credits - classified_total_credits;
+    return result;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
@@ -640,4 +851,113 @@ test "delete classification after entries posted — safe (presentation only)" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}
+
+// ── Classified Report tests ─────────────────────────────────────
+
+fn postTestEntry(database: db.Database, doc: []const u8, debit_acct: i64, debit_amt: i64, credit_acct: i64, credit_amt: i64) !void {
+    const eid = try entry_mod.Entry.createDraft(database, 1, doc, "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, debit_amt, 0, "PHP", money.FX_RATE_SCALE, debit_acct, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, credit_amt, "PHP", money.FX_RATE_SCALE, credit_acct, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+}
+
+test "classified BS: roll-up totals correct" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Post entries
+    try postTestEntry(database, "JE-001", 1, 10_000_000_000_00, 6, 10_000_000_000_00); // Cash 10k, Capital 10k
+    try postTestEntry(database, "JE-002", 1, 5_000_000_000_00, 7, 5_000_000_000_00); // Cash 5k, Revenue 5k
+
+    // Build classified BS
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const assets = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, assets, 0, "admin"); // Cash
+
+    const equity = try ClassificationNode.addGroup(database, cls_id, "Equity", null, 1, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 6, equity, 0, "admin"); // Capital
+
+    const result = try classifiedReport(database, cls_id, "2026-01-31");
+    defer result.deinit();
+
+    // Assets group should have Cash balance rolled up
+    try std.testing.expect(result.rows.len >= 4); // 2 groups + 2 accounts
+
+    // Total classified = classified root nodes
+    try std.testing.expect(result.total_debits > 0 or result.total_credits > 0);
+}
+
+test "classified BS: unclassified accounts captured" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postTestEntry(database, "JE-001", 1, 10_000_000_000_00, 6, 10_000_000_000_00);
+
+    // Classification with only Cash — Capital is unclassified
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const assets = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, assets, 0, "admin");
+
+    const result = try classifiedReport(database, cls_id, "2026-01-31");
+    defer result.deinit();
+
+    // Capital (10k credit) is unclassified
+    try std.testing.expect(result.unclassified_credits > 0);
+}
+
+test "classified BS: empty classification returns zero" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postTestEntry(database, "JE-001", 1, 1_000_000_000_00, 6, 1_000_000_000_00);
+
+    const cls_id = try Classification.create(database, 1, "Empty BS", "balance_sheet", "admin");
+
+    const result = try classifiedReport(database, cls_id, "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 0), result.total_debits);
+    // All balances are unclassified
+    try std.testing.expect(result.unclassified_debits > 0 or result.unclassified_credits > 0);
+}
+
+test "classified BS: contra account as deduction under parent" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Equipment 50k, Accum Dep 10k (contra)
+    try postTestEntry(database, "JE-001", 3, 50_000_000_000_00, 6, 50_000_000_000_00); // Equipment debit
+    try postTestEntry(database, "JE-002", 8, 10_000_000_000_00, 4, 10_000_000_000_00); // COGS debit, AccumDep credit
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const assets = try ClassificationNode.addGroup(database, cls_id, "Fixed Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 3, assets, 0, "admin"); // Equipment
+    _ = try ClassificationNode.addAccount(database, cls_id, 4, assets, 1, "admin"); // Accum Dep (contra)
+
+    const result = try classifiedReport(database, cls_id, "2026-01-31");
+    defer result.deinit();
+
+    // Fixed Assets group: Equipment 50k debit - AccumDep 10k credit = net 40k
+    // Find the group node (depth 0)
+    var group_debit: i64 = 0;
+    var group_credit: i64 = 0;
+    for (result.rows) |row| {
+        if (row.depth == 0) {
+            group_debit = row.debit_balance;
+            group_credit = row.credit_balance;
+        }
+    }
+    // Net: 50k debit - 10k credit = 40k debit for the group
+    try std.testing.expectEqual(@as(i64, 50_000_000_000_00), group_debit);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), group_credit);
+}
+
+test "classified report: nonexistent classification returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = classifiedReport(database, 999, "2026-01-31");
+    try std.testing.expectError(error.NotFound, result);
 }

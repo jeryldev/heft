@@ -243,6 +243,16 @@ pub export fn ledger_move_node(handle: ?*LedgerDB, node_id: i64, new_parent_id: 
     return true;
 }
 
+pub export fn ledger_classified_report(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
+    const h = handle orelse return null;
+    return heft.classification.classifiedReport(h.sqlite, classification_id, std.mem.span(as_of_date)) catch null;
+}
+
+pub export fn ledger_free_classified_result(result: ?*heft.classification.ClassifiedResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
 pub export fn ledger_delete_classification(handle: ?*LedgerDB, classification_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.classification.Classification.delete(h.sqlite, classification_id, std.mem.span(performed_by)) catch return false;
