@@ -782,6 +782,11 @@ test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expect(ledger_journal_register(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expectEqual(@as(i64, -1), ledger_create_subledger_group(null, 1, "X", "customer", 1, 1, "admin"));
     try std.testing.expectEqual(@as(i64, -1), ledger_create_subledger_account(null, 1, "X", "X", "customer", 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_classification(null, 1, "X", "balance_sheet", "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_group_node(null, 1, "X", 0, 0, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_account_node(null, 1, 1, 0, 0, "admin"));
+    try std.testing.expect(!ledger_move_node(null, 1, 0, 0, "admin"));
+    try std.testing.expect(!ledger_delete_classification(null, 1, "admin"));
 }
 
 test "C ABI: free null results is safe" {

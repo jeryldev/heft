@@ -127,8 +127,9 @@ pub const ClassificationNode = struct {
             try stmt.bindInt(1, classification_id);
             _ = try stmt.step();
             const rt = stmt.columnText(0).?;
-            @memcpy(report_type_buf[0..rt.len], rt);
-            report_type_len = rt.len;
+            const copy_len = @min(rt.len, report_type_buf.len);
+            @memcpy(report_type_buf[0..copy_len], rt[0..copy_len]);
+            report_type_len = copy_len;
         }
         const report_type = report_type_buf[0..report_type_len];
 
@@ -143,8 +144,9 @@ pub const ClassificationNode = struct {
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             const at = stmt.columnText(0).?;
-            @memcpy(acct_type_buf[0..at.len], at);
-            acct_type_len = at.len;
+            const at_copy_len = @min(at.len, acct_type_buf.len);
+            @memcpy(acct_type_buf[0..at_copy_len], at[0..at_copy_len]);
+            acct_type_len = at_copy_len;
         }
         const acct_type = acct_type_buf[0..acct_type_len];
 
