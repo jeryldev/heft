@@ -365,6 +365,23 @@ pub const Entry = struct {
             if (line_count < 2) return error.TooFewLines;
         }
 
+        // Step 3b: Control account enforcement (subledger)
+        {
+            const subledger = @import("subledger.zig");
+            var check_stmt = try database.prepare("SELECT account_id, counterparty_id FROM ledger_entry_lines WHERE entry_id = ?;");
+            defer check_stmt.finalize();
+            try check_stmt.bindInt(1, entry_id);
+
+            while (try check_stmt.step()) {
+                const acct_id = check_stmt.columnInt64(0);
+                const has_counterparty = check_stmt.columnText(1) != null;
+                const is_control = try subledger.SubledgerGroup.isControlAccount(database, acct_id);
+
+                if (is_control and !has_counterparty) return error.MissingCounterparty;
+                if (!is_control and has_counterparty) return error.InvalidCounterparty;
+            }
+        }
+
         try database.beginTransaction();
         errdefer database.rollback();
 

@@ -209,6 +209,16 @@ pub export fn ledger_result_total_credits(result: ?*heft.report.ReportResult) i6
     return r.total_credits;
 }
 
+pub export fn ledger_create_subledger_group(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, group_type: [*:0]const u8, group_number: i32, gl_account_id: i64, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.subledger.SubledgerGroup.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(group_type), group_number, gl_account_id, null, null, std.mem.span(performed_by)) catch -1;
+}
+
+pub export fn ledger_create_subledger_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, group_id: i64, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.subledger.SubledgerAccount.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), std.mem.span(account_type), group_id, std.mem.span(performed_by)) catch -1;
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;

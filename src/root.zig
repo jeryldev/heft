@@ -7,6 +7,7 @@ pub const period = @import("period.zig");
 pub const money = @import("money.zig");
 pub const entry = @import("entry.zig");
 pub const report = @import("report.zig");
+pub const subledger = @import("subledger.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
 comptime {
@@ -19,5 +20,6 @@ comptime {
     _ = money;
     _ = entry;
     _ = report;
+    _ = subledger;
     _ = @import("error.zig");
 }
