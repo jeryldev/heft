@@ -56,7 +56,9 @@ pub const LedgerResult = struct {
     }
 };
 
-fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, compute_running: bool) !*LedgerResult {
+const RunningMode = enum { none, debit_normal, credit_normal };
+
+fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, running_mode: RunningMode) !*LedgerResult {
     const result = try std.heap.c_allocator.create(LedgerResult);
     errdefer std.heap.c_allocator.destroy(result);
     result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -91,13 +93,18 @@ fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, 
         row.debit_amount = stmt.columnInt64(6);
         row.credit_amount = stmt.columnInt64(7);
 
-        if (compute_running) {
-            // For account ledger: debit increases, credit decreases (for debit-normal)
-            // We compute running as debit - credit (caller interprets based on normal_balance)
-            running += row.debit_amount - row.credit_amount;
-            row.running_balance = running;
-        } else {
-            row.running_balance = 0;
+        switch (running_mode) {
+            .debit_normal => {
+                running += row.debit_amount - row.credit_amount;
+                row.running_balance = running;
+            },
+            .credit_normal => {
+                running += row.credit_amount - row.debit_amount;
+                row.running_balance = running;
+            },
+            .none => {
+                row.running_balance = 0;
+            },
         }
 
         total_debits += row.debit_amount;
@@ -113,116 +120,7 @@ fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, 
     return result;
 }
 
-const gl_sql: [*:0]const u8 =
-    \\SELECT th.posting_date, th.document_number,
-    \\  th.entry_description, th.account_id, th.account_number,
-    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
-    \\FROM ledger_transaction_history th
-    \\WHERE th.book_id = ? AND th.posting_date >= ? AND th.posting_date <= ?
-    \\ORDER BY th.posting_date, th.line_id;
-;
-
-const al_sql: [*:0]const u8 =
-    \\SELECT th.posting_date, th.document_number,
-    \\  th.entry_description, th.account_id, th.account_number,
-    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
-    \\FROM ledger_transaction_history th
-    \\WHERE th.book_id = ? AND th.account_id = ?
-    \\  AND th.posting_date >= ? AND th.posting_date <= ?
-    \\ORDER BY th.posting_date, th.line_id;
-;
-
-pub fn generalLedger(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
-    try verifyBookExists(database, book_id);
-    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, false);
-}
-
-pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
-    try verifyBookExists(database, book_id);
-
-    // Determine if account is credit-normal (flip sign for running balance)
-    var credit_normal = false;
-    {
-        var stmt = try database.prepare("SELECT normal_balance FROM ledger_accounts WHERE id = ?;");
-        defer stmt.finalize();
-        try stmt.bindInt(1, account_id);
-        const has_row = try stmt.step();
-        if (!has_row) return error.NotFound;
-        credit_normal = std.mem.eql(u8, stmt.columnText(0).?, "credit");
-    }
-
-    const result = try std.heap.c_allocator.create(LedgerResult);
-    errdefer std.heap.c_allocator.destroy(result);
-    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-    errdefer result.arena.deinit();
-    const allocator = result.arena.allocator();
-
-    var rows = std.ArrayListUnmanaged(TransactionRow){};
-    var stmt = try database.prepare(al_sql);
-    defer stmt.finalize();
-    try stmt.bindInt(1, book_id);
-    try stmt.bindInt(2, account_id);
-    try stmt.bindText(3, start_date);
-    try stmt.bindText(4, end_date);
-
-    var total_debits: i64 = 0;
-    var total_credits: i64 = 0;
-    var running: i64 = 0;
-
-    while (try stmt.step()) {
-        var row: TransactionRow = undefined;
-        row.posting_date_len = copyText(&row.posting_date, stmt.columnText(0));
-        row.document_number_len = copyText(&row.document_number, stmt.columnText(1));
-        row.description_len = copyText(&row.description, stmt.columnText(2));
-        row.account_id = stmt.columnInt64(3);
-        row.account_number_len = copyText(&row.account_number, stmt.columnText(4));
-        row.account_name_len = copyText(&row.account_name, stmt.columnText(5));
-        row.debit_amount = stmt.columnInt64(6);
-        row.credit_amount = stmt.columnInt64(7);
-
-        if (credit_normal) {
-            running += row.credit_amount - row.debit_amount;
-        } else {
-            running += row.debit_amount - row.credit_amount;
-        }
-        row.running_balance = running;
-
-        total_debits += row.debit_amount;
-        total_credits += row.credit_amount;
-        try rows.append(allocator, row);
-    }
-
-    result.rows = try rows.toOwnedSlice(allocator);
-    result.opening_balance = 0;
-    result.closing_balance = running;
-    result.total_debits = total_debits;
-    result.total_credits = total_credits;
-    return result;
-}
-
-pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
-    try verifyBookExists(database, book_id);
-    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, false);
-}
-
-fn verifyBookExists(database: db.Database, book_id: i64) !void {
-    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
-    defer stmt.finalize();
-    try stmt.bindInt(1, book_id);
-    _ = try stmt.step();
-    if (stmt.columnInt(0) == 0) return error.NotFound;
-}
-
-fn copyText(dest: []u8, src: ?[]const u8) usize {
-    const s = src orelse return 0;
-    const len = @min(s.len, dest.len);
-    @memcpy(dest[0..len], s[0..len]);
-    return len;
-}
-
-pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
-    try verifyBookExists(database, book_id);
-
+fn buildReportResult(database: db.Database, sql: [*:0]const u8, binds: anytype) !*ReportResult {
     const result = try std.heap.c_allocator.create(ReportResult);
     errdefer std.heap.c_allocator.destroy(result);
     result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -230,20 +128,17 @@ pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8)
     const allocator = result.arena.allocator();
 
     var rows = std.ArrayListUnmanaged(ReportRow){};
-
-    var stmt = try database.prepare(
-        \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
-        \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
-        \\FROM ledger_account_balances ab
-        \\JOIN ledger_accounts a ON a.id = ab.account_id
-        \\JOIN ledger_periods p ON p.id = ab.period_id
-        \\WHERE ab.book_id = ? AND p.end_date <= ?
-        \\GROUP BY a.id
-        \\ORDER BY a.number;
-    );
+    var stmt = try database.prepare(sql);
     defer stmt.finalize();
-    try stmt.bindInt(1, book_id);
-    try stmt.bindText(2, as_of_date);
+
+    inline for (binds, 0..) |bind, i| {
+        const col: c_int = @intCast(i + 1);
+        switch (@TypeOf(bind)) {
+            i64 => try stmt.bindInt(col, bind),
+            []const u8 => try stmt.bindText(col, bind),
+            else => @compileError("unsupported bind type"),
+        }
+    }
 
     var total_debits: i64 = 0;
     var total_credits: i64 = 0;
@@ -286,6 +181,96 @@ pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8)
     return result;
 }
 
+const gl_sql: [*:0]const u8 =
+    \\SELECT th.posting_date, th.document_number,
+    \\  th.entry_description, th.account_id, th.account_number,
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\FROM ledger_transaction_history th
+    \\WHERE th.book_id = ? AND th.posting_date >= ? AND th.posting_date <= ?
+    \\ORDER BY th.posting_date, th.line_id;
+;
+
+const al_sql: [*:0]const u8 =
+    \\SELECT th.posting_date, th.document_number,
+    \\  th.entry_description, th.account_id, th.account_number,
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\FROM ledger_transaction_history th
+    \\WHERE th.book_id = ? AND th.account_id = ?
+    \\  AND th.posting_date >= ? AND th.posting_date <= ?
+    \\ORDER BY th.posting_date, th.line_id;
+;
+
+pub fn generalLedger(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
+    try verifyBookExists(database, book_id);
+    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, .none);
+}
+
+pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
+    try verifyBookExists(database, book_id);
+
+    // Determine running balance direction from account's normal_balance
+    var mode: RunningMode = .debit_normal;
+    {
+        var stmt = try database.prepare("SELECT normal_balance FROM ledger_accounts WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, account_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        if (std.mem.eql(u8, stmt.columnText(0).?, "credit")) mode = .credit_normal;
+    }
+
+    return buildLedgerResult(database, al_sql, .{ book_id, account_id, start_date, end_date }, mode);
+}
+
+pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
+    try verifyBookExists(database, book_id);
+    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, .none);
+}
+
+fn verifyBookExists(database: db.Database, book_id: i64) !void {
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    if (stmt.columnInt(0) == 0) return error.NotFound;
+}
+
+fn copyText(dest: []u8, src: ?[]const u8) usize {
+    const s = src orelse return 0;
+    const len = @min(s.len, dest.len);
+    @memcpy(dest[0..len], s[0..len]);
+    return len;
+}
+
+const tb_sql: [*:0]const u8 =
+    \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
+    \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
+    \\FROM ledger_account_balances ab
+    \\JOIN ledger_accounts a ON a.id = ab.account_id
+    \\JOIN ledger_periods p ON p.id = ab.period_id
+    \\WHERE ab.book_id = ? AND p.end_date <= ?
+    \\GROUP BY a.id
+    \\ORDER BY a.number;
+;
+
+pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
+    try verifyBookExists(database, book_id);
+    return buildReportResult(database, tb_sql, .{ book_id, as_of_date });
+}
+
+const is_sql: [*:0]const u8 =
+    \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
+    \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
+    \\FROM ledger_account_balances ab
+    \\JOIN ledger_accounts a ON a.id = ab.account_id
+    \\JOIN ledger_periods p ON p.id = ab.period_id
+    \\WHERE ab.book_id = ?
+    \\  AND p.start_date >= ? AND p.end_date <= ?
+    \\  AND a.account_type IN ('revenue', 'expense')
+    \\GROUP BY a.id
+    \\ORDER BY a.number;
+;
+
 pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
 
@@ -296,19 +281,7 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
     const allocator = result.arena.allocator();
 
     var rows = std.ArrayListUnmanaged(ReportRow){};
-
-    var stmt = try database.prepare(
-        \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
-        \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
-        \\FROM ledger_account_balances ab
-        \\JOIN ledger_accounts a ON a.id = ab.account_id
-        \\JOIN ledger_periods p ON p.id = ab.period_id
-        \\WHERE ab.book_id = ?
-        \\  AND p.start_date >= ? AND p.end_date <= ?
-        \\  AND a.account_type IN ('revenue', 'expense')
-        \\GROUP BY a.id
-        \\ORDER BY a.number;
-    );
+    var stmt = try database.prepare(is_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
     try stmt.bindText(2, start_date);
@@ -324,13 +297,10 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
         row.account_name_len = copyText(&row.account_name, stmt.columnText(2));
         row.account_type_len = copyText(&row.account_type, stmt.columnText(3));
 
-        const debit_sum = stmt.columnInt64(5);
-        const credit_sum = stmt.columnInt64(6);
-
-        row.debit_balance = debit_sum;
-        row.credit_balance = credit_sum;
-        total_debits += debit_sum;
-        total_credits += credit_sum;
+        row.debit_balance = stmt.columnInt64(5);
+        row.credit_balance = stmt.columnInt64(6);
+        total_debits += row.debit_balance;
+        total_credits += row.credit_balance;
         try rows.append(allocator, row);
     }
 
@@ -340,78 +310,39 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
     return result;
 }
 
+const bs_sql: [*:0]const u8 =
+    \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
+    \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
+    \\FROM ledger_account_balances ab
+    \\JOIN ledger_accounts a ON a.id = ab.account_id
+    \\JOIN ledger_periods p ON p.id = ab.period_id
+    \\WHERE ab.book_id = ? AND p.end_date <= ?
+    \\  AND a.account_type IN ('asset', 'liability', 'equity')
+    \\GROUP BY a.id
+    \\ORDER BY a.number;
+;
+
+const ni_sql: [*:0]const u8 =
+    \\SELECT a.account_type, SUM(ab.debit_sum), SUM(ab.credit_sum)
+    \\FROM ledger_account_balances ab
+    \\JOIN ledger_accounts a ON a.id = ab.account_id
+    \\JOIN ledger_periods p ON p.id = ab.period_id
+    \\WHERE ab.book_id = ?
+    \\  AND p.start_date >= ? AND p.end_date <= ?
+    \\  AND a.account_type IN ('revenue', 'expense')
+    \\GROUP BY a.account_type;
+;
+
 pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8, fy_start_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
 
-    const result = try std.heap.c_allocator.create(ReportResult);
-    errdefer std.heap.c_allocator.destroy(result);
-    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-    errdefer result.arena.deinit();
-    const allocator = result.arena.allocator();
-
-    var rows = std.ArrayListUnmanaged(ReportRow){};
-
-    // Get A/L/E cumulative balances
-    {
-        var stmt = try database.prepare(
-            \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
-            \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
-            \\FROM ledger_account_balances ab
-            \\JOIN ledger_accounts a ON a.id = ab.account_id
-            \\JOIN ledger_periods p ON p.id = ab.period_id
-            \\WHERE ab.book_id = ? AND p.end_date <= ?
-            \\  AND a.account_type IN ('asset', 'liability', 'equity')
-            \\GROUP BY a.id
-            \\ORDER BY a.number;
-        );
-        defer stmt.finalize();
-        try stmt.bindInt(1, book_id);
-        try stmt.bindText(2, as_of_date);
-
-        while (try stmt.step()) {
-            var row: ReportRow = undefined;
-            row.account_id = stmt.columnInt64(0);
-            row.account_number_len = copyText(&row.account_number, stmt.columnText(1));
-            row.account_name_len = copyText(&row.account_name, stmt.columnText(2));
-            row.account_type_len = copyText(&row.account_type, stmt.columnText(3));
-
-            const normal = stmt.columnText(4).?;
-            const debit_sum = stmt.columnInt64(5);
-            const credit_sum = stmt.columnInt64(6);
-
-            if (std.mem.eql(u8, normal, "debit")) {
-                row.debit_balance = debit_sum - credit_sum;
-                row.credit_balance = 0;
-                if (row.debit_balance < 0) {
-                    row.credit_balance = -row.debit_balance;
-                    row.debit_balance = 0;
-                }
-            } else {
-                row.credit_balance = credit_sum - debit_sum;
-                row.debit_balance = 0;
-                if (row.credit_balance < 0) {
-                    row.debit_balance = -row.credit_balance;
-                    row.credit_balance = 0;
-                }
-            }
-
-            try rows.append(allocator, row);
-        }
-    }
+    // Get A/L/E rows using shared builder
+    const result = try buildReportResult(database, bs_sql, .{ book_id, as_of_date });
 
     // Compute net income (revenue - expense) for the fiscal year
     var net_income: i64 = 0;
     {
-        var stmt = try database.prepare(
-            \\SELECT a.account_type, SUM(ab.debit_sum), SUM(ab.credit_sum)
-            \\FROM ledger_account_balances ab
-            \\JOIN ledger_accounts a ON a.id = ab.account_id
-            \\JOIN ledger_periods p ON p.id = ab.period_id
-            \\WHERE ab.book_id = ?
-            \\  AND p.start_date >= ? AND p.end_date <= ?
-            \\  AND a.account_type IN ('revenue', 'expense')
-            \\GROUP BY a.account_type;
-        );
+        var stmt = try database.prepare(ni_sql);
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
         try stmt.bindText(2, fy_start_date);
@@ -429,23 +360,13 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
         }
     }
 
-    // Compute totals with net income injected into equity side
-    var total_debits: i64 = 0;
-    var total_credits: i64 = 0;
-    for (rows.items[0..rows.items.len]) |row| {
-        total_debits += row.debit_balance;
-        total_credits += row.credit_balance;
-    }
-    // Net income goes to credit side (equity)
+    // Inject net income into totals (equity side)
     if (net_income > 0) {
-        total_credits += net_income;
+        result.total_credits += net_income;
     } else {
-        total_debits += -net_income;
+        result.total_debits += -net_income;
     }
 
-    result.rows = try rows.toOwnedSlice(allocator);
-    result.total_debits = total_debits;
-    result.total_credits = total_credits;
     return result;
 }
 
