@@ -39,7 +39,8 @@ const tables = [_][*:0]const u8{
     // changing them would invalidate every computed balance.
     \\CREATE TABLE IF NOT EXISTS ledger_books (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  name TEXT NOT NULL,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 255),
     \\  base_currency TEXT NOT NULL
     \\    CHECK (length(base_currency) = 3),
     \\  decimal_places INTEGER NOT NULL DEFAULT 2
@@ -61,7 +62,8 @@ const tables = [_][*:0]const u8{
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
     \\  number TEXT NOT NULL
     \\    CHECK (length(number) BETWEEN 1 AND 50),
-    \\  name TEXT NOT NULL,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 255),
     \\  account_type TEXT NOT NULL
     \\    CHECK (account_type IN ('asset', 'liability', 'equity', 'revenue', 'expense')),
     \\  normal_balance TEXT NOT NULL
@@ -83,12 +85,15 @@ const tables = [_][*:0]const u8{
     // Status lifecycle: open → soft_closed → closed → locked
     \\CREATE TABLE IF NOT EXISTS ledger_periods (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  name TEXT NOT NULL,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 100),
     \\  period_number INTEGER NOT NULL
     \\    CHECK (period_number BETWEEN 1 AND 16),
     \\  year INTEGER NOT NULL,
-    \\  start_date TEXT NOT NULL,
-    \\  end_date TEXT NOT NULL,
+    \\  start_date TEXT NOT NULL
+    \\    CHECK (length(start_date) = 10),
+    \\  end_date TEXT NOT NULL
+    \\    CHECK (length(end_date) = 10),
     \\  period_type TEXT NOT NULL DEFAULT 'regular'
     \\    CHECK (period_type IN ('regular', 'adjustment')),
     \\  status TEXT NOT NULL DEFAULT 'open'
@@ -106,7 +111,8 @@ const tables = [_][*:0]const u8{
     // report_type constrains which accounts can appear in the tree.
     \\CREATE TABLE IF NOT EXISTS ledger_classifications (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  name TEXT NOT NULL,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 255),
     \\  report_type TEXT NOT NULL
     \\    CHECK (report_type IN ('balance_sheet', 'income_statement', 'trial_balance')),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
@@ -124,7 +130,8 @@ const tables = [_][*:0]const u8{
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
     \\  node_type TEXT NOT NULL
     \\    CHECK (node_type IN ('group', 'account')),
-    \\  label TEXT,
+    \\  label TEXT
+    \\    CHECK (label IS NULL OR length(label) <= 255),
     \\  parent_id INTEGER REFERENCES ledger_classification_nodes(id),
     \\  account_id INTEGER REFERENCES ledger_accounts(id),
     \\  position INTEGER NOT NULL DEFAULT 0,
@@ -140,12 +147,15 @@ const tables = [_][*:0]const u8{
     // When enabled, engine enforces: no direct posting to control account.
     \\CREATE TABLE IF NOT EXISTS ledger_subledger_groups (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  name TEXT NOT NULL,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 255),
     \\  type TEXT NOT NULL
     \\    CHECK (type IN ('customer', 'supplier')),
     \\  group_number INTEGER NOT NULL,
-    \\  number_range_start TEXT,
-    \\  number_range_end TEXT,
+    \\  number_range_start TEXT
+    \\    CHECK (number_range_start IS NULL OR length(number_range_start) <= 50),
+    \\  number_range_end TEXT
+    \\    CHECK (number_range_end IS NULL OR length(number_range_end) <= 50),
     \\  gl_account_id INTEGER NOT NULL REFERENCES ledger_accounts(id),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -159,8 +169,10 @@ const tables = [_][*:0]const u8{
     // that lives in the application layer.
     \\CREATE TABLE IF NOT EXISTS ledger_subledger_accounts (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  number TEXT NOT NULL,
-    \\  name TEXT NOT NULL,
+    \\  number TEXT NOT NULL
+    \\    CHECK (length(number) BETWEEN 1 AND 50),
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 255),
     \\  type TEXT NOT NULL
     \\    CHECK (type IN ('customer', 'supplier', 'both')),
     \\  group_id INTEGER NOT NULL REFERENCES ledger_subledger_groups(id),
@@ -177,18 +189,26 @@ const tables = [_][*:0]const u8{
     // Status: draft → posted → reversed|void
     \\CREATE TABLE IF NOT EXISTS ledger_entries (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  document_number TEXT NOT NULL,
-    \\  transaction_date TEXT NOT NULL,
-    \\  posting_date TEXT NOT NULL,
-    \\  description TEXT,
+    \\  document_number TEXT NOT NULL
+    \\    CHECK (length(document_number) BETWEEN 1 AND 100),
+    \\  transaction_date TEXT NOT NULL
+    \\    CHECK (length(transaction_date) = 10),
+    \\  posting_date TEXT NOT NULL
+    \\    CHECK (length(posting_date) = 10),
+    \\  description TEXT
+    \\    CHECK (description IS NULL OR length(description) <= 1000),
     \\  status TEXT NOT NULL DEFAULT 'draft'
     \\    CHECK (status IN ('draft', 'posted', 'reversed', 'void')),
-    \\  void_reason TEXT,
-    \\  reversed_reason TEXT,
+    \\  void_reason TEXT
+    \\    CHECK (void_reason IS NULL OR length(void_reason) <= 500),
+    \\  reversed_reason TEXT
+    \\    CHECK (reversed_reason IS NULL OR length(reversed_reason) <= 500),
     \\  reverses_entry_id INTEGER REFERENCES ledger_entries(id),
     \\  posted_at TEXT,
-    \\  posted_by TEXT,
-    \\  metadata TEXT,
+    \\  posted_by TEXT
+    \\    CHECK (posted_by IS NULL OR length(posted_by) <= 100),
+    \\  metadata TEXT
+    \\    CHECK (metadata IS NULL OR length(metadata) <= 10000),
     \\  period_id INTEGER NOT NULL REFERENCES ledger_periods(id),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -212,10 +232,13 @@ const tables = [_][*:0]const u8{
     \\  base_credit_amount INTEGER NOT NULL DEFAULT 0,
     \\  fx_rate INTEGER NOT NULL DEFAULT 10000000000
     \\    CHECK (fx_rate > 0),
-    \\  transaction_currency TEXT NOT NULL,
-    \\  description TEXT,
+    \\  transaction_currency TEXT NOT NULL
+    \\    CHECK (length(transaction_currency) = 3),
+    \\  description TEXT
+    \\    CHECK (description IS NULL OR length(description) <= 1000),
     \\  quantity INTEGER,
-    \\  unit_type TEXT,
+    \\  unit_type TEXT
+    \\    CHECK (unit_type IS NULL OR length(unit_type) <= 50),
     \\  counterparty_id INTEGER REFERENCES ledger_subledger_accounts(id),
     \\  account_id INTEGER NOT NULL REFERENCES ledger_accounts(id),
     \\  entry_id INTEGER NOT NULL REFERENCES ledger_entries(id),
@@ -257,13 +280,19 @@ const tables = [_][*:0]const u8{
     // NO updates. NO deletes. EVER.
     \\CREATE TABLE IF NOT EXISTS ledger_audit_log (
     \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
-    \\  entity_type TEXT NOT NULL,
+    \\  entity_type TEXT NOT NULL
+    \\    CHECK (length(entity_type) BETWEEN 1 AND 50),
     \\  entity_id INTEGER NOT NULL,
-    \\  action TEXT NOT NULL,
-    \\  field_changed TEXT,
-    \\  old_value TEXT,
-    \\  new_value TEXT,
-    \\  performed_by TEXT NOT NULL,
+    \\  action TEXT NOT NULL
+    \\    CHECK (length(action) BETWEEN 1 AND 50),
+    \\  field_changed TEXT
+    \\    CHECK (field_changed IS NULL OR length(field_changed) <= 100),
+    \\  old_value TEXT
+    \\    CHECK (old_value IS NULL OR length(old_value) <= 4000),
+    \\  new_value TEXT
+    \\    CHECK (new_value IS NULL OR length(new_value) <= 4000),
+    \\  performed_by TEXT NOT NULL
+    \\    CHECK (length(performed_by) BETWEEN 1 AND 100),
     \\  performed_at TEXT NOT NULL
     \\    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id)
@@ -1668,7 +1697,7 @@ test "unicode in account names" {
     try std.testing.expectEqualStrings("\xe4\xbc\x9a\xe8\xae\xa1", stmt.columnText(0).?);
 }
 
-test "very long description accepted" {
+test "description at max length accepted" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -1679,22 +1708,99 @@ test "very long description accepted" {
         \\VALUES ('Jan 2026', 1, 2026, '2026-01-01', '2026-01-31', 1);
     );
 
-    var long_desc: [2000]u8 = undefined;
-    @memset(&long_desc, 'A');
+    var max_desc: [1000]u8 = undefined;
+    @memset(&max_desc, 'A');
 
     {
         var stmt = try database.prepare(
             "INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, period_id, book_id) VALUES ('JE-001', '2026-01-15', '2026-01-15', ?, 1, 1);",
         );
         defer stmt.finalize();
-        try stmt.bindText(1, &long_desc);
+        try stmt.bindText(1, &max_desc);
         _ = try stmt.step();
     }
 
     var stmt = try database.prepare("SELECT length(description) FROM ledger_entries WHERE id = 1;");
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 2000), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 1000), stmt.columnInt(0));
+}
+
+test "description over max length rejected" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec(
+        \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, book_id)
+        \\VALUES ('Jan 2026', 1, 2026, '2026-01-01', '2026-01-31', 1);
+    );
+
+    var over_desc: [1001]u8 = undefined;
+    @memset(&over_desc, 'A');
+
+    {
+        var stmt = try database.prepare(
+            "INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, period_id, book_id) VALUES ('JE-001', '2026-01-15', '2026-01-15', ?, 1, 1);",
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, &over_desc);
+        const result = stmt.step();
+        try std.testing.expectError(error.SqliteStepFailed, result);
+    }
+}
+
+test "transaction_currency CHECK enforces 3 chars on entry lines" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec(
+        \\INSERT INTO ledger_accounts (number, name, account_type, normal_balance, book_id)
+        \\VALUES ('1000', 'Cash', 'asset', 'debit', 1);
+    );
+    try database.exec(
+        \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, book_id)
+        \\VALUES ('Jan 2026', 1, 2026, '2026-01-01', '2026-01-31', 1);
+    );
+    try database.exec(
+        \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, period_id, book_id)
+        \\VALUES ('JE-001', '2026-01-15', '2026-01-15', 1, 1);
+    );
+
+    const bad = database.exec(
+        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+        \\  base_debit_amount, transaction_currency, account_id, entry_id)
+        \\VALUES (1, 100, 0, 100, 'PHPP', 1, 1);
+    );
+    try std.testing.expectError(error.SqliteExecFailed, bad);
+}
+
+test "document_number over 100 chars rejected" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec(
+        \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, book_id)
+        \\VALUES ('Jan 2026', 1, 2026, '2026-01-01', '2026-01-31', 1);
+    );
+
+    var long_doc: [101]u8 = undefined;
+    @memset(&long_doc, 'X');
+
+    {
+        var stmt = try database.prepare(
+            "INSERT INTO ledger_entries (document_number, transaction_date, posting_date, period_id, book_id) VALUES (?, '2026-01-15', '2026-01-15', 1, 1);",
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, &long_doc);
+        const result = stmt.step();
+        try std.testing.expectError(error.SqliteStepFailed, result);
+    }
 }
 
 test "adjustment period coexists with regular period" {

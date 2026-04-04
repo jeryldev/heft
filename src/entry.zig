@@ -199,7 +199,7 @@ pub const Entry = struct {
         var old_credit: i64 = 0;
         var old_fx: i64 = 0;
         var old_account: i64 = 0;
-        var old_currency_buf: [8]u8 = undefined;
+        var old_currency_buf: [16]u8 = undefined;
         var old_currency_len: usize = 0;
         {
             var stmt = try database.prepare(
@@ -218,7 +218,8 @@ pub const Entry = struct {
             old_debit = stmt.columnInt64(2);
             old_credit = stmt.columnInt64(3);
             const cur = stmt.columnText(4).?;
-            @memcpy(old_currency_buf[0..cur.len], cur);
+            const copy_len = @min(cur.len, old_currency_buf.len);
+            @memcpy(old_currency_buf[0..copy_len], cur[0..copy_len]);
             old_currency_len = cur.len;
             old_fx = stmt.columnInt64(5);
             old_account = stmt.columnInt64(6);
@@ -526,7 +527,7 @@ pub const Entry = struct {
 
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
-        var doc_number_buf: [64]u8 = undefined;
+        var doc_number_buf: [128]u8 = undefined;
         var doc_number_len: usize = 0;
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id, document_number FROM ledger_entries WHERE id = ?;");
@@ -539,8 +540,9 @@ pub const Entry = struct {
             period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
             const dn = stmt.columnText(3).?;
-            @memcpy(doc_number_buf[0..dn.len], dn);
-            doc_number_len = dn.len;
+            const copy_len = @min(dn.len, doc_number_buf.len);
+            @memcpy(doc_number_buf[0..copy_len], dn[0..copy_len]);
+            doc_number_len = copy_len;
         }
 
         try database.beginTransaction();
@@ -556,7 +558,7 @@ pub const Entry = struct {
         }
 
         // Create reversal entry
-        var rev_doc_buf: [72]u8 = undefined;
+        var rev_doc_buf: [136]u8 = undefined;
         const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REV-{s}", .{doc_number_buf[0..doc_number_len]}) catch return error.InvalidInput;
         {
             var stmt = try database.prepare(
