@@ -34,6 +34,11 @@ pub const Database = struct {
         return self;
     }
 
+    /// Finalize any leaked prepared statements before close. Called at the C ABI
+    /// boundary (internal_close) to prevent the close() assert from firing when
+    /// a C caller or BEAM GC (Sprint 8) leaks statements. The loop is guaranteed
+    /// to terminate: sqlite3_finalize removes the statement from SQLite's internal
+    /// linked list, so each iteration shrinks the list by exactly one.
     pub fn drainLeakedStatements(self: Database) void {
         while (c.sqlite3_next_stmt(self.handle, null)) |stmt| {
             _ = c.sqlite3_finalize(stmt);
