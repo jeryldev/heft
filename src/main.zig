@@ -290,12 +290,11 @@ pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by
     return true;
 }
 
-// ── Error Reporting ────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────
 
-var last_error_code: i32 = 0;
-
-pub export fn ledger_last_error() i32 {
-    return last_error_code;
+fn safeBuf(buf: [*]u8, buf_len: i32) ?[]u8 {
+    if (buf_len <= 0) return null;
+    return buf[0..@intCast(buf_len)];
 }
 
 // ── CRUD Exports (Sprint 10) ──────────────────────────────────
@@ -360,7 +359,7 @@ pub export fn ledger_delete_subledger_account(handle: ?*LedgerDB, account_id: i6
 pub export fn ledger_get_book(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
-    const result = heft.query_mod.getBook(h.sqlite, book_id, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.getBook(h.sqlite, book_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -369,14 +368,14 @@ pub export fn ledger_list_books(handle: ?*LedgerDB, status_filter: ?[*:0]const u
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listBooks(h.sqlite, sf, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listBooks(h.sqlite, sf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
 pub export fn ledger_get_account(handle: ?*LedgerDB, account_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
-    const result = heft.query_mod.getAccount(h.sqlite, account_id, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.getAccount(h.sqlite, account_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -387,14 +386,14 @@ pub export fn ledger_list_accounts(handle: ?*LedgerDB, book_id: i64, type_filter
     const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
     const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
     const ns: ?[]const u8 = if (name_search) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listAccounts(h.sqlite, book_id, tf, sf, ns, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listAccounts(h.sqlite, book_id, tf, sf, ns, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
 pub export fn ledger_get_period(handle: ?*LedgerDB, period_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
-    const result = heft.query_mod.getPeriod(h.sqlite, period_id, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.getPeriod(h.sqlite, period_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -404,14 +403,14 @@ pub export fn ledger_list_periods(handle: ?*LedgerDB, book_id: i64, year_filter:
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const yf: ?i32 = if (year_filter > 0) year_filter else null;
     const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listPeriods(h.sqlite, book_id, yf, sf, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listPeriods(h.sqlite, book_id, yf, sf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
 pub export fn ledger_get_entry(handle: ?*LedgerDB, entry_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
-    const result = heft.query_mod.getEntry(h.sqlite, entry_id, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.getEntry(h.sqlite, entry_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -423,14 +422,14 @@ pub export fn ledger_list_entries(handle: ?*LedgerDB, book_id: i64, status_filte
     const sd: ?[]const u8 = if (start_date) |s| std.mem.span(s) else null;
     const ed: ?[]const u8 = if (end_date) |s| std.mem.span(s) else null;
     const ds: ?[]const u8 = if (doc_search) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listEntries(h.sqlite, book_id, sf, sd, ed, ds, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listEntries(h.sqlite, book_id, sf, sd, ed, ds, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
 pub export fn ledger_list_entry_lines(handle: ?*LedgerDB, entry_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
-    const result = heft.query_mod.listEntryLines(h.sqlite, entry_id, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listEntryLines(h.sqlite, entry_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -439,7 +438,7 @@ pub export fn ledger_list_classifications(handle: ?*LedgerDB, book_id: i64, type
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listClassifications(h.sqlite, book_id, tf, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listClassifications(h.sqlite, book_id, tf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -448,7 +447,7 @@ pub export fn ledger_list_subledger_groups(handle: ?*LedgerDB, book_id: i64, typ
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listSubledgerGroups(h.sqlite, book_id, tf, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listSubledgerGroups(h.sqlite, book_id, tf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -458,7 +457,7 @@ pub export fn ledger_list_subledger_accounts(handle: ?*LedgerDB, book_id: i64, g
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const gf: ?i64 = if (group_filter > 0) group_filter else null;
     const ns: ?[]const u8 = if (name_search) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listSubledgerAccounts(h.sqlite, book_id, gf, ns, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listSubledgerAccounts(h.sqlite, book_id, gf, ns, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -470,7 +469,7 @@ pub export fn ledger_list_audit_log(handle: ?*LedgerDB, book_id: i64, entity_typ
     const af: ?[]const u8 = if (action) |s| std.mem.span(s) else null;
     const sd: ?[]const u8 = if (start_date) |s| std.mem.span(s) else null;
     const ed: ?[]const u8 = if (end_date) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.listAuditLog(h.sqlite, book_id, et, af, sd, ed, order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listAuditLog(h.sqlite, book_id, et, af, sd, ed, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -482,7 +481,7 @@ pub export fn ledger_subledger_report(handle: ?*LedgerDB, book_id: i64, group_id
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const gf: ?i64 = if (group_id > 0) group_id else null;
     const ns: ?[]const u8 = if (name_search) |s| std.mem.span(s) else null;
-    const result = heft.query_mod.subledgerReport(h.sqlite, book_id, gf, ns, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.subledgerReport(h.sqlite, book_id, gf, ns, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -491,7 +490,7 @@ pub export fn ledger_counterparty_ledger(handle: ?*LedgerDB, book_id: i64, count
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const af: ?i64 = if (account_filter > 0) account_filter else null;
-    const result = heft.query_mod.counterpartyLedger(h.sqlite, book_id, counterparty_id, af, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.counterpartyLedger(h.sqlite, book_id, counterparty_id, af, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -501,14 +500,14 @@ pub export fn ledger_list_transactions(handle: ?*LedgerDB, book_id: i64, account
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const af: ?i64 = if (account_filter > 0) account_filter else null;
     const cf: ?i64 = if (counterparty_filter > 0) counterparty_filter else null;
-    const result = heft.query_mod.listTransactions(h.sqlite, book_id, af, cf, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.listTransactions(h.sqlite, book_id, af, cf, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
 pub export fn ledger_subledger_reconciliation(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
-    const result = heft.query_mod.subledgerReconciliation(h.sqlite, book_id, group_id, std.mem.span(as_of_date), buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.subledgerReconciliation(h.sqlite, book_id, group_id, std.mem.span(as_of_date), safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -517,7 +516,7 @@ pub export fn ledger_aged_subledger(handle: ?*LedgerDB, book_id: i64, group_id: 
     const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
     const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
     const gf: ?i64 = if (group_id > 0) group_id else null;
-    const result = heft.query_mod.agedSubledger(h.sqlite, book_id, gf, std.mem.span(as_of_date), order, limit, offset, buf[0..@intCast(buf_len)], fmt) catch return -1;
+    const result = heft.query_mod.agedSubledger(h.sqlite, book_id, gf, std.mem.span(as_of_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch return -1;
     return @intCast(result.len);
 }
 
@@ -1190,10 +1189,6 @@ test "C ABI: ledger_edit_posted changes description on posted entry" {
 
 test "C ABI: ledger_free_classified_result with null is safe" {
     ledger_free_classified_result(null);
-}
-
-test "C ABI: ledger_last_error returns 0 initially" {
-    try std.testing.expectEqual(@as(i32, 0), ledger_last_error());
 }
 
 test "C ABI: ledger_update_book_name" {

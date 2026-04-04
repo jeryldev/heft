@@ -390,6 +390,7 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
 
     // Get A/L/E rows using shared builder
     const result = try buildReportResult(database, bs_sql, .{ book_id, as_of_date });
+    errdefer result.deinit();
 
     // Compute net income (revenue - expense) for the fiscal year
     var net_income: i64 = 0;

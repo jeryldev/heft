@@ -74,6 +74,29 @@ pub fn jsonString(dest: []u8, src: []const u8) !usize {
                 dest[pos + 1] = 'r';
                 pos += 2;
             },
+            0x08 => { // backspace
+                if (pos + 2 > dest.len) return error.InvalidInput;
+                dest[pos] = '\\';
+                dest[pos + 1] = 'b';
+                pos += 2;
+            },
+            0x0C => { // form feed
+                if (pos + 2 > dest.len) return error.InvalidInput;
+                dest[pos] = '\\';
+                dest[pos + 1] = 'f';
+                pos += 2;
+            },
+            0x00...0x07, 0x0B, 0x0E...0x1F => { // other control chars
+                if (pos + 6 > dest.len) return error.InvalidInput;
+                const hex = "0123456789abcdef";
+                dest[pos] = '\\';
+                dest[pos + 1] = 'u';
+                dest[pos + 2] = '0';
+                dest[pos + 3] = '0';
+                dest[pos + 4] = hex[c >> 4];
+                dest[pos + 5] = hex[c & 0x0F];
+                pos += 6;
+            },
             else => {
                 if (pos >= dest.len) return error.InvalidInput;
                 dest[pos] = c;
@@ -176,6 +199,7 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
     }
 
     const close = "]}";
+    if (pos + close.len > buf.len) return error.InvalidInput;
     @memcpy(buf[pos .. pos + close.len], close);
     pos += close.len;
 
@@ -975,8 +999,6 @@ pub fn exportSubledger(database: db_mod.Database, book_id: i64, buf: []u8, forma
                 if (pos + j7.len > buf.len) return error.InvalidInput;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
-                const entry = buf[0..0];
-                pos += entry.len;
             }
 
             const close = "]}";

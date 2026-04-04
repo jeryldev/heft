@@ -79,8 +79,12 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
         }
     }
 
-    const result = int_part * scale + frac_part;
-    return if (negative) -result else result;
+    const scaled = std.math.mul(i64, int_part, scale) catch return error.AmountOverflow;
+    const result = std.math.add(i64, scaled, frac_part) catch return error.AmountOverflow;
+    if (negative) {
+        return std.math.negate(result) catch return error.AmountOverflow;
+    }
+    return result;
 }
 
 /// Format a scaled i64 amount into a decimal string written to caller's buffer.
