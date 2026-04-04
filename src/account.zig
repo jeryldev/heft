@@ -126,6 +126,42 @@ pub const Account = struct {
         return id;
     }
 
+    pub fn updateName(database: db.Database, account_id: i64, new_name: []const u8, performed_by: []const u8) !void {
+        if (new_name.len == 0) return error.InvalidInput;
+
+        var old_name_buf: [256]u8 = undefined;
+        var old_name_len: usize = 0;
+        var acct_book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT name, book_id, status FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const old = stmt.columnText(0).?;
+            old_name_len = @min(old.len, old_name_buf.len);
+            @memcpy(old_name_buf[0..old_name_len], old[0..old_name_len]);
+            acct_book_id = stmt.columnInt64(1);
+            const status = AccountStatus.fromString(stmt.columnText(2).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.InvalidInput;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_accounts SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, new_name);
+            try stmt.bindInt(2, account_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "account", account_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, acct_book_id);
+
+        try database.commit();
+    }
+
     pub fn updateStatus(database: db.Database, account_id: i64, target: AccountStatus, performed_by: []const u8) !void {
         // Fetch current status and book_id
         var current: AccountStatus = undefined;
@@ -406,4 +442,61 @@ test "updateStatus rejects nonexistent account" {
 
     const result = Account.updateStatus(database, 999, .inactive, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+// ── updateName tests ───────────────────────────────────────────
+
+test "updateName changes account name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.updateName(database, 1, "Petty Cash", "admin");
+
+    var stmt = try database.prepare("SELECT name FROM ledger_accounts WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Petty Cash", stmt.columnText(0).?);
+}
+
+test "updateName writes audit with old and new values" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.updateName(database, 1, "Petty Cash", "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'account' AND field_changed = 'name';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("name", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("Cash", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("Petty Cash", stmt.columnText(2).?);
+}
+
+test "updateName rejects empty name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    const result = Account.updateName(database, 1, "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "updateName rejects nonexistent account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Account.updateName(database, 999, "New", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "updateName rejects archived account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.updateStatus(database, 1, .archived, "admin");
+    const result = Account.updateName(database, 1, "New", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
 }

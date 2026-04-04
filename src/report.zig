@@ -219,7 +219,41 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
         if (std.mem.eql(u8, stmt.columnText(0).?, "credit")) mode = .credit_normal;
     }
 
-    return buildLedgerResult(database, al_sql, .{ book_id, account_id, start_date, end_date }, mode);
+    // Compute opening balance from prior periods
+    var opening: i64 = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT COALESCE(SUM(ab.debit_sum), 0), COALESCE(SUM(ab.credit_sum), 0)
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND ab.account_id = ? AND p.end_date < ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, account_id);
+        try stmt.bindText(3, start_date);
+        _ = try stmt.step();
+        const prior_debits = stmt.columnInt64(0);
+        const prior_credits = stmt.columnInt64(1);
+        opening = switch (mode) {
+            .debit_normal => prior_debits - prior_credits,
+            .credit_normal => prior_credits - prior_debits,
+            .none => 0,
+        };
+    }
+
+    const result = try buildLedgerResult(database, al_sql, .{ book_id, account_id, start_date, end_date }, mode);
+
+    // Adjust opening balance and running balances
+    result.opening_balance = opening;
+    if (opening != 0) {
+        for (result.rows) |*row| {
+            row.running_balance += opening;
+        }
+        result.closing_balance += opening;
+    }
+
+    return result;
 }
 
 pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
@@ -297,8 +331,26 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
         row.account_name_len = copyText(&row.account_name, stmt.columnText(2));
         row.account_type_len = copyText(&row.account_type, stmt.columnText(3));
 
-        row.debit_balance = stmt.columnInt64(5);
-        row.credit_balance = stmt.columnInt64(6);
+        const normal = stmt.columnText(4).?;
+        const debit_sum = stmt.columnInt64(5);
+        const credit_sum = stmt.columnInt64(6);
+
+        if (std.mem.eql(u8, normal, "debit")) {
+            row.debit_balance = debit_sum - credit_sum;
+            row.credit_balance = 0;
+            if (row.debit_balance < 0) {
+                row.credit_balance = -row.debit_balance;
+                row.debit_balance = 0;
+            }
+        } else {
+            row.credit_balance = credit_sum - debit_sum;
+            row.debit_balance = 0;
+            if (row.credit_balance < 0) {
+                row.debit_balance = -row.credit_balance;
+                row.credit_balance = 0;
+            }
+        }
+
         total_debits += row.debit_balance;
         total_credits += row.credit_balance;
         try rows.append(allocator, row);
@@ -338,6 +390,7 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
 
     // Get A/L/E rows using shared builder
     const result = try buildReportResult(database, bs_sql, .{ book_id, as_of_date });
+    errdefer result.deinit();
 
     // Compute net income (revenue - expense) for the fiscal year
     var net_income: i64 = 0;
@@ -396,11 +449,11 @@ fn postEntry(database: db.Database, doc: []const u8, date: []const u8, period_id
     const entry_id = try entry_mod.Entry.createDraft(database, 1, doc, date, date, null, period_id, null, "admin");
     var line_num: i32 = 1;
     for (debits) |d| {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, d.amount, 0, "PHP", money.FX_RATE_SCALE, d.account_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, d.amount, 0, "PHP", money.FX_RATE_SCALE, d.account_id, null, null, "admin");
         line_num += 1;
     }
     for (credits) |c| {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, c.amount, "PHP", money.FX_RATE_SCALE, c.account_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, c.amount, "PHP", money.FX_RATE_SCALE, c.account_id, null, null, "admin");
         line_num += 1;
     }
     try entry_mod.Entry.post(database, entry_id, "admin");
@@ -700,7 +753,7 @@ test "TB: reversed entry — both original and reversal affect balances" {
     defer database.close();
 
     try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 3 }});
-    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
     const result = try trialBalance(database, 1, "2026-01-31");
     defer result.deinit();
@@ -720,8 +773,8 @@ test "TB: multi-currency entries aggregate correctly in base" {
     // Entry in USD with FX rate (100 USD * 56.50 = 5,650 PHP base)
     {
         const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, entry_id, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 10_000_000_000, "USD", 565_000_000_000, 3, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, entry_id, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 10_000_000_000, "USD", 565_000_000_000, 3, null, null, "admin");
         try entry_mod.Entry.post(database, entry_id, "admin");
     }
 
@@ -808,8 +861,8 @@ test "transaction_history: posted entries visible, draft/void/reversed excluded"
 
     // Draft entry (not posted)
     _ = try entry_mod.Entry.createDraft(database, 1, "DRAFT-001", "2026-01-05", "2026-01-05", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 1, 100_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 100_000_000, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 100_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 100_000_000, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
 
     // Posted entry
     try postEntry(database, "POST-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
@@ -820,7 +873,7 @@ test "transaction_history: posted entries visible, draft/void/reversed excluded"
 
     // Reversed entry (original becomes 'reversed', reversal is 'posted')
     try postEntry(database, "REV-SRC", "2026-01-20", 1, &.{.{ .amount = 200_000_000_00, .account_id = 1 }}, &.{.{ .amount = 200_000_000_00, .account_id = 3 }});
-    _ = try entry_mod.Entry.reverse(database, 4, "Reversal", "2026-01-25", "admin");
+    _ = try entry_mod.Entry.reverse(database, 4, "Reversal", "2026-01-25", null, "admin");
 
     // View should show: POST-001 (2 lines) + reversal entry (2 lines) = 4 lines
     // Excluded: DRAFT-001 (draft), VOID-001 (void), REV-SRC (reversed)
@@ -960,8 +1013,8 @@ fn setupAll10Db() !db.Database {
 // Helper to post entry with specific FX rate
 fn postFxEntry(database: db.Database, doc: []const u8, date: []const u8, period_id: i64, debit_acct: i64, debit_amt: i64, credit_acct: i64, credit_amt: i64, currency: []const u8, fx_rate: i64) !i64 {
     const entry_id = try entry_mod.Entry.createDraft(database, 1, doc, date, date, null, period_id, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, entry_id, 1, debit_amt, 0, currency, fx_rate, debit_acct, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, credit_amt, currency, fx_rate, credit_acct, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, debit_amt, 0, currency, fx_rate, debit_acct, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, credit_amt, currency, fx_rate, credit_acct, null, null, "admin");
     try entry_mod.Entry.post(database, entry_id, "admin");
     return entry_id;
 }
@@ -995,9 +1048,9 @@ test "all 10 account types: realistic entries flow through cache, view, and repo
     // 7a. Bond issued at discount: Debit Cash 20,000, Credit Bonds Payable (AP) 25,000, Debit Discount on Bonds 5,000
     {
         const eid = try entry_mod.Entry.createDraft(database, 1, "JE-007a", "2026-01-18", "2026-01-18", null, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, eid, 1, 2_000_000_000_000, 0, "PHP", scale, 1, null, "admin"); // debit Cash 20k
-        _ = try entry_mod.Entry.addLine(database, eid, 2, 500_000_000_000, 0, "PHP", scale, 4, null, "admin"); // debit Disc on Bonds 5k
-        _ = try entry_mod.Entry.addLine(database, eid, 3, 0, 2_500_000_000_000, "PHP", scale, 3, null, "admin"); // credit AP (as bonds payable) 25k
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 2_000_000_000_000, 0, "PHP", scale, 1, null, null, "admin"); // debit Cash 20k
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 500_000_000_000, 0, "PHP", scale, 4, null, null, "admin"); // debit Disc on Bonds 5k
+        _ = try entry_mod.Entry.addLine(database, eid, 3, 0, 2_500_000_000_000, "PHP", scale, 3, null, null, "admin"); // credit AP (as bonds payable) 25k
         try entry_mod.Entry.post(database, eid, "admin");
     }
     // 7b. Bond discount amortization: Debit Interest Expense, Credit Discount 2,000
@@ -1111,8 +1164,8 @@ test "all entry statuses x account types: correct representation everywhere" {
     // DRAFT entry: Debit COGS 500, Credit AP 500 (not posted)
     {
         const eid = try entry_mod.Entry.createDraft(database, 1, "DRAFT-001", "2026-01-12", "2026-01-12", null, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, eid, 1, 50_000_000_000, 0, "PHP", scale, 9, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 50_000_000_000, "PHP", scale, 3, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 50_000_000_000, 0, "PHP", scale, 9, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 50_000_000_000, "PHP", scale, 3, null, null, "admin");
     }
 
     // VOIDED entry: Debit Cash 2000, Credit Capital 2000 (then voided)
@@ -1124,7 +1177,7 @@ test "all entry statuses x account types: correct representation everywhere" {
     // REVERSED entry: Debit Cash 3000, Credit Revenue 3000 (then reversed)
     {
         const eid = try postFxEntry(database, "REV-001", "2026-01-20", 1, 1, 300_000_000_000, 7, 300_000_000_000, "PHP", scale);
-        _ = try entry_mod.Entry.reverse(database, eid, "Accrual reversal", "2026-01-25", "admin");
+        _ = try entry_mod.Entry.reverse(database, eid, "Accrual reversal", "2026-01-25", null, "admin");
     }
 
     // === ACCOUNT BALANCES CACHE ===
@@ -1389,7 +1442,7 @@ test "GL: reversed entry — reversal visible, original excluded" {
     defer database.close();
 
     try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
-    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-20", "admin");
+    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-20", null, "admin");
 
     const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
     defer result.deinit();
@@ -1425,8 +1478,8 @@ test "GL: multi-currency entries show base amounts" {
     // Post USD entry at 56.50 PHP/USD
     {
         const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 565_000_000_000, 4, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 565_000_000_000, 4, null, null, "admin");
         try entry_mod.Entry.post(database, eid, "admin");
     }
 

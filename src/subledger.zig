@@ -63,6 +63,75 @@ pub const SubledgerGroup = struct {
         return id;
     }
 
+    pub fn updateName(database: db.Database, group_id: i64, new_name: []const u8, performed_by: []const u8) !void {
+        if (new_name.len == 0) return error.InvalidInput;
+
+        var old_name_buf: [256]u8 = undefined;
+        var old_name_len: usize = 0;
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT name, book_id FROM ledger_subledger_groups WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, group_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const old = stmt.columnText(0).?;
+            old_name_len = @min(old.len, old_name_buf.len);
+            @memcpy(old_name_buf[0..old_name_len], old[0..old_name_len]);
+            book_id = stmt.columnInt64(1);
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_subledger_groups SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, new_name);
+            try stmt.bindInt(2, group_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "subledger_group", group_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn delete(database: db.Database, group_id: i64, performed_by: []const u8) !void {
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_groups WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, group_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+        }
+
+        // Reject if group has subledger accounts
+        {
+            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_subledger_accounts WHERE group_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, group_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_subledger_groups WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, group_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "subledger_group", group_id, "delete", null, null, null, performed_by, book_id);
+
+        try database.commit();
+    }
+
     pub fn isControlAccount(database: db.Database, account_id: i64) !bool {
         var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_subledger_groups WHERE gl_account_id = ?;");
         defer stmt.finalize();
@@ -90,6 +159,16 @@ pub const SubledgerAccount = struct {
     pub fn create(database: db.Database, book_id: i64, number: []const u8, name: []const u8, account_type: []const u8, group_id: i64, performed_by: []const u8) !i64 {
         if (!isValidType(account_type)) return error.InvalidInput;
 
+        // Verify book exists and is active
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
+        }
+
         try database.beginTransaction();
         errdefer database.rollback();
 
@@ -109,6 +188,75 @@ pub const SubledgerAccount = struct {
 
         try database.commit();
         return id;
+    }
+
+    pub fn updateName(database: db.Database, account_id: i64, new_name: []const u8, performed_by: []const u8) !void {
+        if (new_name.len == 0) return error.InvalidInput;
+
+        var old_name_buf: [256]u8 = undefined;
+        var old_name_len: usize = 0;
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT name, book_id FROM ledger_subledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const old = stmt.columnText(0).?;
+            old_name_len = @min(old.len, old_name_buf.len);
+            @memcpy(old_name_buf[0..old_name_len], old[0..old_name_len]);
+            book_id = stmt.columnInt64(1);
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_subledger_accounts SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, new_name);
+            try stmt.bindInt(2, account_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "subledger_account", account_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn delete(database: db.Database, account_id: i64, performed_by: []const u8) !void {
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+        }
+
+        // Reject if entry lines reference this counterparty
+        {
+            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE counterparty_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_subledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "subledger_account", account_id, "delete", null, null, null, performed_by, book_id);
+
+        try database.commit();
     }
 };
 
@@ -281,8 +429,8 @@ test "posting to control account without counterparty rejected" {
     _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
 
     _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     const result = entry_mod.Entry.post(database, 1, "admin");
     try std.testing.expectError(error.MissingCounterparty, result);
@@ -296,7 +444,7 @@ test "posting to control account with counterparty succeeds" {
     _ = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
 
     _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     // Add AR line with counterparty via raw SQL (addLine doesn't expose counterparty_id yet)
     try database.exec(
@@ -321,7 +469,7 @@ test "posting to non-control account with counterparty rejected" {
     _ = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
 
     _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     // Cash (id=1) is NOT a control account but has counterparty
     try database.exec(
@@ -372,18 +520,10 @@ fn setupArApDb() !db.Database {
 
 fn postWithCounterparty(database: db.Database, doc: []const u8, debit_acct: i64, debit_amt: i64, debit_cp: ?i64, credit_acct: i64, credit_amt: i64, credit_cp: ?i64) !void {
     const eid = try entry_mod.Entry.createDraft(database, 1, doc, "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, eid, 1, debit_amt, 0, "PHP", money.FX_RATE_SCALE, debit_acct, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, debit_amt, 0, "PHP", money.FX_RATE_SCALE, debit_acct, null, null, "admin");
 
     // For credit line, use raw SQL if counterparty needed
     if (credit_cp) |cp| {
-        var buf: [256]u8 = undefined;
-        const sql = std.fmt.bufPrint(&buf,
-            "INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, counterparty_id) VALUES (2, 0, {d}, 'PHP', 10000000000, {d}, {d}, {d});",
-            .{ credit_amt, credit_acct, eid, cp },
-        ) catch unreachable;
-        // Use exec with the formatted string
-        _ = sql;
-        // Actually need to use prepare/bind for safety
         var stmt = try database.prepare(
             \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
             \\  transaction_currency, fx_rate, account_id, entry_id, counterparty_id)
@@ -396,7 +536,7 @@ fn postWithCounterparty(database: db.Database, doc: []const u8, debit_acct: i64,
         try stmt.bindInt(4, cp);
         _ = try stmt.step();
     } else {
-        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, credit_amt, "PHP", money.FX_RATE_SCALE, credit_acct, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, credit_amt, "PHP", money.FX_RATE_SCALE, credit_acct, null, null, "admin");
     }
 
     // Handle debit counterparty if needed
@@ -483,7 +623,7 @@ test "multiple customers in single deposit entry" {
     // Deposit batch: cash debit 8000, AR credit Customer A 3000 + Customer B 5000
     {
         const eid = try entry_mod.Entry.createDraft(database, 1, "DEP-001", "2026-01-20", "2026-01-20", null, 1, null, "admin");
-        _ = try entry_mod.Entry.addLine(database, eid, 1, 8_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 8_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
         // Customer A credit
         {
@@ -560,7 +700,7 @@ test "transaction_history shows counterparty info for subledger entries" {
     _ = try SubledgerAccount.create(database, 1, "C0001", "Juan dela Cruz", "customer", 1, "admin");
 
     _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     try database.exec(
         \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
@@ -580,4 +720,209 @@ test "transaction_history shows counterparty info for subledger entries" {
     try std.testing.expectEqualStrings("C0001", stmt.columnText(0).?);
     try std.testing.expectEqualStrings("Juan dela Cruz", stmt.columnText(1).?);
     try std.testing.expectEqualStrings("Customers", stmt.columnText(2).?);
+}
+
+// ── SubledgerGroup.updateName tests ────────────────────────────
+
+test "SubledgerGroup.updateName changes name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Old Name", "customer", 1, 2, null, null, "admin");
+    try SubledgerGroup.updateName(database, gid, "New Name", "admin");
+
+    var stmt = try database.prepare("SELECT name FROM ledger_subledger_groups WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, gid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("New Name", stmt.columnText(0).?);
+}
+
+test "SubledgerGroup.updateName writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Old", "customer", 1, 2, null, null, "admin");
+    try SubledgerGroup.updateName(database, gid, "New", "admin");
+
+    var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE entity_type = 'subledger_group' AND field_changed = 'name';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Old", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("New", stmt.columnText(1).?);
+}
+
+test "SubledgerGroup.updateName rejects empty name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const result = SubledgerGroup.updateName(database, gid, "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "SubledgerGroup.updateName rejects nonexistent group" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = SubledgerGroup.updateName(database, 999, "New", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── SubledgerGroup.delete tests ────────────────────────────────
+
+test "SubledgerGroup.delete removes empty group" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    try SubledgerGroup.delete(database, gid, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_subledger_groups WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, gid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "SubledgerGroup.delete writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    try SubledgerGroup.delete(database, gid, "admin");
+
+    var stmt = try database.prepare("SELECT action FROM ledger_audit_log WHERE entity_type = 'subledger_group' AND action = 'delete';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("delete", stmt.columnText(0).?);
+}
+
+test "SubledgerGroup.delete rejects group with accounts" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    _ = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", gid, "admin");
+
+    const result = SubledgerGroup.delete(database, gid, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "SubledgerGroup.delete rejects nonexistent group" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = SubledgerGroup.delete(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── SubledgerAccount.updateName tests ──────────────────────────
+
+test "SubledgerAccount.updateName changes name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Old Name", "customer", 1, "admin");
+    try SubledgerAccount.updateName(database, aid, "New Name", "admin");
+
+    var stmt = try database.prepare("SELECT name FROM ledger_subledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, aid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("New Name", stmt.columnText(0).?);
+}
+
+test "SubledgerAccount.updateName writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Old", "customer", 1, "admin");
+    try SubledgerAccount.updateName(database, aid, "New", "admin");
+
+    var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE entity_type = 'subledger_account' AND field_changed = 'name';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Old", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("New", stmt.columnText(1).?);
+}
+
+test "SubledgerAccount.updateName rejects empty name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    const result = SubledgerAccount.updateName(database, aid, "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "SubledgerAccount.updateName rejects nonexistent account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = SubledgerAccount.updateName(database, 999, "New", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── SubledgerAccount.delete tests ──────────────────────────────
+
+test "SubledgerAccount.delete removes unreferenced account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.delete(database, aid, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_subledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, aid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "SubledgerAccount.delete writes audit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.delete(database, aid, "admin");
+
+    var stmt = try database.prepare("SELECT action FROM ledger_audit_log WHERE entity_type = 'subledger_account' AND action = 'delete';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("delete", stmt.columnText(0).?);
+}
+
+test "SubledgerAccount.delete rejects referenced counterparty" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+
+    // Create entry line referencing this counterparty via raw SQL
+    _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try database.exec(
+        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+        \\  transaction_currency, fx_rate, account_id, entry_id, counterparty_id)
+        \\VALUES (2, 0, 100000000000, 'PHP', 10000000000, 2, 1, 1);
+    );
+    try entry_mod.Entry.post(database, 1, "admin");
+
+    const result = SubledgerAccount.delete(database, aid, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "SubledgerAccount.delete rejects nonexistent account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = SubledgerAccount.delete(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
 }

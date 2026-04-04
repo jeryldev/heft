@@ -50,7 +50,8 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
 
     var int_part: i64 = 0;
     for (int_str) |ch| {
-        int_part = int_part * 10 + @as(i64, ch - '0');
+        int_part = std.math.mul(i64, int_part, 10) catch return error.AmountOverflow;
+        int_part = std.math.add(i64, int_part, @as(i64, ch - '0')) catch return error.AmountOverflow;
     }
 
     // Parse fractional part
@@ -68,7 +69,8 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
 
         for (frac_str) |ch| {
             if (frac_digits >= scale_digits) break;
-            frac_part = frac_part * 10 + @as(i64, ch - '0');
+            frac_part = std.math.mul(i64, frac_part, 10) catch return error.AmountOverflow;
+            frac_part = std.math.add(i64, frac_part, @as(i64, ch - '0')) catch return error.AmountOverflow;
             frac_digits += 1;
         }
 
@@ -78,8 +80,12 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
         }
     }
 
-    const result = int_part * scale + frac_part;
-    return if (negative) -result else result;
+    const scaled = std.math.mul(i64, int_part, scale) catch return error.AmountOverflow;
+    const result = std.math.add(i64, scaled, frac_part) catch return error.AmountOverflow;
+    if (negative) {
+        return std.math.negate(result) catch return error.AmountOverflow;
+    }
+    return result;
 }
 
 /// Format a scaled i64 amount into a decimal string written to caller's buffer.
@@ -136,6 +142,7 @@ pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
 
     var pos: usize = 0;
     if (negative) {
+        if (pos >= buf.len) return error.InvalidAmount;
         buf[pos] = '-';
         pos += 1;
     }
@@ -143,9 +150,11 @@ pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
     const int_str = std.fmt.bufPrint(buf[pos..], "{d}", .{int_part}) catch return error.InvalidAmount;
     pos += int_str.len;
 
+    if (pos >= buf.len) return error.InvalidAmount;
     buf[pos] = '.';
     pos += 1;
 
+    if (pos + frac_len > buf.len) return error.InvalidAmount;
     @memcpy(buf[pos .. pos + frac_len], frac_buf[0..frac_len]);
     pos += frac_len;
 

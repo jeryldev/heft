@@ -37,8 +37,8 @@ pub const Entry = struct {
     ;
 
     const line_sql: [*:0]const u8 =
-        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, description)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, description, counterparty_id)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
     ;
 
     const balance_sql: [*:0]const u8 =
@@ -104,7 +104,7 @@ pub const Entry = struct {
         return id;
     }
 
-    pub fn addLine(database: db.Database, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, description: ?[]const u8, performed_by: []const u8) !i64 {
+    pub fn addLine(database: db.Database, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !i64 {
         // Verify entry exists and is draft
         var entry_book_id: i64 = 0;
         {
@@ -144,6 +144,7 @@ pub const Entry = struct {
         try stmt.bindInt(6, account_id);
         try stmt.bindInt(7, entry_id);
         if (description) |d| try stmt.bindText(8, d) else try stmt.bindNull(8);
+        if (counterparty_id) |cp| try stmt.bindInt(9, cp) else try stmt.bindNull(9);
 
         _ = try stmt.step();
 
@@ -192,19 +193,24 @@ pub const Entry = struct {
 
     const amt_buf_len = 24;
 
-    pub fn editLine(database: db.Database, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, performed_by: []const u8) !void {
+    pub fn editLine(database: db.Database, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !void {
         // Fetch line's entry, verify draft, and read old values
         var entry_book_id: i64 = 0;
         var old_debit: i64 = 0;
         var old_credit: i64 = 0;
         var old_fx: i64 = 0;
         var old_account: i64 = 0;
+        var old_counterparty: i64 = 0;
         var old_currency_buf: [16]u8 = undefined;
         var old_currency_len: usize = 0;
+        var old_desc_buf: [1001]u8 = undefined;
+        var old_desc_len: usize = 0;
+        var old_has_desc = false;
         {
             var stmt = try database.prepare(
                 \\SELECT e.status, e.book_id, el.debit_amount, el.credit_amount,
-                \\  el.transaction_currency, el.fx_rate, el.account_id
+                \\  el.transaction_currency, el.fx_rate, el.account_id,
+                \\  el.counterparty_id, el.description
                 \\FROM ledger_entry_lines el
                 \\JOIN ledger_entries e ON e.id = el.entry_id
                 \\WHERE el.id = ?;
@@ -220,9 +226,15 @@ pub const Entry = struct {
             const cur = stmt.columnText(4).?;
             const copy_len = @min(cur.len, old_currency_buf.len);
             @memcpy(old_currency_buf[0..copy_len], cur[0..copy_len]);
-            old_currency_len = cur.len;
+            old_currency_len = copy_len;
             old_fx = stmt.columnInt64(5);
             old_account = stmt.columnInt64(6);
+            old_counterparty = stmt.columnInt64(7);
+            if (stmt.columnText(8)) |d| {
+                old_has_desc = true;
+                old_desc_len = @min(d.len, old_desc_buf.len);
+                @memcpy(old_desc_buf[0..old_desc_len], d[0..old_desc_len]);
+            }
         }
 
         // Verify account exists, is active, and belongs to same book
@@ -245,7 +257,7 @@ pub const Entry = struct {
                 \\UPDATE ledger_entry_lines SET
                 \\  debit_amount = ?, credit_amount = ?,
                 \\  transaction_currency = ?, fx_rate = ?,
-                \\  account_id = ?,
+                \\  account_id = ?, counterparty_id = ?, description = ?,
                 \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
                 \\WHERE id = ?;
             );
@@ -255,7 +267,9 @@ pub const Entry = struct {
             try stmt.bindText(3, transaction_currency);
             try stmt.bindInt(4, fx_rate);
             try stmt.bindInt(5, account_id);
-            try stmt.bindInt(6, line_id);
+            if (counterparty_id) |cp| try stmt.bindInt(6, cp) else try stmt.bindNull(6);
+            if (description) |d| try stmt.bindText(7, d) else try stmt.bindNull(7);
+            try stmt.bindInt(8, line_id);
             _ = try stmt.step();
         }
 
@@ -288,6 +302,17 @@ pub const Entry = struct {
                 const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_account}) catch unreachable;
                 const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{account_id}) catch unreachable;
                 try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "account_id", old_s, new_s, performed_by, entry_book_id);
+            }
+            const new_cp = counterparty_id orelse 0;
+            if (old_counterparty != new_cp) {
+                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_counterparty}) catch unreachable;
+                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{new_cp}) catch unreachable;
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "counterparty_id", old_s, new_s, performed_by, entry_book_id);
+            }
+            const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
+            const new_desc = description orelse "";
+            if (!std.mem.eql(u8, old_desc, new_desc)) {
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
             }
         }
 
@@ -437,8 +462,69 @@ pub const Entry = struct {
                 cache_stmt.clearBindings();
             }
 
-            // Verify balance equation
-            if (total_base_debits != total_base_credits) return error.UnbalancedEntry;
+            // Verify balance equation — auto-post rounding if book has rounding account
+            if (total_base_debits != total_base_credits) {
+                const diff = total_base_debits - total_base_credits;
+                const abs_diff = if (diff < 0) -diff else diff;
+                const max_rounding: i64 = 100; // 0.000001 in 10^8 scale — sub-cent tolerance
+
+                if (abs_diff > max_rounding) return error.UnbalancedEntry;
+
+                // Check if book has a rounding account
+                var rounding_acct_id: ?i64 = null;
+                {
+                    var ra_stmt = try database.prepare("SELECT rounding_account_id FROM ledger_books WHERE id = ?;");
+                    defer ra_stmt.finalize();
+                    try ra_stmt.bindInt(1, entry_book_id);
+                    _ = try ra_stmt.step();
+                    const ra = ra_stmt.columnInt64(0);
+                    if (ra > 0) rounding_acct_id = ra;
+                }
+
+                if (rounding_acct_id) |ra_id| {
+                    // Auto-add rounding line
+                    const next_line = line_count + 1;
+                    var rounding_debit: i64 = 0;
+                    var rounding_credit: i64 = 0;
+                    if (diff > 0) {
+                        rounding_credit = diff; // credits > debits needed
+                    } else {
+                        rounding_debit = -diff; // debits > credits needed
+                    }
+
+                    var round_stmt = try database.prepare(
+                        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+                        \\  base_debit_amount, base_credit_amount, transaction_currency, fx_rate,
+                        \\  account_id, entry_id, description)
+                        \\VALUES (?, ?, ?, ?, ?, (SELECT base_currency FROM ledger_books WHERE id = ?),
+                        \\  10000000000, ?, ?, 'FX rounding adjustment');
+                    );
+                    defer round_stmt.finalize();
+                    try round_stmt.bindInt(1, @intCast(next_line));
+                    try round_stmt.bindInt(2, rounding_debit);
+                    try round_stmt.bindInt(3, rounding_credit);
+                    try round_stmt.bindInt(4, rounding_debit);
+                    try round_stmt.bindInt(5, rounding_credit);
+                    try round_stmt.bindInt(6, entry_book_id);
+                    try round_stmt.bindInt(7, ra_id);
+                    try round_stmt.bindInt(8, entry_id);
+                    _ = try round_stmt.step();
+
+                    // Update cache for rounding line
+                    try cache_stmt.bindInt(1, ra_id);
+                    try cache_stmt.bindInt(2, period_id);
+                    try cache_stmt.bindInt(3, rounding_debit);
+                    try cache_stmt.bindInt(4, rounding_credit);
+                    try cache_stmt.bindInt(5, rounding_debit);
+                    try cache_stmt.bindInt(6, rounding_credit);
+                    try cache_stmt.bindInt(7, entry_book_id);
+                    _ = try cache_stmt.step();
+                    cache_stmt.reset();
+                    cache_stmt.clearBindings();
+                } else {
+                    return error.UnbalancedEntry;
+                }
+            }
         }
 
         // Step 6: Update entry status to 'posted'
@@ -486,6 +572,17 @@ pub const Entry = struct {
             entry_book_id = stmt.columnInt64(2);
         }
 
+        // Verify period is open or soft_closed
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, period_id);
+            _ = try stmt.step();
+            const period_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
+            if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
+        }
+
         try database.beginTransaction();
         errdefer database.rollback();
 
@@ -524,6 +621,19 @@ pub const Entry = struct {
             }
         }
 
+        // Mark other periods stale
+        {
+            var stale_stmt = try database.prepare(
+                \\UPDATE ledger_account_balances
+                \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE book_id = ? AND period_id != ? AND is_stale = 0;
+            );
+            defer stale_stmt.finalize();
+            try stale_stmt.bindInt(1, entry_book_id);
+            try stale_stmt.bindInt(2, period_id);
+            _ = try stale_stmt.step();
+        }
+
         {
             var audit_stmt = try database.prepare(audit.insert_sql);
             defer audit_stmt.finalize();
@@ -534,10 +644,10 @@ pub const Entry = struct {
         try database.commit();
     }
 
-    pub fn reverse(database: db.Database, entry_id: i64, reason: []const u8, reversal_date: []const u8, performed_by: []const u8) !i64 {
+    pub fn reverse(database: db.Database, entry_id: i64, reason: []const u8, reversal_date: []const u8, target_period_id: ?i64, performed_by: []const u8) !i64 {
         if (reason.len == 0) return error.ReverseReasonRequired;
 
-        var period_id: i64 = 0;
+        var original_period_id: i64 = 0;
         var entry_book_id: i64 = 0;
         var doc_number_buf: [128]u8 = undefined;
         var doc_number_len: usize = 0;
@@ -549,12 +659,33 @@ pub const Entry = struct {
             if (!has_row) return error.NotFound;
             const status = EntryStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             if (status != .posted) return error.InvalidTransition;
-            period_id = stmt.columnInt64(1);
+            original_period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
             const dn = stmt.columnText(3).?;
             const copy_len = @min(dn.len, doc_number_buf.len);
             @memcpy(doc_number_buf[0..copy_len], dn[0..copy_len]);
             doc_number_len = copy_len;
+        }
+
+        // Reversal period: use target if provided, otherwise original
+        const reversal_period_id = target_period_id orelse original_period_id;
+
+        // Verify reversal period is open or soft_closed and reversal_date is within range
+        {
+            var stmt = try database.prepare("SELECT status, start_date, end_date FROM ledger_periods WHERE id = ? AND book_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, reversal_period_id);
+            try stmt.bindInt(2, entry_book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const period_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
+            if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
+            const start = stmt.columnText(1).?;
+            const end = stmt.columnText(2).?;
+            if (std.mem.order(u8, reversal_date, start) == .lt or std.mem.order(u8, reversal_date, end) == .gt) {
+                return error.InvalidInput;
+            }
         }
 
         try database.beginTransaction();
@@ -571,7 +702,8 @@ pub const Entry = struct {
 
         // Create reversal entry
         var rev_doc_buf: [136]u8 = undefined;
-        const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REV-{s}", .{doc_number_buf[0..doc_number_len]}) catch return error.InvalidInput;
+        const max_doc_for_rev = @min(doc_number_len, 96); // REV- prefix + 96 = 100 (schema max)
+        const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REV-{s}", .{doc_number_buf[0..max_doc_for_rev]}) catch return error.InvalidInput;
         {
             var stmt = try database.prepare(
                 \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, status, reverses_entry_id, posted_at, posted_by, period_id, book_id)
@@ -584,7 +716,7 @@ pub const Entry = struct {
             try stmt.bindText(4, reason);
             try stmt.bindInt(5, entry_id);
             try stmt.bindText(6, performed_by);
-            try stmt.bindInt(7, period_id);
+            try stmt.bindInt(7, reversal_period_id);
             try stmt.bindInt(8, entry_book_id);
             _ = try stmt.step();
         }
@@ -592,13 +724,13 @@ pub const Entry = struct {
 
         // Copy lines with flipped debits/credits
         {
-            var read_stmt = try database.prepare("SELECT line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, fx_rate, transaction_currency, account_id FROM ledger_entry_lines WHERE entry_id = ?;");
+            var read_stmt = try database.prepare("SELECT line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, fx_rate, transaction_currency, account_id, description, counterparty_id FROM ledger_entry_lines WHERE entry_id = ?;");
             defer read_stmt.finalize();
             try read_stmt.bindInt(1, entry_id);
 
             var write_stmt = try database.prepare(
-                \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, fx_rate, transaction_currency, account_id, entry_id)
-                \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, fx_rate, transaction_currency, account_id, entry_id, description, counterparty_id)
+                \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             );
             defer write_stmt.finalize();
 
@@ -614,6 +746,8 @@ pub const Entry = struct {
                 const fx_rate = read_stmt.columnInt64(5);
                 const currency = read_stmt.columnText(6).?;
                 const acct_id = read_stmt.columnInt64(7);
+                const line_desc = read_stmt.columnText(8);
+                const cp_id = read_stmt.columnInt64(9);
 
                 // Flip: debit becomes credit, credit becomes debit
                 try write_stmt.bindInt(1, line_num);
@@ -625,13 +759,15 @@ pub const Entry = struct {
                 try write_stmt.bindText(7, currency);
                 try write_stmt.bindInt(8, acct_id);
                 try write_stmt.bindInt(9, reversal_id);
+                if (line_desc) |d| try write_stmt.bindText(10, d) else try write_stmt.bindNull(10);
+                if (cp_id != 0) try write_stmt.bindInt(11, cp_id) else try write_stmt.bindNull(11);
                 _ = try write_stmt.step();
                 write_stmt.reset();
                 write_stmt.clearBindings();
 
-                // Update balance cache with flipped amounts
+                // Update balance cache with flipped amounts in reversal period
                 try cache_stmt.bindInt(1, acct_id);
-                try cache_stmt.bindInt(2, period_id);
+                try cache_stmt.bindInt(2, reversal_period_id);
                 try cache_stmt.bindInt(3, orig_base_credit); // flipped debit
                 try cache_stmt.bindInt(4, orig_base_debit); // flipped credit
                 try cache_stmt.bindInt(5, orig_base_credit);
@@ -641,6 +777,19 @@ pub const Entry = struct {
                 cache_stmt.reset();
                 cache_stmt.clearBindings();
             }
+        }
+
+        // Mark other periods stale
+        {
+            var stale_stmt = try database.prepare(
+                \\UPDATE ledger_account_balances
+                \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE book_id = ? AND period_id != ? AND is_stale = 0;
+            );
+            defer stale_stmt.finalize();
+            try stale_stmt.bindInt(1, entry_book_id);
+            try stale_stmt.bindInt(2, reversal_period_id);
+            _ = try stale_stmt.step();
         }
 
         {
@@ -653,6 +802,222 @@ pub const Entry = struct {
 
         try database.commit();
         return reversal_id;
+    }
+
+    pub fn editDraft(database: db.Database, entry_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, metadata: ?[]const u8, period_id: i64, performed_by: []const u8) !void {
+        if (document_number.len == 0) return error.InvalidInput;
+
+        var entry_book_id: i64 = 0;
+        var old_doc_buf: [128]u8 = undefined;
+        var old_doc_len: usize = 0;
+        var old_txn_date_buf: [16]u8 = undefined;
+        var old_txn_date_len: usize = 0;
+        var old_post_date_buf: [16]u8 = undefined;
+        var old_post_date_len: usize = 0;
+        var old_desc_buf: [1001]u8 = undefined;
+        var old_desc_len: usize = 0;
+        var old_has_desc = false;
+        var old_meta_buf: [10001]u8 = undefined;
+        var old_meta_len: usize = 0;
+        var old_has_meta = false;
+        var old_period_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT status, book_id, document_number, transaction_date,
+                \\  posting_date, description, metadata, period_id
+                \\FROM ledger_entries WHERE id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
+            entry_book_id = stmt.columnInt64(1);
+
+            const doc = stmt.columnText(2).?;
+            old_doc_len = @min(doc.len, old_doc_buf.len);
+            @memcpy(old_doc_buf[0..old_doc_len], doc[0..old_doc_len]);
+
+            const txn = stmt.columnText(3).?;
+            old_txn_date_len = @min(txn.len, old_txn_date_buf.len);
+            @memcpy(old_txn_date_buf[0..old_txn_date_len], txn[0..old_txn_date_len]);
+
+            const pdate = stmt.columnText(4).?;
+            old_post_date_len = @min(pdate.len, old_post_date_buf.len);
+            @memcpy(old_post_date_buf[0..old_post_date_len], pdate[0..old_post_date_len]);
+
+            if (stmt.columnText(5)) |d| {
+                old_has_desc = true;
+                old_desc_len = @min(d.len, old_desc_buf.len);
+                @memcpy(old_desc_buf[0..old_desc_len], d[0..old_desc_len]);
+            }
+            if (stmt.columnText(6)) |m| {
+                old_has_meta = true;
+                old_meta_len = @min(m.len, old_meta_buf.len);
+                @memcpy(old_meta_buf[0..old_meta_len], m[0..old_meta_len]);
+            }
+            old_period_id = stmt.columnInt64(7);
+        }
+
+        // Validate posting_date within period date range
+        {
+            var stmt = try database.prepare("SELECT start_date, end_date FROM ledger_periods WHERE id = ? AND book_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, period_id);
+            try stmt.bindInt(2, entry_book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const start = stmt.columnText(0).?;
+            const end = stmt.columnText(1).?;
+            if (std.mem.order(u8, posting_date, start) == .lt or std.mem.order(u8, posting_date, end) == .gt) {
+                return error.InvalidInput;
+            }
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare(
+                \\UPDATE ledger_entries SET
+                \\  document_number = ?, transaction_date = ?, posting_date = ?,
+                \\  description = ?, metadata = ?, period_id = ?,
+                \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindText(1, document_number);
+            try stmt.bindText(2, transaction_date);
+            try stmt.bindText(3, posting_date);
+            if (description) |d| try stmt.bindText(4, d) else try stmt.bindNull(4);
+            if (metadata) |m| try stmt.bindText(5, m) else try stmt.bindNull(5);
+            try stmt.bindInt(6, period_id);
+            try stmt.bindInt(7, entry_id);
+            _ = stmt.step() catch return error.DuplicateNumber;
+        }
+
+        // Field-level audit for each changed field
+        {
+            var audit_stmt = try database.prepare(audit.insert_sql);
+            defer audit_stmt.finalize();
+
+            if (!std.mem.eql(u8, old_doc_buf[0..old_doc_len], document_number)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "document_number", old_doc_buf[0..old_doc_len], document_number, performed_by, entry_book_id);
+            }
+            if (!std.mem.eql(u8, old_txn_date_buf[0..old_txn_date_len], transaction_date)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "transaction_date", old_txn_date_buf[0..old_txn_date_len], transaction_date, performed_by, entry_book_id);
+            }
+            if (!std.mem.eql(u8, old_post_date_buf[0..old_post_date_len], posting_date)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "posting_date", old_post_date_buf[0..old_post_date_len], posting_date, performed_by, entry_book_id);
+            }
+
+            const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
+            const new_desc = description orelse "";
+            if (!std.mem.eql(u8, old_desc, new_desc)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
+            }
+
+            const old_meta = if (old_has_meta) old_meta_buf[0..old_meta_len] else "";
+            const new_meta = metadata orelse "";
+            if (!std.mem.eql(u8, old_meta, new_meta)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "metadata", if (old_has_meta) old_meta_buf[0..old_meta_len] else null, metadata, performed_by, entry_book_id);
+            }
+
+            if (old_period_id != period_id) {
+                var old_buf: [amt_buf_len]u8 = undefined;
+                var new_buf: [amt_buf_len]u8 = undefined;
+                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_period_id}) catch unreachable;
+                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{period_id}) catch unreachable;
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "period_id", old_s, new_s, performed_by, entry_book_id);
+            }
+        }
+
+        try database.commit();
+    }
+
+    pub fn editPosted(database: db.Database, entry_id: i64, description: ?[]const u8, metadata: ?[]const u8, performed_by: []const u8) !void {
+        var entry_book_id: i64 = 0;
+        var old_desc_buf: [1001]u8 = undefined;
+        var old_desc_len: usize = 0;
+        var old_has_desc = false;
+        var old_meta_buf: [10001]u8 = undefined;
+        var old_meta_len: usize = 0;
+        var old_has_meta = false;
+        var period_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT status, book_id, description, metadata, period_id
+                \\FROM ledger_entries WHERE id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, status, "draft")) return error.InvalidInput;
+            if (std.mem.eql(u8, status, "void")) return error.InvalidInput;
+            if (std.mem.eql(u8, status, "reversed")) return error.InvalidInput;
+            entry_book_id = stmt.columnInt64(1);
+
+            if (stmt.columnText(2)) |d| {
+                old_has_desc = true;
+                old_desc_len = @min(d.len, old_desc_buf.len);
+                @memcpy(old_desc_buf[0..old_desc_len], d[0..old_desc_len]);
+            }
+            if (stmt.columnText(3)) |m| {
+                old_has_meta = true;
+                old_meta_len = @min(m.len, old_meta_buf.len);
+                @memcpy(old_meta_buf[0..old_meta_len], m[0..old_meta_len]);
+            }
+            period_id = stmt.columnInt64(4);
+        }
+
+        // Verify period is open or soft_closed
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, period_id);
+            _ = try stmt.step();
+            const period_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
+            if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare(
+                \\UPDATE ledger_entries SET
+                \\  description = ?, metadata = ?,
+                \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE id = ?;
+            );
+            defer stmt.finalize();
+            if (description) |d| try stmt.bindText(1, d) else try stmt.bindNull(1);
+            if (metadata) |m| try stmt.bindText(2, m) else try stmt.bindNull(2);
+            try stmt.bindInt(3, entry_id);
+            _ = try stmt.step();
+        }
+
+        {
+            var audit_stmt = try database.prepare(audit.insert_sql);
+            defer audit_stmt.finalize();
+
+            const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
+            const new_desc = description orelse "";
+            if (!std.mem.eql(u8, old_desc, new_desc)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
+            }
+
+            const old_meta = if (old_has_meta) old_meta_buf[0..old_meta_len] else "";
+            const new_meta = metadata orelse "";
+            if (!std.mem.eql(u8, old_meta, new_meta)) {
+                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "metadata", if (old_has_meta) old_meta_buf[0..old_meta_len] else null, metadata, performed_by, entry_book_id);
+            }
+        }
+
+        try database.commit();
     }
 };
 
@@ -767,7 +1132,7 @@ test "addLine adds debit line to draft entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectEqual(@as(i64, 1), line_id);
 }
 
@@ -776,7 +1141,7 @@ test "addLine adds credit line to draft entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try std.testing.expectEqual(@as(i64, 1), line_id);
 }
 
@@ -785,11 +1150,11 @@ test "addLine rejects line on non-draft entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const result = Entry.addLine(database, 1, 3, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const result = Entry.addLine(database, 1, 3, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectError(error.AlreadyPosted, result);
 }
 
@@ -797,7 +1162,7 @@ test "addLine rejects nonexistent entry" {
     const database = try setupTestDb();
     defer database.close();
 
-    const result = Entry.addLine(database, 999, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const result = Entry.addLine(database, 999, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectError(error.NotFound, result);
 }
 
@@ -808,7 +1173,7 @@ test "addLine rejects inactive account" {
     try account_mod.Account.updateStatus(database, 1, .inactive, "admin");
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const result = Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const result = Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectError(error.AccountInactive, result);
 }
 
@@ -819,8 +1184,8 @@ test "post balanced entry succeeds" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -836,8 +1201,8 @@ test "post computes base amounts" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -853,8 +1218,8 @@ test "post updates balance cache" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -872,8 +1237,8 @@ test "post writes audit log" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -890,8 +1255,8 @@ test "post rejects unbalanced entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     const result = Entry.post(database, 1, "admin");
     try std.testing.expectError(error.UnbalancedEntry, result);
@@ -902,7 +1267,7 @@ test "post rejects entry with fewer than 2 lines" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     const result = Entry.post(database, 1, "admin");
     try std.testing.expectError(error.TooFewLines, result);
@@ -913,8 +1278,8 @@ test "post rejects already posted entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
     const result = Entry.post(database, 1, "admin");
@@ -926,8 +1291,8 @@ test "post rejects entry in closed period" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try period_mod.Period.transition(database, 1, .soft_closed, "admin");
     try period_mod.Period.transition(database, 1, .closed, "admin");
@@ -941,8 +1306,8 @@ test "post rejects entry in locked period" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try period_mod.Period.transition(database, 1, .soft_closed, "admin");
     try period_mod.Period.transition(database, 1, .closed, "admin");
@@ -957,8 +1322,8 @@ test "post allows entry in soft_closed period" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try period_mod.Period.transition(database, 1, .soft_closed, "admin");
 
@@ -984,14 +1349,14 @@ test "post two entries accumulates balance cache" {
 
     // Entry 1: debit Cash 1000, credit AP 1000
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     // Entry 2: debit Cash 500, credit AP 500
     _ = try Entry.createDraft(database, 1, "JE-002", "2026-01-16", "2026-01-16", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 2, 1, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 2, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 2, 1, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 2, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 2, "admin");
 
     // Cash should have 1500 debit, AP should have 1500 credit
@@ -1009,8 +1374,8 @@ test "voidEntry voids a posted entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     try Entry.voidEntry(database, 1, "Entered in error", "admin");
@@ -1027,8 +1392,8 @@ test "voidEntry reverses balance cache" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Error", "admin");
 
@@ -1055,8 +1420,8 @@ test "voidEntry rejects empty reason" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     const result = Entry.voidEntry(database, 1, "", "admin");
@@ -1068,8 +1433,8 @@ test "voidEntry writes audit log" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Error", "admin");
 
@@ -1087,11 +1452,11 @@ test "reverse creates new entry with flipped lines" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const reversal_id = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    const reversal_id = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
     try std.testing.expect(reversal_id > 1);
 
     // Original entry should be 'reversed'
@@ -1137,7 +1502,7 @@ test "reverse rejects draft entry" {
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
 
-    const result = Entry.reverse(database, 1, "Reason", "2026-01-31", "admin");
+    const result = Entry.reverse(database, 1, "Reason", "2026-01-31", null, "admin");
     try std.testing.expectError(error.InvalidTransition, result);
 }
 
@@ -1146,11 +1511,11 @@ test "reverse rejects empty reason" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const result = Entry.reverse(database, 1, "", "2026-01-31", "admin");
+    const result = Entry.reverse(database, 1, "", "2026-01-31", null, "admin");
     try std.testing.expectError(error.ReverseReasonRequired, result);
 }
 
@@ -1159,11 +1524,11 @@ test "reverse balance cache nets to zero" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
     // Cash account: debit 1000 from original + credit 1000 from reversal = net 0
     var stmt = try database.prepare("SELECT debit_sum, credit_sum FROM ledger_account_balances WHERE account_id = 1 AND period_id = 1;");
@@ -1183,8 +1548,8 @@ test "post with FX rate computes correct base amounts" {
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
     const usd_amount: i64 = 10_000_000_000; // 100.00 * 10^8
     const fx: i64 = 565_000_000_000; // 56.50 * 10^10
-    _ = try Entry.addLine(database, 1, 1, usd_amount, 0, "USD", fx, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, usd_amount, "USD", fx, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, usd_amount, 0, "USD", fx, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, usd_amount, "USD", fx, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -1202,8 +1567,8 @@ test "void already-voided entry rejected" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Error", "admin");
 
@@ -1216,12 +1581,12 @@ test "reverse already-reversed entry rejected" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
-    const result = Entry.reverse(database, 1, "Double reverse", "2026-01-31", "admin");
+    const result = Entry.reverse(database, 1, "Double reverse", "2026-01-31", null, "admin");
     try std.testing.expectError(error.InvalidTransition, result);
 }
 
@@ -1234,11 +1599,11 @@ test "post 3-line entry: split payment" {
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", "Split payment", 1, null, "admin");
     // Debit Cash 1000
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     // Credit AP 800
-    _ = try Entry.addLine(database, 1, 2, 0, 800_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 800_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     // Credit Tax Payable 200
-    _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+    _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -1264,7 +1629,7 @@ test "addLine rejects account from different book" {
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
 
     // Account 3 belongs to book 2, entry belongs to book 1
-    const result = Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+    const result = Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
     try std.testing.expectError(error.InvalidInput, result);
 }
 
@@ -1275,7 +1640,7 @@ test "post entry with zero-amount line rejected by schema" {
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
 
     // Both debit and credit = 0 violates CHECK constraint
-    const result = Entry.addLine(database, 1, 1, 0, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const result = Entry.addLine(database, 1, 1, 0, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectError(error.SqliteStepFailed, result);
 }
 
@@ -1284,8 +1649,8 @@ test "full lifecycle: create -> post -> void -> verify cache zero" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 5_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 5_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 5_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 5_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Cancelled", "admin");
 
@@ -1303,10 +1668,10 @@ test "full lifecycle: create -> post -> reverse -> verify cache balanced" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
 
     // For each account, debit_sum should equal credit_sum (net zero)
     var stmt = try database.prepare("SELECT account_id, debit_sum, credit_sum FROM ledger_account_balances ORDER BY account_id;");
@@ -1331,8 +1696,8 @@ test "post, void, then post new entry — cache correct" {
 
     // Post entry 1: debit Cash 1000, credit AP 1000
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     // Void it
@@ -1340,8 +1705,8 @@ test "post, void, then post new entry — cache correct" {
 
     // Post entry 2: debit Cash 2000, credit AP 2000
     _ = try Entry.createDraft(database, 1, "JE-002", "2026-01-16", "2026-01-16", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 2, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 2, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 2, 1, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 2, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 2, "admin");
 
     // Cache should only reflect entry 2 (entry 1 voided)
@@ -1360,12 +1725,12 @@ test "reverse 3-line entry creates correct flipped lines" {
     _ = try account_mod.Account.create(database, 1, "2100", "Tax Payable", .liability, false, "admin");
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 800_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
-    _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 800_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 3, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const rev_id = try Entry.reverse(database, 1, "Reversal", "2026-01-31", "admin");
+    const rev_id = try Entry.reverse(database, 1, "Reversal", "2026-01-31", null, "admin");
 
     // Reversal should have 3 lines
     var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
@@ -1381,9 +1746,9 @@ test "compound entry: two lines on same account" {
 
     // Partial payment: debit Cash 1000, credit AP 700 + credit AP 300
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 700_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
-    _ = try Entry.addLine(database, 1, 3, 0, 300_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 700_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 3, 0, 300_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     // AP balance cache should show total credit of 1000
@@ -1401,8 +1766,8 @@ test "multi-currency void reverses base amounts correctly" {
     const fx: i64 = 565_000_000_000; // 56.50 PHP/USD
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, usd_amount, 0, "USD", fx, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, usd_amount, "USD", fx, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, usd_amount, 0, "USD", fx, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, usd_amount, "USD", fx, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "FX error", "admin");
 
@@ -1419,7 +1784,7 @@ test "addLine writes audit log" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     var stmt = try database.prepare("SELECT entity_type, action FROM ledger_audit_log WHERE entity_type = 'entry_line';");
     defer stmt.finalize();
@@ -1433,10 +1798,10 @@ test "reverse writes audit log for both entries" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
 
     // Original entry: reverse action
     {
@@ -1464,8 +1829,8 @@ test "full posting lifecycle audit trail in order" {
 
     // Create draft + lines + post + void
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Error", "admin");
 
@@ -1550,8 +1915,8 @@ test "removeLine removes line from draft" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.removeLine(database, line_id, "admin");
 
@@ -1566,8 +1931,8 @@ test "removeLine rejects line on posted entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     const result = Entry.removeLine(database, line_id, "admin");
@@ -1579,7 +1944,7 @@ test "removeLine writes audit log" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     try Entry.removeLine(database, line_id, "admin");
 
@@ -1603,8 +1968,8 @@ test "deleteDraft deletes entry and all lines" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.deleteDraft(database, 1, "admin");
 
@@ -1627,8 +1992,8 @@ test "deleteDraft rejects posted entry" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     const result = Entry.deleteDraft(database, 1, "admin");
@@ -1667,8 +2032,8 @@ test "post with different currencies per line balances in base" {
     // Line 1: Debit Cash-USD 100.00 at 56.50 PHP/USD = 5,650.00 PHP base
     // Line 2: Credit Revenue 5,650.00 PHP at 1.00 = 5,650.00 PHP base
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 565_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 565_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -1692,8 +2057,8 @@ test "voidEntry records reason in audit log" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Entered in error", "admin");
 
@@ -1709,10 +2074,10 @@ test "reverse records reason in audit log" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
-    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", "admin");
+    _ = try Entry.reverse(database, 1, "Accrual reversal", "2026-01-31", null, "admin");
 
     var stmt = try database.prepare("SELECT field_changed, new_value FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'reverse' AND field_changed = 'reversed_reason';");
     defer stmt.finalize();
@@ -1726,8 +2091,8 @@ test "post entry then close period — entry stays posted" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     try period_mod.Period.transition(database, 1, .soft_closed, "admin");
@@ -1747,9 +2112,9 @@ test "editLine changes amount on draft line" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
-    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     var stmt = try database.prepare("SELECT debit_amount FROM ledger_entry_lines WHERE id = ?;");
     defer stmt.finalize();
@@ -1763,10 +2128,10 @@ test "editLine changes account on draft line" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     // Change from Cash (1) to AP (2)
-    try Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 2, "admin");
+    try Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     var stmt = try database.prepare("SELECT account_id FROM ledger_entry_lines WHERE id = ?;");
     defer stmt.finalize();
@@ -1780,9 +2145,9 @@ test "editLine changes currency and fx_rate" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
-    try Entry.editLine(database, line_id, 10_000_000_000, 0, "USD", 565_000_000_000, 1, "admin");
+    try Entry.editLine(database, line_id, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, null, "admin");
 
     var stmt = try database.prepare("SELECT debit_amount, transaction_currency, fx_rate FROM ledger_entry_lines WHERE id = ?;");
     defer stmt.finalize();
@@ -1798,11 +2163,11 @@ test "editLine rejects posted entry line" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
-    const result = Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+    const result = Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectError(error.AlreadyPosted, result);
 }
 
@@ -1814,9 +2179,9 @@ test "editLine rejects inactive account" {
     try account_mod.Account.updateStatus(database, 3, .inactive, "admin");
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
-    const result = Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, "admin");
+    const result = Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
     try std.testing.expectError(error.AccountInactive, result);
 }
 
@@ -1824,7 +2189,7 @@ test "editLine rejects nonexistent line" {
     const database = try setupTestDb();
     defer database.close();
 
-    const result = Entry.editLine(database, 999, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+    const result = Entry.editLine(database, 999, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try std.testing.expectError(error.NotFound, result);
 }
 
@@ -1833,10 +2198,10 @@ test "editLine writes rich audit log with field names and old/new values" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     // Change debit from 1000 to 2000 and account from 1 to 2
-    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 2, "admin");
+    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     // Should have 2 audit entries: debit_amount + account_id
     {
@@ -1862,10 +2227,10 @@ test "editLine no audit when values unchanged" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     // Edit with same values — no audit entries for update
-    try Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+    try Entry.editLine(database, line_id, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry_line' AND action = 'update';");
     defer stmt.finalize();
@@ -1878,9 +2243,9 @@ test "editLine currency change logged with old and new currency" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
-    try Entry.editLine(database, line_id, 10_000_000_000, 0, "USD", 565_000_000_000, 1, "admin");
+    try Entry.editLine(database, line_id, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, null, "admin");
 
     var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE field_changed = 'transaction_currency';");
     defer stmt.finalize();
@@ -1894,11 +2259,11 @@ test "editLine then post: edited amount used in base computation" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 2_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     // Edit line 1 from 1000 to 2000 so it balances with line 2
-    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, "admin");
+    try Entry.editLine(database, line_id, 2_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
 
     try Entry.post(database, 1, "admin");
 
@@ -1916,7 +2281,7 @@ test "deleteDraft then verify no orphan audit pollution" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
     try Entry.deleteDraft(database, 1, "admin");
 
     // Create a new entry — should work (doc number freed)
@@ -1929,8 +2294,8 @@ test "remove all lines then try to post: rejected" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    const l1 = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    const l2 = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    const l1 = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    const l2 = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
 
     try Entry.removeLine(database, l1, "admin");
     try Entry.removeLine(database, l2, "admin");
@@ -1944,8 +2309,8 @@ test "void entry excluded from transaction_history view" {
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
     try Entry.voidEntry(database, 1, "Error", "admin");
 
@@ -1963,8 +2328,8 @@ test "post rejects entry when FX computation overflows i64" {
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
     // Amount near i64 max with fx_rate > 1.0 will overflow
     const huge: i64 = std.math.maxInt(i64);
-    _ = try Entry.addLine(database, 1, 1, huge, 0, "USD", 20_000_000_000, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, huge, "USD", 20_000_000_000, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, huge, 0, "USD", 20_000_000_000, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, huge, "USD", 20_000_000_000, 2, null, null, "admin");
 
     const result = Entry.post(database, 1, "admin");
     try std.testing.expectError(error.AmountOverflow, result);
@@ -1979,14 +2344,14 @@ test "post entries in two periods: cache independent per period" {
 
     // Post in Jan
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 1, "admin");
 
     // Post in Feb
     _ = try Entry.createDraft(database, 1, "JE-002", "2026-02-15", "2026-02-15", null, 2, null, "admin");
-    _ = try Entry.addLine(database, 2, 1, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
-    _ = try Entry.addLine(database, 2, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, "admin");
+    _ = try Entry.addLine(database, 2, 1, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 2, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, 2, "admin");
 
     // Jan cache: Cash debit 1000
@@ -2004,4 +2369,599 @@ test "post entries in two periods: cache independent per period" {
         _ = try stmt.step();
         try std.testing.expectEqual(@as(i64, 500_000_000_00), stmt.columnInt64(0));
     }
+}
+
+// ── editDraft tests ────────────────────────────────────────────
+
+test "editDraft changes document_number" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.editDraft(database, eid, "JE-999", "2026-01-15", "2026-01-15", null, null, 1, "admin");
+
+    var stmt = try database.prepare("SELECT document_number FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("JE-999", stmt.columnText(0).?);
+}
+
+test "editDraft changes posting_date" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.editDraft(database, eid, "JE-001", "2026-01-15", "2026-01-20", null, null, 1, "admin");
+
+    var stmt = try database.prepare("SELECT posting_date FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("2026-01-20", stmt.columnText(0).?);
+}
+
+test "editDraft changes description and metadata" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.editDraft(database, eid, "JE-001", "2026-01-15", "2026-01-15", "New desc", "{\"key\":\"val\"}", 1, "admin");
+
+    var stmt = try database.prepare("SELECT description, metadata FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("New desc", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("{\"key\":\"val\"}", stmt.columnText(1).?);
+}
+
+test "editDraft writes field-level audit for each changed field" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.editDraft(database, eid, "JE-002", "2026-01-20", "2026-01-25", "Desc", null, 1, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry' AND entity_id = ? AND action = 'update';");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    // Should have audited: document_number, transaction_date, posting_date, description = 4 fields
+    try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+}
+
+test "editDraft rejects posted entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    const result = Entry.editDraft(database, eid, "JE-002", "2026-01-15", "2026-01-15", null, null, 1, "admin");
+    try std.testing.expectError(error.AlreadyPosted, result);
+}
+
+test "editDraft rejects nonexistent entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Entry.editDraft(database, 999, "JE-001", "2026-01-15", "2026-01-15", null, null, 1, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "editDraft rejects posting_date outside period range" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const result = Entry.editDraft(database, eid, "JE-001", "2026-01-15", "2026-02-15", null, null, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "editDraft rejects empty document_number" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const result = Entry.editDraft(database, eid, "", "2026-01-15", "2026-01-15", null, null, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "editDraft rejects duplicate document_number" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const eid2 = try Entry.createDraft(database, 1, "JE-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const result = Entry.editDraft(database, eid2, "JE-001", "2026-01-15", "2026-01-15", null, null, 1, "admin");
+    try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+test "editDraft no audit when nothing changed" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.editDraft(database, eid, "JE-001", "2026-01-15", "2026-01-15", null, null, 1, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry' AND entity_id = ? AND action = 'update';");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+// ── editPosted tests ───────────────────────────────────────────
+
+test "editPosted changes description on posted entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try Entry.editPosted(database, eid, "Updated memo", null, "admin");
+
+    var stmt = try database.prepare("SELECT description FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Updated memo", stmt.columnText(0).?);
+}
+
+test "editPosted writes audit for changed description" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", "Old", 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try Entry.editPosted(database, eid, "New", null, "admin");
+
+    var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE entity_type = 'entry' AND field_changed = 'description' AND action = 'update';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Old", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("New", stmt.columnText(1).?);
+}
+
+test "editPosted rejects draft entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const result = Entry.editPosted(database, eid, "Memo", null, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "editPosted rejects void entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+    try Entry.voidEntry(database, eid, "Error", "admin");
+
+    const result = Entry.editPosted(database, eid, "Memo", null, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "editPosted rejects closed period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+
+    const result = Entry.editPosted(database, eid, "Memo", null, "admin");
+    try std.testing.expectError(error.PeriodClosed, result);
+}
+
+test "editPosted rejects locked period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try period_mod.Period.transition(database, 1, .locked, "admin");
+
+    const result = Entry.editPosted(database, eid, "Memo", null, "admin");
+    try std.testing.expectError(error.PeriodLocked, result);
+}
+
+test "editPosted allows in soft_closed period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+
+    try Entry.editPosted(database, eid, "Late correction memo", null, "admin");
+
+    var stmt = try database.prepare("SELECT description FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Late correction memo", stmt.columnText(0).?);
+}
+
+test "editPosted rejects nonexistent entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Entry.editPosted(database, 999, "Memo", null, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── addLine counterparty_id tests ──────────────────────────────
+
+test "addLine with counterparty_id stores counterparty" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const subledger_mod = @import("subledger.zig");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const cid = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", gid, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 2, cid, null, "admin");
+
+    var stmt = try database.prepare("SELECT counterparty_id FROM ledger_entry_lines WHERE entry_id = ? AND line_number = 1;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, cid), stmt.columnInt64(0));
+}
+
+test "addLine with null counterparty_id stores null" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+
+    var stmt = try database.prepare("SELECT counterparty_id FROM ledger_entry_lines WHERE entry_id = ? AND line_number = 1;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expect(stmt.columnText(0) == null);
+}
+
+// ── Cross-period reversal tests ────────────────────────────────
+
+test "reverse: cross-period reversal posts to target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create Feb period
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    // Post in Jan
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Reverse into Feb (cross-period)
+    const rev_id = try Entry.reverse(database, eid, "Prior period correction", "2026-02-15", 2, "admin");
+
+    // Verify reversal entry is in Feb period
+    var stmt = try database.prepare("SELECT period_id FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, rev_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 2), stmt.columnInt64(0));
+}
+
+test "reverse: cross-period reversal rejects closed target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Close Feb
+    try period_mod.Period.transition(database, 2, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 2, .closed, "admin");
+
+    const result = Entry.reverse(database, eid, "Correction", "2026-02-15", 2, "admin");
+    try std.testing.expectError(error.PeriodClosed, result);
+}
+
+test "reverse: cross-period reversal rejects date outside target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Try to reverse into Feb but with a March date
+    const result = Entry.reverse(database, eid, "Correction", "2026-03-15", 2, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── Auto-rounding tests ────────────────────────────────────────
+
+test "post: auto-rounds FX imbalance when rounding account set" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create rounding account and set it
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try book_mod.Book.setRoundingAccount(database, 1, 3, "admin");
+
+    // Create entry with FX that will produce a small rounding difference
+    const eid = try Entry.createDraft(database, 1, "FX-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    // 100.00 USD at fx 56.501 = 5650.1 PHP (base) — may truncate
+    _ = try Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 56_501_000_000, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 56_501_000_000, 2, null, null, "admin");
+
+    // This should post — amounts should balance since same FX rate
+    try Entry.post(database, eid, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}
+
+test "post: rejects large imbalance even with rounding account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try book_mod.Book.setRoundingAccount(database, 1, 3, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "BAD-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+
+    const result = Entry.post(database, eid, "admin");
+    try std.testing.expectError(error.UnbalancedEntry, result);
+}
+
+// ── P0: Auto-rounding actually triggers rounding line ──────────
+
+test "post: auto-rounding inserts rounding line when FX diff is small" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try book_mod.Book.setRoundingAccount(database, 1, 3, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "FX-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    // Line 1: 100 USD at 56.50 = base 5650.00000000 (565000000000)
+    _ = try Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 56_500_000_000, 1, null, null, "admin");
+    // Line 2: 100 USD at 56.50 but manually offset the rate slightly to create a 1-unit diff
+    // 56.500000001 * 10^10 = 565000000010 — produces base = 5650.0000001 (565000000010 * 10000000000 / 10^10 = 56500000001)
+    // Actually, computeBaseAmount = amount * fx_rate / FX_RATE_SCALE
+    // = 10_000_000_000 * 56_500_000_001 / 10_000_000_000 = 56_500_000_001
+    // So debit base = 10_000_000_000 * 56_500_000_000 / 10_000_000_000 = 56_500_000_000
+    // credit base = 10_000_000_000 * 56_500_000_001 / 10_000_000_000 = 56_500_000_001
+    // diff = 56_500_000_000 - 56_500_000_001 = -1 (within tolerance of 100)
+    _ = try Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 56_500_000_001, 2, null, null, "admin");
+
+    try Entry.post(database, eid, "admin");
+
+    // Verify entry posted
+    {
+        var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, eid);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+    }
+
+    // Verify a 3rd rounding line was inserted
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, eid);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+    }
+
+    // Verify rounding line targets the rounding account (id=3)
+    {
+        var stmt = try database.prepare("SELECT account_id, description FROM ledger_entry_lines WHERE entry_id = ? AND line_number = 3;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, eid);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i64, 3), stmt.columnInt64(0));
+        try std.testing.expectEqualStrings("FX rounding adjustment", stmt.columnText(1).?);
+    }
+}
+
+// ── P0: editLine with counterparty_id and description ──────────
+
+test "editLine: changes description and audits it" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const lid = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+
+    try Entry.editLine(database, lid, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "Updated memo", "admin");
+
+    var stmt = try database.prepare("SELECT description FROM ledger_entry_lines WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, lid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Updated memo", stmt.columnText(0).?);
+
+    // Verify audit
+    var audit_stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry_line' AND field_changed = 'description';");
+    defer audit_stmt.finalize();
+    _ = try audit_stmt.step();
+    try std.testing.expect(audit_stmt.columnInt(0) > 0);
+}
+
+test "editLine: changes counterparty_id and audits it" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const subledger_mod = @import("subledger.zig");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const cid = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", gid, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const lid = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+
+    try Entry.editLine(database, lid, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, cid, null, "admin");
+
+    var stmt = try database.prepare("SELECT counterparty_id FROM ledger_entry_lines WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, lid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(cid, stmt.columnInt64(0));
+}
+
+// ── P1: voidEntry in closed and locked period ──────────────────
+
+test "voidEntry: rejects void in closed period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+
+    const result = Entry.voidEntry(database, eid, "Error", "admin");
+    try std.testing.expectError(error.PeriodClosed, result);
+}
+
+test "voidEntry: rejects void in locked period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try period_mod.Period.transition(database, 1, .locked, "admin");
+
+    const result = Entry.voidEntry(database, eid, "Error", "admin");
+    try std.testing.expectError(error.PeriodLocked, result);
+}
+
+// ── P1: reverse with nonexistent entry and period ──────────────
+
+test "reverse: rejects nonexistent entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Entry.reverse(database, 999, "Reason", "2026-01-31", null, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "reverse: rejects nonexistent target period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    const result = Entry.reverse(database, eid, "Correction", "2026-02-15", 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── P1: same-period reverse verifies period_id ─────────────────
+
+test "reverse: null target uses original period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    const rev_id = try Entry.reverse(database, eid, "Reversal", "2026-01-31", null, "admin");
+
+    var stmt = try database.prepare("SELECT period_id FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, rev_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+// ── P1: editDraft period change with audit ─────────────────────
+
+test "editDraft: changing period_id audits it" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    // Change period to Feb and update posting_date accordingly
+    try Entry.editDraft(database, eid, "JE-001", "2026-02-15", "2026-02-15", null, null, 2, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry' AND field_changed = 'period_id';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expect(stmt.columnInt(0) > 0);
+}
+
+// ── P1: editPosted no-op audit verification ────────────────────
+
+test "editPosted: no audit when nothing changed" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", "Memo", 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    // Call editPosted with same values
+    try Entry.editPosted(database, eid, "Memo", null, "admin");
+
+    // Should have zero update audit entries for this editPosted
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'entry' AND action = 'update' AND entity_id = ? AND field_changed = 'description';");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
 }

@@ -54,23 +54,26 @@ pub const Book = struct {
     }
 
     pub fn setRoundingAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        // Verify book exists
+        // Verify book exists and is not archived
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
         }
 
-        // Verify account exists and belongs to the same book
+        // Verify account exists, is active, and belongs to the same book
         {
-            var stmt = try database.prepare("SELECT book_id FROM ledger_accounts WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            if (stmt.columnInt64(0) != book_id) return error.InvalidInput;
+            const acct_status = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
         }
 
         try database.beginTransaction();
@@ -90,6 +93,40 @@ pub const Book = struct {
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
 
         try audit.log(database, "book", book_id, "update", "rounding_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn updateName(database: db.Database, book_id: i64, new_name: []const u8, performed_by: []const u8) !void {
+        if (new_name.len == 0) return error.InvalidInput;
+
+        var old_name_buf: [256]u8 = undefined;
+        var old_name_len: usize = 0;
+        {
+            var stmt = try database.prepare("SELECT name, status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const old = stmt.columnText(0).?;
+            old_name_len = @min(old.len, old_name_buf.len);
+            @memcpy(old_name_buf[0..old_name_len], old[0..old_name_len]);
+            const status = stmt.columnText(1).?;
+            if (std.mem.eql(u8, status, "archived")) return error.InvalidInput;
+        }
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, new_name);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "book", book_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
 
         try database.commit();
     }
@@ -308,6 +345,34 @@ test "setRoundingAccount rejects nonexistent book" {
     try std.testing.expectError(error.NotFound, result);
 }
 
+test "setRoundingAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try database.exec(
+        \\INSERT INTO ledger_accounts (number, name, account_type, normal_balance, book_id)
+        \\VALUES ('9999', 'FX Rounding', 'expense', 'debit', 1);
+    );
+    try Book.archive(database, book_id, "admin");
+
+    const result = Book.setRoundingAccount(database, book_id, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setRoundingAccount rejects inactive account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const account_mod = @import("account.zig");
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try account_mod.Account.updateStatus(database, 1, .inactive, "admin");
+
+    const result = Book.setRoundingAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.AccountInactive, result);
+}
+
 // ── archive tests ───────────────────────────────────────────────
 
 const period_mod = @import("period.zig");
@@ -400,6 +465,63 @@ test "archive nonexistent book rejected" {
 
     const result = Book.archive(database, 999, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+// ── updateName tests ───────────────────────────────────────────
+
+test "updateName changes book name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Old Name", "PHP", 2, "admin");
+    try Book.updateName(database, 1, "New Name", "admin");
+
+    var stmt = try database.prepare("SELECT name FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("New Name", stmt.columnText(0).?);
+}
+
+test "updateName writes audit log with old and new values" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Old Name", "PHP", 2, "admin");
+    try Book.updateName(database, 1, "New Name", "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'book' AND action = 'update' AND field_changed = 'name';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("name", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("Old Name", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("New Name", stmt.columnText(2).?);
+}
+
+test "updateName rejects empty name" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    const result = Book.updateName(database, 1, "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "updateName rejects nonexistent book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Book.updateName(database, 999, "Name", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "updateName rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try Book.archive(database, 1, "admin");
+    const result = Book.updateName(database, 1, "New", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
 }
 
 test "create operations on archived book should fail at entity level" {

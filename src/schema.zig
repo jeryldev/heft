@@ -23,6 +23,7 @@ pub fn createAll(database: db.Database) !void {
     for (tables) |ddl| try database.exec(ddl);
     for (indexes) |idx| try database.exec(idx);
     for (views) |v| try database.exec(v);
+    for (triggers) |trg| try database.exec(trg);
     try database.exec("PRAGMA user_version = 1;");
 
     try database.commit();
@@ -380,6 +381,24 @@ const views = [_][*:0]const u8{
     \\LEFT JOIN ledger_subledger_accounts sa ON sa.id = l.counterparty_id
     \\LEFT JOIN ledger_subledger_groups sg ON sg.id = sa.group_id
     \\WHERE e.status = 'posted';
+    ,
+};
+
+// ── Triggers (2) ───────────────────────────────────────────────
+// Protect audit log from modification. GoBD requires WORM compliance.
+
+const triggers = [_][*:0]const u8{
+    \\CREATE TRIGGER IF NOT EXISTS protect_audit_log_delete
+    \\BEFORE DELETE ON ledger_audit_log
+    \\BEGIN
+    \\  SELECT RAISE(ABORT, 'audit log is immutable: DELETE not allowed');
+    \\END;
+    ,
+    \\CREATE TRIGGER IF NOT EXISTS protect_audit_log_update
+    \\BEFORE UPDATE ON ledger_audit_log
+    \\BEGIN
+    \\  SELECT RAISE(ABORT, 'audit log is immutable: UPDATE not allowed');
+    \\END;
     ,
 };
 
@@ -2161,4 +2180,42 @@ test "each table exists with correct name" {
         _ = try stmt.step();
         try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
     }
+}
+
+test "audit log trigger prevents DELETE" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    // Insert a test audit record
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
+
+    // Attempt to DELETE should fail
+    const result = database.exec("DELETE FROM ledger_audit_log WHERE id = 1;");
+    try std.testing.expectError(error.SqliteExecFailed, result);
+}
+
+test "audit log trigger prevents UPDATE" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
+
+    // Attempt to UPDATE should fail
+    const result = database.exec("UPDATE ledger_audit_log SET action = 'delete' WHERE id = 1;");
+    try std.testing.expectError(error.SqliteExecFailed, result);
+}
+
+test "createAll creates 2 audit protection triggers" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'protect_audit_log%';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
 }

@@ -9,6 +9,9 @@ pub const entry = @import("entry.zig");
 pub const report = @import("report.zig");
 pub const subledger = @import("subledger.zig");
 pub const classification = @import("classification.zig");
+pub const verify_mod = @import("verify.zig");
+pub const export_mod = @import("export.zig");
+pub const query_mod = @import("query.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
 comptime {
@@ -23,5 +26,8 @@ comptime {
     _ = report;
     _ = subledger;
     _ = classification;
+    _ = verify_mod;
+    _ = export_mod;
+    _ = query_mod;
     _ = @import("error.zig");
 }

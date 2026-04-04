@@ -52,7 +52,7 @@ fn internal_close(handle: *LedgerDB) void {
 // ── C ABI Exports ───────────────────────────────────────────────
 
 pub export fn ledger_open(path: [*:0]const u8) ?*LedgerDB {
-    return internal_open(path) catch null;
+    return internal_open(path) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_close(handle: ?*LedgerDB) void {
@@ -68,120 +68,137 @@ pub export fn ledger_version() [*:0]const u8 {
 
 pub export fn ledger_create_book(handle: ?*LedgerDB, name: [*:0]const u8, base_currency: [*:0]const u8, decimal_places: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.book.Book.create(h.sqlite, std.mem.span(name), std.mem.span(base_currency), decimal_places, std.mem.span(performed_by)) catch -1;
+    return heft.book.Book.create(h.sqlite, std.mem.span(name), std.mem.span(base_currency), decimal_places, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_create_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, is_contra: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    const at = heft.account.AccountType.fromString(std.mem.span(account_type)) orelse return -1;
-    return heft.account.Account.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), at, is_contra != 0, std.mem.span(performed_by)) catch -1;
+    const at = heft.account.AccountType.fromString(std.mem.span(account_type)) orelse { setError(2); return -1; };
+    return heft.account.Account.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), at, is_contra != 0, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_create_period(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, period_number: i32, year: i32, start_date: [*:0]const u8, end_date: [*:0]const u8, period_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.period.Period.create(h.sqlite, book_id, std.mem.span(name), period_number, year, std.mem.span(start_date), std.mem.span(end_date), std.mem.span(period_type), std.mem.span(performed_by)) catch -1;
+    return heft.period.Period.create(h.sqlite, book_id, std.mem.span(name), period_number, year, std.mem.span(start_date), std.mem.span(end_date), std.mem.span(period_type), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_update_account_status(handle: ?*LedgerDB, account_id: i64, new_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    const status = heft.account.AccountStatus.fromString(std.mem.span(new_status)) orelse return false;
-    heft.account.Account.updateStatus(h.sqlite, account_id, status, std.mem.span(performed_by)) catch return false;
+    const status = heft.account.AccountStatus.fromString(std.mem.span(new_status)) orelse { setError(2); return false; };
+    heft.account.Account.updateStatus(h.sqlite, account_id, status, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_transition_period(handle: ?*LedgerDB, period_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    const ts = heft.period.PeriodStatus.fromString(std.mem.span(target_status)) orelse return false;
-    heft.period.Period.transition(h.sqlite, period_id, ts, std.mem.span(performed_by)) catch return false;
+    const ts = heft.period.PeriodStatus.fromString(std.mem.span(target_status)) orelse { setError(2); return false; };
+    heft.period.Period.transition(h.sqlite, period_id, ts, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_set_rounding_account(handle: ?*LedgerDB, book_id: i64, account_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.book.Book.setRoundingAccount(h.sqlite, book_id, account_id, std.mem.span(performed_by)) catch return false;
+    heft.book.Book.setRoundingAccount(h.sqlite, book_id, account_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, fiscal_year: i32, start_month: i32, granularity: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    const gran = heft.period.PeriodGranularity.fromString(std.mem.span(granularity)) orelse return false;
-    heft.period.Period.bulkCreate(h.sqlite, book_id, fiscal_year, start_month, gran, std.mem.span(performed_by)) catch return false;
+    const gran = heft.period.PeriodGranularity.fromString(std.mem.span(granularity)) orelse { setError(2); return false; };
+    heft.period.Period.bulkCreate(h.sqlite, book_id, fiscal_year, start_month, gran, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_create_draft(handle: ?*LedgerDB, book_id: i64, document_number: [*:0]const u8, transaction_date: [*:0]const u8, posting_date: [*:0]const u8, period_id: i64, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.entry.Entry.createDraft(h.sqlite, book_id, std.mem.span(document_number), std.mem.span(transaction_date), std.mem.span(posting_date), null, period_id, null, std.mem.span(performed_by)) catch -1;
+    return heft.entry.Entry.createDraft(h.sqlite, book_id, std.mem.span(document_number), std.mem.span(transaction_date), std.mem.span(posting_date), null, period_id, null, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
-pub export fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, performed_by: [*:0]const u8) i64 {
+pub export fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, counterparty_id: i64, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.entry.Entry.addLine(h.sqlite, entry_id, line_number, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, null, std.mem.span(performed_by)) catch -1;
+    const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;
+    return heft.entry.Entry.addLine(h.sqlite, entry_id, line_number, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, cp, null, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
+}
+
+pub export fn ledger_edit_draft(handle: ?*LedgerDB, entry_id: i64, document_number: [*:0]const u8, transaction_date: [*:0]const u8, posting_date: [*:0]const u8, description: ?[*:0]const u8, metadata: ?[*:0]const u8, period_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
+    const meta: ?[]const u8 = if (metadata) |m| std.mem.span(m) else null;
+    heft.entry.Entry.editDraft(h.sqlite, entry_id, std.mem.span(document_number), std.mem.span(transaction_date), std.mem.span(posting_date), desc, meta, period_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_edit_posted(handle: ?*LedgerDB, entry_id: i64, description: ?[*:0]const u8, metadata: ?[*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
+    const meta: ?[]const u8 = if (metadata) |m| std.mem.span(m) else null;
+    heft.entry.Entry.editPosted(h.sqlite, entry_id, desc, meta, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
 }
 
 pub export fn ledger_post_entry(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.post(h.sqlite, entry_id, std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.post(h.sqlite, entry_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_void_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.voidEntry(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.voidEntry(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_reverse_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]const u8, reversal_date: [*:0]const u8, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.entry.Entry.reverse(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(reversal_date), std.mem.span(performed_by)) catch -1;
+    return heft.entry.Entry.reverse(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(reversal_date), null, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_remove_line(handle: ?*LedgerDB, line_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.removeLine(h.sqlite, line_id, std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.removeLine(h.sqlite, line_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_delete_draft(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.deleteDraft(h.sqlite, entry_id, std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.deleteDraft(h.sqlite, entry_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_edit_line(handle: ?*LedgerDB, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, std.mem.span(performed_by)) catch return false;
+    heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, null, null, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_trial_balance(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8) ?*heft.report.ReportResult {
     const h = handle orelse return null;
-    return heft.report.trialBalance(h.sqlite, book_id, std.mem.span(as_of_date)) catch null;
+    return heft.report.trialBalance(h.sqlite, book_id, std.mem.span(as_of_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_income_statement(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.ReportResult {
     const h = handle orelse return null;
-    return heft.report.incomeStatement(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+    return heft.report.incomeStatement(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, fy_start_date: [*:0]const u8) ?*heft.report.ReportResult {
     const h = handle orelse return null;
-    return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch null;
+    return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_general_ledger(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
     const h = handle orelse return null;
-    return heft.report.generalLedger(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+    return heft.report.generalLedger(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_account_ledger(handle: ?*LedgerDB, book_id: i64, account_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
     const h = handle orelse return null;
-    return heft.report.accountLedger(h.sqlite, book_id, account_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+    return heft.report.accountLedger(h.sqlite, book_id, account_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_journal_register(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
     const h = handle orelse return null;
-    return heft.report.journalRegister(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch null;
+    return heft.report.journalRegister(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_free_ledger_result(result: ?*heft.report.LedgerResult) void {
@@ -211,41 +228,41 @@ pub export fn ledger_result_total_credits(result: ?*heft.report.ReportResult) i6
 
 pub export fn ledger_create_subledger_group(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, group_type: [*:0]const u8, group_number: i32, gl_account_id: i64, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.subledger.SubledgerGroup.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(group_type), group_number, gl_account_id, null, null, std.mem.span(performed_by)) catch -1;
+    return heft.subledger.SubledgerGroup.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(group_type), group_number, gl_account_id, null, null, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_create_subledger_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, group_id: i64, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.subledger.SubledgerAccount.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), std.mem.span(account_type), group_id, std.mem.span(performed_by)) catch -1;
+    return heft.subledger.SubledgerAccount.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), std.mem.span(account_type), group_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_create_classification(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, report_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    return heft.classification.Classification.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(report_type), std.mem.span(performed_by)) catch -1;
+    return heft.classification.Classification.create(h.sqlite, book_id, std.mem.span(name), std.mem.span(report_type), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_add_group_node(handle: ?*LedgerDB, classification_id: i64, label: [*:0]const u8, parent_id: i64, position: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
     const pid: ?i64 = if (parent_id == 0) null else parent_id;
-    return heft.classification.ClassificationNode.addGroup(h.sqlite, classification_id, std.mem.span(label), pid, position, std.mem.span(performed_by)) catch -1;
+    return heft.classification.ClassificationNode.addGroup(h.sqlite, classification_id, std.mem.span(label), pid, position, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_add_account_node(handle: ?*LedgerDB, classification_id: i64, account_id: i64, parent_id: i64, position: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
     const pid: ?i64 = if (parent_id == 0) null else parent_id;
-    return heft.classification.ClassificationNode.addAccount(h.sqlite, classification_id, account_id, pid, position, std.mem.span(performed_by)) catch -1;
+    return heft.classification.ClassificationNode.addAccount(h.sqlite, classification_id, account_id, pid, position, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
 pub export fn ledger_move_node(handle: ?*LedgerDB, node_id: i64, new_parent_id: i64, new_position: i32, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     const pid: ?i64 = if (new_parent_id == 0) null else new_parent_id;
-    heft.classification.ClassificationNode.move(h.sqlite, node_id, pid, new_position, std.mem.span(performed_by)) catch return false;
+    heft.classification.ClassificationNode.move(h.sqlite, node_id, pid, new_position, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_classified_report(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
     const h = handle orelse return null;
-    return heft.classification.classifiedReport(h.sqlite, classification_id, std.mem.span(as_of_date)) catch null;
+    return heft.classification.classifiedReport(h.sqlite, classification_id, std.mem.span(as_of_date)) catch |err| { setError(mapError(err)); return null; };
 }
 
 pub export fn ledger_free_classified_result(result: ?*heft.classification.ClassifiedResult) void {
@@ -255,13 +272,305 @@ pub export fn ledger_free_classified_result(result: ?*heft.classification.Classi
 
 pub export fn ledger_delete_classification(handle: ?*LedgerDB, classification_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.classification.Classification.delete(h.sqlite, classification_id, std.mem.span(performed_by)) catch return false;
+    heft.classification.Classification.delete(h.sqlite, classification_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
+}
+
+pub export fn ledger_verify(handle: ?*LedgerDB, book_id: i64, out_errors: *u32, out_warnings: *u32) bool {
+    const h = handle orelse return false;
+    const result = heft.verify_mod.verify(h.sqlite, book_id) catch |err| { setError(mapError(err)); return false; };
+    out_errors.* = result.errors;
+    out_warnings.* = result.warnings;
+    return result.passed();
 }
 
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch return false;
+    heft.book.Book.archive(h.sqlite, book_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+// ── Error Reporting ────────────────────────────────────────────
+
+threadlocal var last_error_code: i32 = 0;
+
+pub export fn ledger_last_error() i32 {
+    return last_error_code;
+}
+
+fn setError(code: i32) void {
+    last_error_code = code;
+}
+
+// Error codes for C consumers
+// 0 = no error, 1 = not found, 2 = invalid input, 3 = period closed,
+// 4 = period locked, 5 = already posted, 6 = unbalanced entry,
+// 7 = duplicate number, 8 = invalid transition, 9 = account inactive,
+// 10 = missing counterparty, 99 = unknown
+
+fn mapError(err: anyerror) i32 {
+    return switch (err) {
+        error.NotFound => 1,
+        error.InvalidInput => 2,
+        error.PeriodClosed => 3,
+        error.PeriodLocked => 4,
+        error.AlreadyPosted => 5,
+        error.UnbalancedEntry => 6,
+        error.DuplicateNumber => 7,
+        error.InvalidTransition => 8,
+        error.AccountInactive => 9,
+        error.MissingCounterparty => 10,
+        error.InvalidCounterparty => 11,
+        error.AmountOverflow => 12,
+        error.VoidReasonRequired => 13,
+        error.ReverseReasonRequired => 14,
+        error.CircularReference => 15,
+        error.TooFewLines => 16,
+        error.SchemaVersionMismatch => 17,
+        error.OutOfMemory => 18,
+        error.DraftNotFound => 19,
+        error.InvalidAmount => 20,
+        else => 99,
+    };
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
+fn safeBuf(buf: [*]u8, buf_len: i32) ?[]u8 {
+    if (buf_len <= 0) return null;
+    return buf[0..@intCast(buf_len)];
+}
+
+// ── CRUD Exports (Sprint 10) ──────────────────────────────────
+
+pub export fn ledger_update_book_name(handle: ?*LedgerDB, book_id: i64, new_name: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.updateName(h.sqlite, book_id, std.mem.span(new_name), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_update_account_name(handle: ?*LedgerDB, account_id: i64, new_name: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.account.Account.updateName(h.sqlite, account_id, std.mem.span(new_name), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_update_classification_name(handle: ?*LedgerDB, classification_id: i64, new_name: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.classification.Classification.updateName(h.sqlite, classification_id, std.mem.span(new_name), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_update_node_label(handle: ?*LedgerDB, node_id: i64, new_label: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.classification.ClassificationNode.updateLabel(h.sqlite, node_id, std.mem.span(new_label), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_delete_node(handle: ?*LedgerDB, node_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.classification.ClassificationNode.delete(h.sqlite, node_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_update_subledger_group_name(handle: ?*LedgerDB, group_id: i64, new_name: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.subledger.SubledgerGroup.updateName(h.sqlite, group_id, std.mem.span(new_name), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_delete_subledger_group(handle: ?*LedgerDB, group_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.subledger.SubledgerGroup.delete(h.sqlite, group_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_update_subledger_account_name(handle: ?*LedgerDB, account_id: i64, new_name: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.subledger.SubledgerAccount.updateName(h.sqlite, account_id, std.mem.span(new_name), std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+pub export fn ledger_delete_subledger_account(handle: ?*LedgerDB, account_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.subledger.SubledgerAccount.delete(h.sqlite, account_id, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
+    return true;
+}
+
+// ── Query/List Exports (buffer-based) ─────────────────────────
+// Pattern: write CSV/JSON into caller buffer, return bytes written or -1
+
+pub export fn ledger_get_book(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const result = heft.query_mod.getBook(h.sqlite, book_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_books(handle: ?*LedgerDB, status_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listBooks(h.sqlite, sf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_get_account(handle: ?*LedgerDB, account_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const result = heft.query_mod.getAccount(h.sqlite, account_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_accounts(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, status_filter: ?[*:0]const u8, name_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
+    const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
+    const ns: ?[]const u8 = if (name_search) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listAccounts(h.sqlite, book_id, tf, sf, ns, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_get_period(handle: ?*LedgerDB, period_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const result = heft.query_mod.getPeriod(h.sqlite, period_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_periods(handle: ?*LedgerDB, book_id: i64, year_filter: i32, status_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const yf: ?i32 = if (year_filter > 0) year_filter else null;
+    const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listPeriods(h.sqlite, book_id, yf, sf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_get_entry(handle: ?*LedgerDB, entry_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const result = heft.query_mod.getEntry(h.sqlite, entry_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_entries(handle: ?*LedgerDB, book_id: i64, status_filter: ?[*:0]const u8, start_date: ?[*:0]const u8, end_date: ?[*:0]const u8, doc_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const sf: ?[]const u8 = if (status_filter) |s| std.mem.span(s) else null;
+    const sd: ?[]const u8 = if (start_date) |s| std.mem.span(s) else null;
+    const ed: ?[]const u8 = if (end_date) |s| std.mem.span(s) else null;
+    const ds: ?[]const u8 = if (doc_search) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listEntries(h.sqlite, book_id, sf, sd, ed, ds, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_entry_lines(handle: ?*LedgerDB, entry_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const result = heft.query_mod.listEntryLines(h.sqlite, entry_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_classifications(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listClassifications(h.sqlite, book_id, tf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_subledger_groups(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listSubledgerGroups(h.sqlite, book_id, tf, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_subledger_accounts(handle: ?*LedgerDB, book_id: i64, group_filter: i64, name_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const gf: ?i64 = if (group_filter > 0) group_filter else null;
+    const ns: ?[]const u8 = if (name_search) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listSubledgerAccounts(h.sqlite, book_id, gf, ns, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_audit_log(handle: ?*LedgerDB, book_id: i64, entity_type: ?[*:0]const u8, action: ?[*:0]const u8, start_date: ?[*:0]const u8, end_date: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const et: ?[]const u8 = if (entity_type) |s| std.mem.span(s) else null;
+    const af: ?[]const u8 = if (action) |s| std.mem.span(s) else null;
+    const sd: ?[]const u8 = if (start_date) |s| std.mem.span(s) else null;
+    const ed: ?[]const u8 = if (end_date) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.listAuditLog(h.sqlite, book_id, et, af, sd, ed, order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+// ── Subledger Report Exports ──────────────────────────────────
+
+pub export fn ledger_subledger_report(handle: ?*LedgerDB, book_id: i64, group_id: i64, name_search: ?[*:0]const u8, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const gf: ?i64 = if (group_id > 0) group_id else null;
+    const ns: ?[]const u8 = if (name_search) |s| std.mem.span(s) else null;
+    const result = heft.query_mod.subledgerReport(h.sqlite, book_id, gf, ns, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_counterparty_ledger(handle: ?*LedgerDB, book_id: i64, counterparty_id: i64, account_filter: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const af: ?i64 = if (account_filter > 0) account_filter else null;
+    const result = heft.query_mod.counterpartyLedger(h.sqlite, book_id, counterparty_id, af, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_list_transactions(handle: ?*LedgerDB, book_id: i64, account_filter: i64, counterparty_filter: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const af: ?i64 = if (account_filter > 0) account_filter else null;
+    const cf: ?i64 = if (counterparty_filter > 0) counterparty_filter else null;
+    const result = heft.query_mod.listTransactions(h.sqlite, book_id, af, cf, std.mem.span(start_date), std.mem.span(end_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_subledger_reconciliation(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const result = heft.query_mod.subledgerReconciliation(h.sqlite, book_id, group_id, std.mem.span(as_of_date), safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+pub export fn ledger_aged_subledger(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 1) .json else .csv;
+    const order: heft.query_mod.SortOrder = if (sort_order == 1) .desc else .asc;
+    const gf: ?i64 = if (group_id > 0) group_id else null;
+    const result = heft.query_mod.agedSubledger(h.sqlite, book_id, gf, std.mem.span(as_of_date), order, limit, offset, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| { setError(mapError(err)); return -1; };
+    return @intCast(result.len);
+}
+
+// ── Fix: ledger_edit_line with description + counterparty ─────
+
+pub export fn ledger_edit_line_full(handle: ?*LedgerDB, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, counterparty_id: i64, description: ?[*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;
+    const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
+    heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, cp, desc, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
@@ -442,8 +751,8 @@ test "C ABI: full lifecycle book -> account -> period -> transition" {
         try std.testing.expect(period_id > 0);
 
         try std.testing.expect(ledger_transition_period(h, period_id, "soft_closed", "admin"));
-        try std.testing.expect(ledger_update_account_status(h, acct_id, "archived", "admin"));
         try std.testing.expect(ledger_set_rounding_account(h, book_id, acct_id, "admin"));
+        try std.testing.expect(ledger_update_account_status(h, acct_id, "archived", "admin"));
     }
 }
 
@@ -585,10 +894,10 @@ test "C ABI: full posting lifecycle through C boundary" {
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
         try std.testing.expect(entry_id > 0);
 
-        const line1 = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        const line1 = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
         try std.testing.expect(line1 > 0);
 
-        const line2 = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        const line2 = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         try std.testing.expect(line2 > 0);
 
         try std.testing.expect(ledger_post_entry(h, entry_id, "admin"));
@@ -615,8 +924,8 @@ test "C ABI: void entry through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         try std.testing.expect(ledger_void_entry(h, entry_id, "Error", "admin"));
@@ -637,8 +946,8 @@ test "C ABI: reverse entry through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const reversal_id = ledger_reverse_entry(h, entry_id, "Accrual reversal", "2026-01-31", "admin");
@@ -648,7 +957,7 @@ test "C ABI: reverse entry through C boundary" {
 
 test "C ABI: null handle returns error for Sprint 3 exports" {
     try std.testing.expectEqual(@as(i64, -1), ledger_create_draft(null, 1, "JE-001", "2026-01-15", "2026-01-15", 1, "admin"));
-    try std.testing.expectEqual(@as(i64, -1), ledger_add_line(null, 1, 1, 100, 0, "PHP", 10_000_000_000, 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_line(null, 1, 1, 100, 0, "PHP", 10_000_000_000, 1, 0, "admin"));
     try std.testing.expect(!ledger_post_entry(null, 1, "admin"));
     try std.testing.expect(!ledger_void_entry(null, 1, "Error", "admin"));
     try std.testing.expectEqual(@as(i64, -1), ledger_reverse_entry(null, 1, "Reason", "2026-01-31", "admin"));
@@ -670,7 +979,7 @@ test "C ABI: edit line through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
 
         try std.testing.expect(ledger_edit_line(h, line_id, 2_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin"));
     }
@@ -689,7 +998,7 @@ test "C ABI: remove line and delete draft through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
+        const line_id = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
 
         try std.testing.expect(ledger_remove_line(h, line_id, "admin"));
         try std.testing.expect(ledger_delete_draft(h, entry_id, "admin"));
@@ -712,8 +1021,8 @@ test "C ABI: trial balance through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const result = ledger_trial_balance(h, book_id, "2026-01-31");
@@ -741,8 +1050,8 @@ test "C ABI: income statement through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const result = ledger_income_statement(h, book_id, "2026-01-01", "2026-01-31");
@@ -769,8 +1078,8 @@ test "C ABI: balance sheet through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const result = ledger_balance_sheet(h, book_id, "2026-01-31", "2026-01-01");
@@ -818,8 +1127,8 @@ test "C ABI: classified report through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const cls_id = ledger_create_classification(h, book_id, "BS", "balance_sheet", "admin");
@@ -855,8 +1164,8 @@ test "C ABI: GL through C boundary" {
         _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
 
         const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
-        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, "admin");
-        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
         _ = ledger_post_entry(h, entry_id, "admin");
 
         const gl = ledger_general_ledger(h, book_id, "2026-01-01", "2026-01-31");
@@ -870,5 +1179,242 @@ test "C ABI: GL through C boundary" {
         const jr = ledger_journal_register(h, book_id, "2026-01-01", "2026-01-31");
         try std.testing.expect(jr != null);
         if (jr) |r| ledger_free_ledger_result(r);
+    }
+}
+
+test "C ABI: ledger_edit_draft changes header fields" {
+    defer cleanupTestFile("test-cabi-editdraft.ledger");
+    const handle = ledger_open("test-cabi-editdraft.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        try std.testing.expect(entry_id > 0);
+
+        // Edit the draft header
+        try std.testing.expect(ledger_edit_draft(h, entry_id, "JE-999", "2026-01-20", "2026-01-25", "Updated desc", null, 1, "admin"));
+
+        // Verify via null handle rejection
+        try std.testing.expect(!ledger_edit_draft(null, entry_id, "JE-999", "2026-01-20", "2026-01-25", null, null, 1, "admin"));
+    }
+}
+
+test "C ABI: ledger_edit_posted changes description on posted entry" {
+    defer cleanupTestFile("test-cabi-editposted.ledger");
+    const handle = ledger_open("test-cabi-editposted.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        // Edit description on posted entry
+        try std.testing.expect(ledger_edit_posted(h, entry_id, "Updated memo", null, "admin"));
+
+        // Null handle rejection
+        try std.testing.expect(!ledger_edit_posted(null, entry_id, "Memo", null, "admin"));
+    }
+}
+
+test "C ABI: ledger_free_classified_result with null is safe" {
+    ledger_free_classified_result(null);
+}
+
+test "C ABI: ledger_update_book_name" {
+    defer cleanupTestFile("test-cabi-updatename.ledger");
+    const handle = ledger_open("test-cabi-updatename.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Old", "PHP", 2, "admin");
+        try std.testing.expect(ledger_update_book_name(h, 1, "New", "admin"));
+        try std.testing.expect(!ledger_update_book_name(null, 1, "New", "admin"));
+    }
+}
+
+test "C ABI: ledger_update_account_name" {
+    defer cleanupTestFile("test-cabi-acctname.ledger");
+    const handle = ledger_open("test-cabi-acctname.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        try std.testing.expect(ledger_update_account_name(h, 1, "Petty Cash", "admin"));
+    }
+}
+
+test "C ABI: ledger_delete_node" {
+    defer cleanupTestFile("test-cabi-delnode.ledger");
+    const handle = ledger_open("test-cabi-delnode.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        const cid = ledger_create_classification(h, 1, "BS", "balance_sheet", "admin");
+        const gid = ledger_add_group_node(h, cid, "Assets", 0, 1, "admin");
+        try std.testing.expect(gid > 0);
+        try std.testing.expect(ledger_delete_node(h, gid, "admin"));
+    }
+}
+
+test "C ABI: ledger_get_book returns bytes" {
+    defer cleanupTestFile("test-cabi-getbook.ledger");
+    const handle = ledger_open("test-cabi-getbook.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        var buf: [4096]u8 = undefined;
+        const len = ledger_get_book(h, 1, &buf, 4096, 1);
+        try std.testing.expect(len > 0);
+        const json = buf[0..@intCast(len)];
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Test\"") != null);
+    }
+}
+
+test "C ABI: ledger_list_books returns paginated JSON" {
+    defer cleanupTestFile("test-cabi-listbooks.ledger");
+    const handle = ledger_open("test-cabi-listbooks.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Book A", "PHP", 2, "admin");
+        _ = ledger_create_book(h, "Book B", "USD", 2, "admin");
+        var buf: [8192]u8 = undefined;
+        const len = ledger_list_books(h, null, 0, 100, 0, &buf, 8192, 1);
+        try std.testing.expect(len > 0);
+        const json = buf[0..@intCast(len)];
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":2") != null);
+    }
+}
+
+test "C ABI: ledger_list_accounts with filter" {
+    defer cleanupTestFile("test-cabi-listaccts.ledger");
+    const handle = ledger_open("test-cabi-listaccts.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, 1, "2000", "AP", "liability", 0, "admin");
+        var buf: [8192]u8 = undefined;
+        const len = ledger_list_accounts(h, 1, "asset", null, null, 0, 100, 0, &buf, 8192, 1);
+        try std.testing.expect(len > 0);
+        const json = buf[0..@intCast(len)];
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":1") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "Cash") != null);
+    }
+}
+
+test "C ABI: ledger_list_entries with date range" {
+    defer cleanupTestFile("test-cabi-listentries.ledger");
+    const handle = ledger_open("test-cabi-listentries.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_period(h, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        _ = ledger_create_draft(h, 1, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        var buf: [16384]u8 = undefined;
+        const len = ledger_list_entries(h, 1, null, "2026-01-01", "2026-01-31", null, 0, 100, 0, &buf, 16384, 1);
+        try std.testing.expect(len > 0);
+        const json = buf[0..@intCast(len)];
+        try std.testing.expect(std.mem.indexOf(u8, json, "JE-001") != null);
+    }
+}
+
+test "C ABI: ledger_list_audit_log" {
+    defer cleanupTestFile("test-cabi-listaudit.ledger");
+    const handle = ledger_open("test-cabi-listaudit.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        var buf: [32768]u8 = undefined;
+        const len = ledger_list_audit_log(h, 1, null, null, null, null, 0, 100, 0, &buf, 32768, 1);
+        try std.testing.expect(len > 0);
+    }
+}
+
+test "C ABI: null handle returns -1 for all query exports" {
+    var buf: [1024]u8 = undefined;
+    try std.testing.expectEqual(@as(i32, -1), ledger_get_book(null, 1, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_books(null, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_get_account(null, 1, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_accounts(null, 1, null, null, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_get_period(null, 1, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_periods(null, 1, 0, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_get_entry(null, 1, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_entries(null, 1, null, null, null, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_entry_lines(null, 1, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_classifications(null, 1, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_subledger_groups(null, 1, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_subledger_accounts(null, 1, 0, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_audit_log(null, 1, null, null, null, null, 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_subledger_report(null, 1, 0, null, "2026-01-01", "2026-01-31", 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_counterparty_ledger(null, 1, 1, 0, "2026-01-01", "2026-01-31", 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_list_transactions(null, 1, 0, 0, "2026-01-01", "2026-01-31", 0, 100, 0, &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_subledger_reconciliation(null, 1, 1, "2026-01-31", &buf, 1024, 1));
+    try std.testing.expectEqual(@as(i32, -1), ledger_aged_subledger(null, 1, 0, "2026-01-31", 0, 100, 0, &buf, 1024, 1));
+}
+
+test "C ABI: null handle returns false for all CRUD exports" {
+    try std.testing.expect(!ledger_update_book_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_update_account_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_update_classification_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_update_node_label(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_delete_node(null, 1, "admin"));
+    try std.testing.expect(!ledger_update_subledger_group_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_delete_subledger_group(null, 1, "admin"));
+    try std.testing.expect(!ledger_update_subledger_account_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_delete_subledger_account(null, 1, "admin"));
+    try std.testing.expect(!ledger_edit_line_full(null, 1, 100, 0, "PHP", 10_000_000_000, 1, 0, null, "admin"));
+}
+
+test "C ABI: ledger_last_error returns error code after failure" {
+    defer cleanupTestFile("test-cabi-lasterr.ledger");
+    const handle = ledger_open("test-cabi-lasterr.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        // Create book succeeds — error should be 0
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        try std.testing.expect(book_id > 0);
+
+        // Try to create book with invalid currency — should fail and set error
+        const bad = ledger_create_book(h, "Bad", "XX", 2, "admin");
+        try std.testing.expectEqual(@as(i64, -1), bad);
+        const err = ledger_last_error();
+        try std.testing.expect(err > 0); // should be non-zero (InvalidInput = 2)
+    }
+}
+
+test "C ABI: ledger_last_error after post failure" {
+    defer cleanupTestFile("test-cabi-lasterr2.ledger");
+    const handle = ledger_open("test-cabi-lasterr2.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_period(h, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const eid = ledger_create_draft(h, 1, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        // Only 1 line — post should fail with TooFewLines
+        _ = ledger_add_line(h, eid, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        const posted = ledger_post_entry(h, eid, "admin");
+        try std.testing.expect(!posted);
+        const err = ledger_last_error();
+        try std.testing.expect(err > 0); // TooFewLines = 16
     }
 }
