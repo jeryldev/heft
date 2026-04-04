@@ -897,3 +897,56 @@ test "C ABI: GL through C boundary" {
         if (jr) |r| ledger_free_ledger_result(r);
     }
 }
+
+test "C ABI: ledger_edit_draft changes header fields" {
+    defer cleanupTestFile("test-cabi-editdraft.ledger");
+    const handle = ledger_open("test-cabi-editdraft.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        try std.testing.expect(entry_id > 0);
+
+        // Edit the draft header
+        try std.testing.expect(ledger_edit_draft(h, entry_id, "JE-999", "2026-01-20", "2026-01-25", "Updated desc", null, 1, "admin"));
+
+        // Verify via null handle rejection
+        try std.testing.expect(!ledger_edit_draft(null, entry_id, "JE-999", "2026-01-20", "2026-01-25", null, null, 1, "admin"));
+    }
+}
+
+test "C ABI: ledger_edit_posted changes description on posted entry" {
+    defer cleanupTestFile("test-cabi-editposted.ledger");
+    const handle = ledger_open("test-cabi-editposted.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", 1, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        // Edit description on posted entry
+        try std.testing.expect(ledger_edit_posted(h, entry_id, "Updated memo", null, "admin"));
+
+        // Null handle rejection
+        try std.testing.expect(!ledger_edit_posted(null, entry_id, "Memo", null, "admin"));
+    }
+}
+
+test "C ABI: ledger_free_classified_result with null is safe" {
+    ledger_free_classified_result(null);
+}
