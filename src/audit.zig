@@ -1,11 +1,25 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-const insert_sql: [*:0]const u8 =
+pub const insert_sql: [*:0]const u8 =
     \\INSERT INTO ledger_audit_log
     \\  (entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id)
     \\VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 ;
+
+fn bindAndStep(stmt: *db.Statement, entity_type: []const u8, entity_id: i64, action: []const u8, field_changed: ?[]const u8, old_value: ?[]const u8, new_value: ?[]const u8, performed_by: []const u8, book_id: i64) !void {
+    try stmt.bindText(1, entity_type);
+    try stmt.bindInt(2, entity_id);
+    try stmt.bindText(3, action);
+    if (field_changed) |f| try stmt.bindText(4, f) else try stmt.bindNull(4);
+    if (old_value) |o| try stmt.bindText(5, o) else try stmt.bindNull(5);
+    if (new_value) |n| try stmt.bindText(6, n) else try stmt.bindNull(6);
+    try stmt.bindText(7, performed_by);
+    try stmt.bindInt(8, book_id);
+    _ = try stmt.step();
+    stmt.reset();
+    stmt.clearBindings();
+}
 
 pub fn log(
     database: db.Database,
@@ -20,17 +34,21 @@ pub fn log(
 ) !void {
     var stmt = try database.prepare(insert_sql);
     defer stmt.finalize();
+    try bindAndStep(&stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
+}
 
-    try stmt.bindText(1, entity_type);
-    try stmt.bindInt(2, entity_id);
-    try stmt.bindText(3, action);
-    if (field_changed) |f| try stmt.bindText(4, f) else try stmt.bindNull(4);
-    if (old_value) |o| try stmt.bindText(5, o) else try stmt.bindNull(5);
-    if (new_value) |n| try stmt.bindText(6, n) else try stmt.bindNull(6);
-    try stmt.bindText(7, performed_by);
-    try stmt.bindInt(8, book_id);
-
-    _ = try stmt.step();
+pub fn logWithStmt(
+    stmt: *db.Statement,
+    entity_type: []const u8,
+    entity_id: i64,
+    action: []const u8,
+    field_changed: ?[]const u8,
+    old_value: ?[]const u8,
+    new_value: ?[]const u8,
+    performed_by: []const u8,
+    book_id: i64,
+) !void {
+    try bindAndStep(stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
 }
 
 // ── Tests ───────────────────────────────────────────────────────
