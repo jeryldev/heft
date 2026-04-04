@@ -1463,6 +1463,85 @@ test "JR: empty period returns zero" {
     try std.testing.expectEqual(@as(usize, 0), result.rows.len);
 }
 
+test "GL: reversed entry — reversal visible, original excluded" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+    _ = try entry_mod.Entry.reverse(database, 1, "Reversal", "2026-01-20", "admin");
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    // Original (reversed) excluded, reversal (posted) visible = 2 lines
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+}
+
+test "AL: opening balance from prior period" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // setupFullDb creates Jan (id=1) and Feb (id=2) periods
+    // Post in Jan
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 4 }});
+    // Post in Feb
+    try postEntry(database, "JE-002", "2026-02-15", 2, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 5 }});
+
+    // AL for Cash in Feb: should show only Feb transaction
+    // Running balance starts from 0 (within date range), not from opening
+    // The opening_balance field would be set from cache (future enhancement)
+    const result = try accountLedger(database, 1, 1, "2026-02-01", "2026-02-28");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 5_000_000_000_00), result.rows[0].debit_amount);
+}
+
+test "GL: multi-currency entries show base amounts" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Post USD entry at 56.50 PHP/USD
+    {
+        const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 565_000_000_000, 1, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 565_000_000_000, 4, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    // Should show BASE amounts (565_000_000_000), not transaction amounts
+    try std.testing.expect(result.rows.len >= 2);
+    try std.testing.expectEqual(@as(i64, 565_000_000_000), result.rows[0].debit_amount);
+}
+
+test "GL and JR: reports work on archived book" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try period_mod.Period.transition(database, 2, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 2, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const gl = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer gl.deinit();
+    try std.testing.expectEqual(@as(usize, 2), gl.rows.len);
+
+    const jr = try journalRegister(database, 1, "2026-01-01", "2026-01-31");
+    defer jr.deinit();
+    try std.testing.expectEqual(@as(usize, 2), jr.rows.len);
+
+    const al = try accountLedger(database, 1, 1, "2026-01-01", "2026-01-31");
+    defer al.deinit();
+    try std.testing.expectEqual(@as(usize, 1), al.rows.len);
+}
+
 test "JR: excludes void entries" {
     const database = try setupFullDb();
     defer database.close();
