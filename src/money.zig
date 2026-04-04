@@ -69,7 +69,8 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
 
         for (frac_str) |ch| {
             if (frac_digits >= scale_digits) break;
-            frac_part = frac_part * 10 + @as(i64, ch - '0');
+            frac_part = std.math.mul(i64, frac_part, 10) catch return error.AmountOverflow;
+            frac_part = std.math.add(i64, frac_part, @as(i64, ch - '0')) catch return error.AmountOverflow;
             frac_digits += 1;
         }
 

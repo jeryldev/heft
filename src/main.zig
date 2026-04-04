@@ -73,7 +73,7 @@ pub export fn ledger_create_book(handle: ?*LedgerDB, name: [*:0]const u8, base_c
 
 pub export fn ledger_create_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, is_contra: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
-    const at = heft.account.AccountType.fromString(std.mem.span(account_type)) orelse return -1;
+    const at = heft.account.AccountType.fromString(std.mem.span(account_type)) orelse { setError(2); return -1; };
     return heft.account.Account.create(h.sqlite, book_id, std.mem.span(number), std.mem.span(name), at, is_contra != 0, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return -1; };
 }
 
@@ -84,14 +84,14 @@ pub export fn ledger_create_period(handle: ?*LedgerDB, book_id: i64, name: [*:0]
 
 pub export fn ledger_update_account_status(handle: ?*LedgerDB, account_id: i64, new_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    const status = heft.account.AccountStatus.fromString(std.mem.span(new_status)) orelse return false;
+    const status = heft.account.AccountStatus.fromString(std.mem.span(new_status)) orelse { setError(2); return false; };
     heft.account.Account.updateStatus(h.sqlite, account_id, status, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
 
 pub export fn ledger_transition_period(handle: ?*LedgerDB, period_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    const ts = heft.period.PeriodStatus.fromString(std.mem.span(target_status)) orelse return false;
+    const ts = heft.period.PeriodStatus.fromString(std.mem.span(target_status)) orelse { setError(2); return false; };
     heft.period.Period.transition(h.sqlite, period_id, ts, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }
@@ -104,7 +104,7 @@ pub export fn ledger_set_rounding_account(handle: ?*LedgerDB, book_id: i64, acco
 
 pub export fn ledger_bulk_create_periods(handle: ?*LedgerDB, book_id: i64, fiscal_year: i32, start_month: i32, granularity: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
-    const gran = heft.period.PeriodGranularity.fromString(std.mem.span(granularity)) orelse return false;
+    const gran = heft.period.PeriodGranularity.fromString(std.mem.span(granularity)) orelse { setError(2); return false; };
     heft.period.Period.bulkCreate(h.sqlite, book_id, fiscal_year, start_month, gran, std.mem.span(performed_by)) catch |err| { setError(mapError(err)); return false; };
     return true;
 }

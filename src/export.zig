@@ -608,6 +608,7 @@ pub fn exportJournalEntries(database: db_mod.Database, book_id: i64, start_date:
                     prev_doc_len = copy_len;
                     entry_open = true;
                 } else {
+                    if (pos >= buf.len) return error.InvalidInput;
                     buf[pos] = ',';
                     pos += 1;
                 }

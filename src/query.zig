@@ -19,8 +19,9 @@ fn clampOffset(offset: i32) i32 {
 }
 
 fn writeJsonMeta(buf: []u8, total: i64, limit: i32, offset: i32) !usize {
+    const has_more = @as(i64, offset) + @as(i64, limit) < total;
     const s = std.fmt.bufPrint(buf, "{{\"total\":{d},\"limit\":{d},\"offset\":{d},\"has_more\":{s},\"rows\":[", .{
-        total, limit, offset, if (offset + limit < total) "true" else "false",
+        total, limit, offset, if (has_more) "true" else "false",
     }) catch return error.InvalidInput;
     return s.len;
 }
