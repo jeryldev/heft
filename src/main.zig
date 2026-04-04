@@ -743,13 +743,15 @@ test "C ABI: balance sheet through C boundary" {
     }
 }
 
-test "C ABI: null handle returns null for reports" {
+test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expect(ledger_trial_balance(null, 1, "2026-01-31") == null);
     try std.testing.expect(ledger_income_statement(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_balance_sheet(null, 1, "2026-01-31", "2026-01-01") == null);
     try std.testing.expect(ledger_general_ledger(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_account_ledger(null, 1, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_journal_register(null, 1, "2026-01-01", "2026-01-31") == null);
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_subledger_group(null, 1, "X", "customer", 1, 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_subledger_account(null, 1, "X", "X", "customer", 1, "admin"));
 }
 
 test "C ABI: free null results is safe" {

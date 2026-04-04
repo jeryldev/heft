@@ -333,3 +333,43 @@ test "posting to non-control account with counterparty rejected" {
     const result = entry_mod.Entry.post(database, 1, "admin");
     try std.testing.expectError(error.InvalidCounterparty, result);
 }
+
+test "duplicate subledger group rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    // Same type + group_number + book_id -> UNIQUE violation
+    const result = SubledgerGroup.create(database, 1, "Also Customers", "customer", 1, 2, null, null, "admin");
+    try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+test "transaction_history shows counterparty info for subledger entries" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    _ = try SubledgerAccount.create(database, 1, "C0001", "Juan dela Cruz", "customer", 1, "admin");
+
+    _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, "admin");
+
+    try database.exec(
+        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+        \\  transaction_currency, fx_rate, account_id, entry_id, counterparty_id)
+        \\VALUES (2, 0, 100000000000, 'PHP', 10000000000, 2, 1, 1);
+    );
+
+    try entry_mod.Entry.post(database, 1, "admin");
+
+    // Verify counterparty info in transaction_history view
+    var stmt = try database.prepare(
+        \\SELECT counterparty_number, counterparty_name, subledger_group_name
+        \\FROM ledger_transaction_history WHERE counterparty_id IS NOT NULL;
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("C0001", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("Juan dela Cruz", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("Customers", stmt.columnText(2).?);
+}
