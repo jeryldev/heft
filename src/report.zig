@@ -1,5 +1,29 @@
 const std = @import("std");
 const db = @import("db.zig");
+const cache = @import("cache.zig");
+
+fn ensureFreshCache(database: db.Database, book_id: i64, sql: [*:0]const u8, binds: anytype) !void {
+    var stmt = try database.prepare(sql);
+    defer stmt.finalize();
+    inline for (binds, 0..) |bind, i| {
+        const col: c_int = @intCast(i + 1);
+        switch (@TypeOf(bind)) {
+            i64 => try stmt.bindInt(col, bind),
+            []const u8 => try stmt.bindText(col, bind),
+            else => @compileError("unsupported bind type"),
+        }
+    }
+    var period_ids: [200]i64 = undefined;
+    var count: usize = 0;
+    while (try stmt.step()) {
+        if (count >= period_ids.len) break;
+        period_ids[count] = stmt.columnInt64(0);
+        count += 1;
+    }
+    if (count > 0) {
+        _ = try cache.recalculateStale(database, book_id, period_ids[0..count]);
+    }
+}
 
 pub const ReportRow = struct {
     account_id: i64,
@@ -51,6 +75,36 @@ pub const LedgerResult = struct {
     total_credits: i64,
 
     pub fn deinit(self: *LedgerResult) void {
+        self.arena.deinit();
+        std.heap.c_allocator.destroy(self);
+    }
+};
+
+pub const ComparativeReportRow = struct {
+    account_id: i64,
+    account_number: [50]u8,
+    account_number_len: usize,
+    account_name: [256]u8,
+    account_name_len: usize,
+    account_type: [16]u8,
+    account_type_len: usize,
+    current_debit: i64,
+    current_credit: i64,
+    prior_debit: i64,
+    prior_credit: i64,
+    variance_debit: i64,
+    variance_credit: i64,
+};
+
+pub const ComparativeReportResult = struct {
+    arena: std.heap.ArenaAllocator,
+    rows: []ComparativeReportRow,
+    current_total_debits: i64,
+    current_total_credits: i64,
+    prior_total_debits: i64,
+    prior_total_credits: i64,
+
+    pub fn deinit(self: *ComparativeReportResult) void {
         self.arena.deinit();
         std.heap.c_allocator.destroy(self);
     }
@@ -210,6 +264,13 @@ pub fn generalLedger(database: db.Database, book_id: i64, start_date: []const u8
 pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
     try verifyBookExists(database, book_id);
 
+    // Recalculate stale cache for opening balance periods and detail periods
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, end_date });
+
     // Determine running balance direction from account's normal_balance
     var mode: RunningMode = .debit_normal;
     {
@@ -300,6 +361,11 @@ const tb_sql: [*:0]const u8 =
 
 pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, as_of_date });
     return buildReportResult(database, tb_sql, .{ book_id, as_of_date });
 }
 
@@ -318,6 +384,11 @@ const is_sql: [*:0]const u8 =
 
 pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, start_date, end_date });
 
     const result = try std.heap.c_allocator.create(ReportResult);
     errdefer std.heap.c_allocator.destroy(result);
@@ -373,6 +444,22 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
     return result;
 }
 
+const tbm_sql: [*:0]const u8 =
+    \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
+    \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
+    \\FROM ledger_account_balances ab
+    \\JOIN ledger_accounts a ON a.id = ab.account_id
+    \\JOIN ledger_periods p ON p.id = ab.period_id
+    \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ?
+    \\GROUP BY a.id
+    \\ORDER BY a.number ASC;
+;
+
+pub fn trialBalanceMovement(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*ReportResult {
+    try verifyBookExists(database, book_id);
+    return buildReportResult(database, tbm_sql, .{ book_id, start_date, end_date });
+}
+
 const bs_sql: [*:0]const u8 =
     \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
     \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
@@ -398,6 +485,11 @@ const ni_sql: [*:0]const u8 =
 
 pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8, fy_start_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, as_of_date });
 
     // Get A/L/E rows using shared builder
     const result = try buildReportResult(database, bs_sql, .{ book_id, as_of_date });
@@ -426,6 +518,48 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
         }
     }
 
+    // Add synthetic net income row when retained_earnings_account_id is designated
+    var re_account_id: ?i64 = null;
+    {
+        var re_stmt = try database.prepare("SELECT retained_earnings_account_id FROM ledger_books WHERE id = ?;");
+        defer re_stmt.finalize();
+        try re_stmt.bindInt(1, book_id);
+        _ = try re_stmt.step();
+        const re_id = re_stmt.columnInt64(0);
+        if (re_id > 0) re_account_id = re_id;
+    }
+
+    if (re_account_id) |re_id| {
+        if (net_income != 0) {
+            var acct_stmt = try database.prepare("SELECT number, name FROM ledger_accounts WHERE id = ?;");
+            defer acct_stmt.finalize();
+            try acct_stmt.bindInt(1, re_id);
+            if (try acct_stmt.step()) {
+                var ni_row: ReportRow = std.mem.zeroes(ReportRow);
+                ni_row.account_id = re_id;
+                ni_row.account_number_len = copyText(&ni_row.account_number, acct_stmt.columnText(0));
+                ni_row.account_name_len = copyText(&ni_row.account_name, acct_stmt.columnText(1));
+                const ni_type = "equity";
+                ni_row.account_type_len = @min(ni_type.len, ni_row.account_type.len);
+                @memcpy(ni_row.account_type[0..ni_row.account_type_len], ni_type[0..ni_row.account_type_len]);
+
+                if (net_income > 0) {
+                    ni_row.credit_balance = net_income;
+                } else {
+                    const abs_ni = std.math.negate(net_income) catch return error.AmountOverflow;
+                    ni_row.debit_balance = abs_ni;
+                }
+
+                const allocator = result.arena.allocator();
+                const old_rows = result.rows;
+                const new_rows = try allocator.alloc(ReportRow, old_rows.len + 1);
+                @memcpy(new_rows[0..old_rows.len], old_rows);
+                new_rows[old_rows.len] = ni_row;
+                result.rows = new_rows;
+            }
+        }
+    }
+
     // Inject net income into totals (equity side)
     if (net_income > 0) {
         result.total_credits = std.math.add(i64, result.total_credits, net_income) catch return error.AmountOverflow;
@@ -435,6 +569,104 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
     }
 
     return result;
+}
+
+fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeReportResult {
+    const result = try std.heap.c_allocator.create(ComparativeReportResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    var rows = std.ArrayListUnmanaged(ComparativeReportRow){};
+
+    var prior_map = std.AutoHashMapUnmanaged(i64, usize){};
+    for (prior.rows, 0..) |_, idx| {
+        try prior_map.put(allocator, prior.rows[idx].account_id, idx);
+    }
+
+    var used_prior = std.AutoHashMapUnmanaged(i64, void){};
+    for (current.rows) |crow| {
+        var comp_row = std.mem.zeroes(ComparativeReportRow);
+        comp_row.account_id = crow.account_id;
+        comp_row.account_number_len = crow.account_number_len;
+        @memcpy(comp_row.account_number[0..crow.account_number_len], crow.account_number[0..crow.account_number_len]);
+        comp_row.account_name_len = crow.account_name_len;
+        @memcpy(comp_row.account_name[0..crow.account_name_len], crow.account_name[0..crow.account_name_len]);
+        comp_row.account_type_len = crow.account_type_len;
+        @memcpy(comp_row.account_type[0..crow.account_type_len], crow.account_type[0..crow.account_type_len]);
+        comp_row.current_debit = crow.debit_balance;
+        comp_row.current_credit = crow.credit_balance;
+
+        if (prior_map.get(crow.account_id)) |pidx| {
+            const prow = prior.rows[pidx];
+            comp_row.prior_debit = prow.debit_balance;
+            comp_row.prior_credit = prow.credit_balance;
+            try used_prior.put(allocator, crow.account_id, {});
+        }
+
+        comp_row.variance_debit = comp_row.current_debit - comp_row.prior_debit;
+        comp_row.variance_credit = comp_row.current_credit - comp_row.prior_credit;
+
+        try rows.append(allocator, comp_row);
+    }
+
+    for (prior.rows) |prow| {
+        if (used_prior.get(prow.account_id) == null) {
+            var comp_row = std.mem.zeroes(ComparativeReportRow);
+            comp_row.account_id = prow.account_id;
+            comp_row.account_number_len = prow.account_number_len;
+            @memcpy(comp_row.account_number[0..prow.account_number_len], prow.account_number[0..prow.account_number_len]);
+            comp_row.account_name_len = prow.account_name_len;
+            @memcpy(comp_row.account_name[0..prow.account_name_len], prow.account_name[0..prow.account_name_len]);
+            comp_row.account_type_len = prow.account_type_len;
+            @memcpy(comp_row.account_type[0..prow.account_type_len], prow.account_type[0..prow.account_type_len]);
+            comp_row.prior_debit = prow.debit_balance;
+            comp_row.prior_credit = prow.credit_balance;
+            comp_row.variance_debit = -prow.debit_balance;
+            comp_row.variance_credit = -prow.credit_balance;
+            try rows.append(allocator, comp_row);
+        }
+    }
+
+    result.rows = try rows.toOwnedSlice(allocator);
+    result.current_total_debits = current.total_debits;
+    result.current_total_credits = current.total_credits;
+    result.prior_total_debits = prior.total_debits;
+    result.prior_total_credits = prior.total_credits;
+    return result;
+}
+
+pub fn trialBalanceComparative(database: db.Database, book_id: i64, current_date: []const u8, prior_date: []const u8) !*ComparativeReportResult {
+    const current = try trialBalance(database, book_id, current_date);
+    defer current.deinit();
+    const prior = try trialBalance(database, book_id, prior_date);
+    defer prior.deinit();
+    return mergeComparative(current, prior);
+}
+
+pub fn incomeStatementComparative(database: db.Database, book_id: i64, cur_start: []const u8, cur_end: []const u8, prior_start: []const u8, prior_end: []const u8) !*ComparativeReportResult {
+    const current = try incomeStatement(database, book_id, cur_start, cur_end);
+    defer current.deinit();
+    const prior = try incomeStatement(database, book_id, prior_start, prior_end);
+    defer prior.deinit();
+    return mergeComparative(current, prior);
+}
+
+pub fn balanceSheetComparative(database: db.Database, book_id: i64, current_date: []const u8, prior_date: []const u8, fy_start: []const u8) !*ComparativeReportResult {
+    const current = try balanceSheet(database, book_id, current_date, fy_start);
+    defer current.deinit();
+    const prior = try balanceSheet(database, book_id, prior_date, fy_start);
+    defer prior.deinit();
+    return mergeComparative(current, prior);
+}
+
+pub fn trialBalanceMovementComparative(database: db.Database, book_id: i64, cur_start: []const u8, cur_end: []const u8, prior_start: []const u8, prior_end: []const u8) !*ComparativeReportResult {
+    const current = try trialBalanceMovement(database, book_id, cur_start, cur_end);
+    defer current.deinit();
+    const prior = try trialBalanceMovement(database, book_id, prior_start, prior_end);
+    defer prior.deinit();
+    return mergeComparative(current, prior);
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -1705,4 +1937,214 @@ test "BS: net income injection — revenue and expense flow into equity side" {
     try std.testing.expectEqual(result.total_debits, result.total_credits);
     // Verify net income was actually injected (total_credits > just Capital)
     try std.testing.expect(result.total_credits > 20_000_000_000_00);
+}
+
+// ── Balance Sheet: net income row tests ────────────────────────
+
+test "BS: net income row appears when RE account designated" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Designate Capital (id=3, equity) as retained earnings account
+    try book_mod.Book.setRetainedEarningsAccount(database, 1, 3, "admin");
+
+    // Revenue 1000, Expense 600 => net income 400
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 600_000_000_00, .account_id = 5 }}, &.{.{ .amount = 600_000_000_00, .account_id = 1 }});
+
+    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    // Find the synthetic net income row (RE account_id = 3)
+    var ni_row_found = false;
+    var ni_credit: i64 = 0;
+    for (result.rows) |row| {
+        if (row.account_id == 3) {
+            // Could be the natural Capital row or the synthetic NI row
+            // The synthetic NI row has credit_balance = 400 (net income)
+            if (row.credit_balance == 400_000_000_00) {
+                ni_row_found = true;
+                ni_credit = row.credit_balance;
+            }
+        }
+    }
+    try std.testing.expect(ni_row_found);
+    try std.testing.expectEqual(@as(i64, 400_000_000_00), ni_credit);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
+test "BS: no net income row when RE not designated" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Do NOT designate retained_earnings_account_id
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 600_000_000_00, .account_id = 5 }}, &.{.{ .amount = 600_000_000_00, .account_id = 1 }});
+
+    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    // Without RE designation: Cash (asset) only — no synthetic row
+    // Cash has activity, no other A/L/E accounts have activity
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
+test "BS: net loss shows as debit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try book_mod.Book.setRetainedEarningsAccount(database, 1, 3, "admin");
+
+    // Revenue 300, Expense 500 => net loss 200
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 300_000_000_00, .account_id = 1 }}, &.{.{ .amount = 300_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 500_000_000_00, .account_id = 5 }}, &.{.{ .amount = 500_000_000_00, .account_id = 1 }});
+
+    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    // Find the synthetic net loss row
+    var ni_debit: i64 = 0;
+    var ni_row_found = false;
+    for (result.rows) |row| {
+        if (row.account_id == 3 and row.debit_balance == 200_000_000_00) {
+            ni_row_found = true;
+            ni_debit = row.debit_balance;
+        }
+    }
+    try std.testing.expect(ni_row_found);
+    try std.testing.expectEqual(@as(i64, 200_000_000_00), ni_debit);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
+// ── Trial Balance Movement tests ───────────────────────────────
+
+test "TB Movement: shows all 5 account types" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 5 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 2 }});
+
+    const result = try trialBalanceMovement(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expect(result.rows.len >= 5);
+
+    var found_asset = false;
+    var found_liability = false;
+    var found_equity = false;
+    var found_revenue = false;
+    var found_expense = false;
+    for (result.rows) |row| {
+        const at = row.account_type[0..row.account_type_len];
+        if (std.mem.eql(u8, at, "asset")) found_asset = true;
+        if (std.mem.eql(u8, at, "liability")) found_liability = true;
+        if (std.mem.eql(u8, at, "equity")) found_equity = true;
+        if (std.mem.eql(u8, at, "revenue")) found_revenue = true;
+        if (std.mem.eql(u8, at, "expense")) found_expense = true;
+    }
+    try std.testing.expect(found_asset);
+    try std.testing.expect(found_liability);
+    try std.testing.expect(found_equity);
+    try std.testing.expect(found_revenue);
+    try std.testing.expect(found_expense);
+}
+
+test "TB Movement: empty period returns empty" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = try trialBalanceMovement(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+}
+
+test "TB Movement: shows only period activity, not cumulative" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 2 }});
+    try postEntry(database, "JE-002", "2026-02-15", 2, &.{.{ .amount = 500_000_000_00, .account_id = 1 }}, &.{.{ .amount = 500_000_000_00, .account_id = 4 }});
+
+    const result = try trialBalanceMovement(database, 1, "2026-02-01", "2026-02-28");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(i64, 500_000_000_00), result.total_debits);
+    try std.testing.expectEqual(@as(i64, 500_000_000_00), result.total_credits);
+}
+
+// ── Comparative Report Tests ────────────────────────────────────
+
+test "TB comparative: current and prior periods" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 2 }});
+    try postEntry(database, "JE-002", "2026-02-15", 2, &.{.{ .amount = 2_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 2_000_000_000_00, .account_id = 2 }});
+
+    const result = try trialBalanceComparative(database, 1, "2026-02-28", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+    try std.testing.expectEqual(result.current_total_debits, result.current_total_credits);
+    try std.testing.expectEqual(result.prior_total_debits, result.prior_total_credits);
+
+    for (result.rows) |row| {
+        try std.testing.expectEqual(row.current_debit - row.prior_debit, row.variance_debit);
+        try std.testing.expectEqual(row.current_credit - row.prior_credit, row.variance_credit);
+    }
+
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), result.prior_total_debits);
+    try std.testing.expectEqual(@as(i64, 3_000_000_000_00), result.current_total_debits);
+}
+
+test "IS comparative: account in current but not prior" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "JE-001", "2026-02-15", 2, &.{.{ .amount = 500_000_000_00, .account_id = 5 }}, &.{.{ .amount = 500_000_000_00, .account_id = 4 }});
+
+    const result = try incomeStatementComparative(database, 1, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expect(result.rows.len >= 2);
+
+    for (result.rows) |row| {
+        try std.testing.expectEqual(@as(i64, 0), row.prior_debit);
+        try std.testing.expectEqual(@as(i64, 0), row.prior_credit);
+        try std.testing.expectEqual(row.current_debit, row.variance_debit);
+        try std.testing.expectEqual(row.current_credit, row.variance_credit);
+    }
+}
+
+test "Comparative: account in prior but not current" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 700_000_000_00, .account_id = 5 }}, &.{.{ .amount = 700_000_000_00, .account_id = 4 }});
+
+    const result = try incomeStatementComparative(database, 1, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expect(result.rows.len >= 2);
+    try std.testing.expectEqual(@as(i64, 0), result.current_total_debits);
+    try std.testing.expectEqual(@as(i64, 0), result.current_total_credits);
+
+    for (result.rows) |row| {
+        try std.testing.expectEqual(@as(i64, 0), row.current_debit);
+        try std.testing.expectEqual(@as(i64, 0), row.current_credit);
+        try std.testing.expectEqual(-row.prior_debit, row.variance_debit);
+        try std.testing.expectEqual(-row.prior_credit, row.variance_credit);
+    }
 }

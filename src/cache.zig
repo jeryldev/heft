@@ -1,0 +1,202 @@
+const std = @import("std");
+const db = @import("db.zig");
+
+pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const i64) !u32 {
+    var count: u32 = 0;
+
+    for (period_ids) |period_id| {
+        var stale_stmt = try database.prepare(
+            \\SELECT account_id FROM ledger_account_balances
+            \\WHERE book_id = ? AND period_id = ? AND is_stale = 1;
+        );
+        defer stale_stmt.finalize();
+        try stale_stmt.bindInt(1, book_id);
+        try stale_stmt.bindInt(2, period_id);
+
+        while (try stale_stmt.step()) {
+            const account_id = stale_stmt.columnInt64(0);
+
+            var compute_stmt = try database.prepare(
+                \\SELECT COALESCE(SUM(el.base_debit_amount), 0),
+                \\       COALESCE(SUM(el.base_credit_amount), 0),
+                \\       COUNT(*)
+                \\FROM ledger_entry_lines el
+                \\JOIN ledger_entries e ON e.id = el.entry_id
+                \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
+                \\  AND el.account_id = ?;
+            );
+            defer compute_stmt.finalize();
+            try compute_stmt.bindInt(1, book_id);
+            try compute_stmt.bindInt(2, period_id);
+            try compute_stmt.bindInt(3, account_id);
+            _ = try compute_stmt.step();
+
+            const real_debit = compute_stmt.columnInt64(0);
+            const real_credit = compute_stmt.columnInt64(1);
+            const entry_count = compute_stmt.columnInt(2);
+
+            var update_stmt = try database.prepare(
+                \\UPDATE ledger_account_balances
+                \\SET debit_sum = ?, credit_sum = ?, balance = ? - ?,
+                \\    entry_count = ?, is_stale = 0,
+                \\    last_recalculated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE account_id = ? AND period_id = ?;
+            );
+            defer update_stmt.finalize();
+            try update_stmt.bindInt(1, real_debit);
+            try update_stmt.bindInt(2, real_credit);
+            try update_stmt.bindInt(3, real_debit);
+            try update_stmt.bindInt(4, real_credit);
+            try update_stmt.bindInt(5, @as(i64, @intCast(entry_count)));
+            try update_stmt.bindInt(6, account_id);
+            try update_stmt.bindInt(7, period_id);
+            _ = try update_stmt.step();
+
+            count += 1;
+        }
+    }
+
+    return count;
+}
+
+pub fn recalculateAllStale(database: db.Database, book_id: i64) !u32 {
+    var period_stmt = try database.prepare(
+        \\SELECT DISTINCT period_id FROM ledger_account_balances
+        \\WHERE book_id = ? AND is_stale = 1;
+    );
+    defer period_stmt.finalize();
+    try period_stmt.bindInt(1, book_id);
+
+    var period_ids: [200]i64 = undefined;
+    var period_count: usize = 0;
+    while (try period_stmt.step()) {
+        if (period_count >= period_ids.len) break;
+        period_ids[period_count] = period_stmt.columnInt64(0);
+        period_count += 1;
+    }
+
+    if (period_count == 0) return 0;
+    return try recalculateStale(database, book_id, period_ids[0..period_count]);
+}
+
+// ── Tests ───────────────────────────────────────────────────────
+
+const schema = @import("schema.zig");
+const book_mod = @import("book.zig");
+const account_mod = @import("account.zig");
+const period_mod = @import("period.zig");
+const entry_mod = @import("entry.zig");
+const money = @import("money.zig");
+const report = @import("report.zig");
+
+fn setupTestDb() !db.Database {
+    const database = try db.Database.open(":memory:");
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "2000", "Accounts Payable", .liability, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    return database;
+}
+
+fn postEntry(database: db.Database, doc: []const u8, date: []const u8, period_id: i64, debit_account: i64, credit_account: i64, amount: i64) !void {
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, doc, date, date, null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, amount, 0, "PHP", money.FX_RATE_SCALE, debit_account, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, amount, "PHP", money.FX_RATE_SCALE, credit_account, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+}
+
+fn markStale(database: db.Database, book_id: i64, period_id: i64) !void {
+    var stmt = try database.prepare(
+        \\UPDATE ledger_account_balances SET is_stale = 1
+        \\WHERE book_id = ? AND period_id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, period_id);
+    _ = try stmt.step();
+}
+
+fn corruptCache(database: db.Database, book_id: i64, period_id: i64) !void {
+    var stmt = try database.prepare(
+        \\UPDATE ledger_account_balances
+        \\SET debit_sum = 99999, credit_sum = 99999, balance = 0, is_stale = 1
+        \\WHERE book_id = ? AND period_id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, period_id);
+    _ = try stmt.step();
+}
+
+fn readCacheStale(database: db.Database, book_id: i64, period_id: i64, account_id: i64) !i32 {
+    var stmt = try database.prepare(
+        \\SELECT is_stale FROM ledger_account_balances
+        \\WHERE book_id = ? AND period_id = ? AND account_id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, period_id);
+    try stmt.bindInt(3, account_id);
+    if (try stmt.step()) return stmt.columnInt(0);
+    return -1;
+}
+
+test "recalculateStale fixes stale cache" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+
+    try markStale(database, 1, 1);
+    try std.testing.expectEqual(@as(i32, 1), try readCacheStale(database, 1, 1, 1));
+
+    const fixed = try recalculateStale(database, 1, &.{1});
+    try std.testing.expectEqual(@as(u32, 2), fixed);
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 1));
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 2));
+}
+
+test "recalculateAllStale finds all stale periods" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+    try postEntry(database, "JE-002", "2026-02-15", 2, 1, 2, 500_000_000_00);
+
+    try markStale(database, 1, 1);
+    try markStale(database, 1, 2);
+
+    const fixed = try recalculateAllStale(database, 1);
+    try std.testing.expectEqual(@as(u32, 4), fixed);
+
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 1));
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 2, 1));
+}
+
+test "recalculateStale no-op when nothing stale" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+
+    const fixed = try recalculateStale(database, 1, &.{1});
+    try std.testing.expectEqual(@as(u32, 0), fixed);
+}
+
+test "report auto-recalculates before querying" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+
+    try corruptCache(database, 1, 1);
+
+    const result = try report.trialBalance(database, 1, "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), result.total_debits);
+}
