@@ -35,8 +35,8 @@ pub const Dimension = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, dimension_type: DimensionType, performed_by: []const u8) !i64 {
         if (name.len == 0) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -60,13 +60,13 @@ pub const Dimension = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "dimension", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
     pub fn delete(database: db.Database, dimension_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -103,7 +103,7 @@ pub const Dimension = struct {
         }
 
         try audit.log(database, "dimension", dimension_id, "delete", null, null, null, performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 
@@ -111,8 +111,8 @@ pub const DimensionValue = struct {
     pub fn create(database: db.Database, dimension_id: i64, code: []const u8, label: []const u8, performed_by: []const u8) !i64 {
         if (code.len == 0 or label.len == 0) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -141,13 +141,13 @@ pub const DimensionValue = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "dimension_value", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
     pub fn delete(database: db.Database, value_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -181,14 +181,14 @@ pub const DimensionValue = struct {
         }
 
         try audit.log(database, "dimension_value", value_id, "delete", null, null, null, performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 
 pub const LineDimension = struct {
     pub fn assign(database: db.Database, line_id: i64, dimension_value_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -229,12 +229,12 @@ pub const LineDimension = struct {
         }
 
         try audit.log(database, "line_dimension", line_id, "assign", "dimension_value_id", null, null, performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn remove(database: db.Database, line_id: i64, dimension_value_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -261,7 +261,7 @@ pub const LineDimension = struct {
         }
 
         try audit.log(database, "line_dimension", line_id, "remove", "dimension_value_id", null, null, performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 

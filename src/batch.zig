@@ -51,10 +51,12 @@ pub fn batchVoid(database: db.Database, entry_ids: []const i64, reason: []const 
 }
 
 pub fn parseIdArray(json: []const u8, buf: *[1000]i64) !usize {
-    if (json.len < 2) return error.InvalidInput;
-    if (json[0] != '[' or json[json.len - 1] != ']') return error.InvalidInput;
+    const trimmed = std.mem.trim(u8, json, " \t\n");
 
-    const inner = json[1 .. json.len - 1];
+    if (trimmed.len < 2) return error.InvalidInput;
+    if (trimmed[0] != '[' or trimmed[trimmed.len - 1] != ']') return error.InvalidInput;
+
+    const inner = trimmed[1 .. trimmed.len - 1];
     if (inner.len == 0) return 0;
 
     var count: usize = 0;

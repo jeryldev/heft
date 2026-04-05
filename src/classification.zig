@@ -15,8 +15,8 @@ pub const Classification = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, report_type: []const u8, performed_by: []const u8) !i64 {
         if (!isValidType(report_type)) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -37,7 +37,7 @@ pub const Classification = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "classification", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -48,8 +48,8 @@ pub const Classification = struct {
         var old_name_len: usize = 0;
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT name, book_id FROM ledger_classifications WHERE id = ?;");
@@ -82,14 +82,14 @@ pub const Classification = struct {
 
         try audit.log(database, "classification", classification_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn delete(database: db.Database, classification_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT book_id FROM ledger_classifications WHERE id = ?;");
@@ -124,7 +124,7 @@ pub const Classification = struct {
 
         try audit.log(database, "classification", classification_id, "delete", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 
@@ -215,8 +215,8 @@ pub const ClassificationNode = struct {
     }
 
     pub fn addGroup(database: db.Database, classification_id: i64, label: []const u8, parent_id: ?i64, position: i32, performed_by: []const u8) !i64 {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         const book_id = try getBookId(database, classification_id);
 
@@ -243,15 +243,15 @@ pub const ClassificationNode = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "classification_node", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
     pub fn addAccount(database: db.Database, classification_id: i64, account_id: i64, parent_id: ?i64, position: i32, performed_by: []const u8) !i64 {
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -294,7 +294,7 @@ pub const ClassificationNode = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "classification_node", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -302,8 +302,8 @@ pub const ClassificationNode = struct {
         var book_id: i64 = 0;
         var old_depth: i32 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         try checkCycle(database, node_id, new_parent_id);
 
@@ -384,7 +384,7 @@ pub const ClassificationNode = struct {
 
         try audit.log(database, "classification_node", node_id, "move", "parent_id", null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn updateLabel(database: db.Database, node_id: i64, new_label: []const u8, performed_by: []const u8) !void {
@@ -394,8 +394,8 @@ pub const ClassificationNode = struct {
         var old_label_len: usize = 0;
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -433,15 +433,15 @@ pub const ClassificationNode = struct {
 
         try audit.log(database, "classification_node", node_id, "update", "label", old_label_buf[0..old_label_len], new_label, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn delete(database: db.Database, node_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
         var classification_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -502,7 +502,7 @@ pub const ClassificationNode = struct {
 
         try audit.log(database, "classification_node", node_id, "delete", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 

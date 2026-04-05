@@ -92,8 +92,8 @@ pub const Account = struct {
 
         const normal_balance = deriveNormalBalance(account_type, is_contra);
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -122,7 +122,7 @@ pub const Account = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "account", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -133,8 +133,8 @@ pub const Account = struct {
         var old_name_len: usize = 0;
         var acct_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT name, book_id, status FROM ledger_accounts WHERE id = ?;");
@@ -160,15 +160,15 @@ pub const Account = struct {
 
         try audit.log(database, "account", account_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, acct_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn updateStatus(database: db.Database, account_id: i64, target: AccountStatus, performed_by: []const u8) !void {
         var current: AccountStatus = undefined;
         var acct_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Fetch current status and book_id
         {
@@ -193,7 +193,7 @@ pub const Account = struct {
 
         try audit.log(database, "account", account_id, "update", "status", current.toString(), target.toString(), performed_by, acct_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 

@@ -9,6 +9,9 @@ pub const CurrencyRate = struct {
 };
 
 pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64, rates: []const CurrencyRate, performed_by: []const u8) !i64 {
+    const owns_txn = try database.beginTransactionIfNeeded();
+    errdefer if (owns_txn) database.rollback();
+
     var fx_gl_account_id: i64 = 0;
     var base_currency_buf: [4]u8 = undefined;
     var base_currency_len: usize = 0;
@@ -97,7 +100,10 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
         }
     }
 
-    if (adj_count == 0) return 0;
+    if (adj_count == 0) {
+        if (owns_txn) try database.commit();
+        return 0;
+    }
 
     var doc_buf: [32]u8 = undefined;
     const doc_number = std.fmt.bufPrint(&doc_buf, "REVAL-P{d}-FY{d}", .{ period_number, period_year }) catch unreachable;
@@ -134,6 +140,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
 
     try entry_mod.Entry.post(database, entry_id, performed_by);
 
+    if (owns_txn) try database.commit();
     return entry_id;
 }
 
@@ -183,7 +190,8 @@ pub fn parseRatesJson(json: []const u8, rates_buf: []CurrencyRate) !usize {
                     i += 1;
                 }
                 while (i < json.len and json[i] >= '0' and json[i] <= '9') {
-                    rate_val = rate_val * 10 + @as(i64, json[i] - '0');
+                    rate_val = std.math.mul(i64, rate_val, 10) catch return error.InvalidAmount;
+                    rate_val = std.math.add(i64, rate_val, @as(i64, json[i] - '0')) catch return error.InvalidAmount;
                     i += 1;
                 }
                 if (negative) rate_val = -rate_val;

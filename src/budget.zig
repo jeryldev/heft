@@ -29,8 +29,8 @@ pub const Budget = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, fiscal_year: i32, performed_by: []const u8) !i64 {
         if (name.len == 0) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -54,13 +54,13 @@ pub const Budget = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "budget", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
     pub fn delete(database: db.Database, budget_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -70,6 +70,15 @@ pub const Budget = struct {
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             book_id = stmt.columnInt64(0);
+        }
+
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
         {
@@ -87,14 +96,14 @@ pub const Budget = struct {
         }
 
         try audit.log(database, "budget", budget_id, "delete", null, null, null, performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 
 pub const BudgetLine = struct {
     pub fn set(database: db.Database, budget_id: i64, account_id: i64, period_id: i64, amount: i64, performed_by: []const u8) !i64 {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -139,9 +148,11 @@ pub const BudgetLine = struct {
         _ = try stmt.step();
 
         const id = database.lastInsertRowId();
-        try audit.log(database, "budget_line", id, "set", "amount", null, null, performed_by, book_id);
+        var amt_buf: [24]u8 = undefined;
+        const amt_str = std.fmt.bufPrint(&amt_buf, "{d}", .{amount}) catch unreachable;
+        try audit.log(database, "budget_line", id, "set", "amount", null, amt_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 };
