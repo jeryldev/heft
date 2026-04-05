@@ -3,11 +3,42 @@ const db = @import("db.zig");
 
 pub const insert_sql: [*:0]const u8 =
     \\INSERT INTO ledger_audit_log
-    \\  (entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id)
-    \\VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+    \\  (entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id, hash_chain)
+    \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 ;
 
-fn bindAndStep(stmt: *db.Statement, entity_type: []const u8, entity_id: i64, action: []const u8, field_changed: ?[]const u8, old_value: ?[]const u8, new_value: ?[]const u8, performed_by: []const u8, book_id: i64) !void {
+const genesis_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+
+fn computeHash(prev_hash: []const u8, entity_type: []const u8, entity_id: i64, action: []const u8) [64]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(prev_hash);
+    hasher.update(entity_type);
+    var id_buf: [20]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{entity_id}) catch unreachable;
+    hasher.update(id_str);
+    hasher.update(action);
+    const digest = hasher.finalResult();
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+fn getPreviousHash(database: db.Database) [64]u8 {
+    var stmt = database.prepare("SELECT hash_chain FROM ledger_audit_log ORDER BY id DESC LIMIT 1;") catch return genesis_hash.*;
+    defer stmt.finalize();
+    const has_row = stmt.step() catch return genesis_hash.*;
+    if (!has_row) return genesis_hash.*;
+    if (stmt.columnText(0)) |h| {
+        if (h.len == 64) {
+            var result: [64]u8 = undefined;
+            @memcpy(&result, h[0..64]);
+            return result;
+        }
+    }
+    return genesis_hash.*;
+}
+
+fn bindAndStep(database: db.Database, stmt: *db.Statement, entity_type: []const u8, entity_id: i64, action: []const u8, field_changed: ?[]const u8, old_value: ?[]const u8, new_value: ?[]const u8, performed_by: []const u8, book_id: i64) !void {
+    const prev_hash = getPreviousHash(database);
+    const hash = computeHash(&prev_hash, entity_type, entity_id, action);
     try stmt.bindText(1, entity_type);
     try stmt.bindInt(2, entity_id);
     try stmt.bindText(3, action);
@@ -16,6 +47,7 @@ fn bindAndStep(stmt: *db.Statement, entity_type: []const u8, entity_id: i64, act
     if (new_value) |n| try stmt.bindText(6, n) else try stmt.bindNull(6);
     try stmt.bindText(7, performed_by);
     try stmt.bindInt(8, book_id);
+    try stmt.bindText(9, &hash);
     _ = try stmt.step();
     stmt.reset();
     stmt.clearBindings();
@@ -34,15 +66,11 @@ pub fn log(
 ) !void {
     var stmt = try database.prepare(insert_sql);
     defer stmt.finalize();
-    try bindAndStep(&stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
+    try bindAndStep(database, &stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
 }
 
-/// Use when a function writes multiple audit entries in sequence (e.g., editLine
-/// logs up to 5 field changes, voidEntry logs status + reason, reverse logs 3).
-/// The caller prepares the statement once with audit.insert_sql, passes it here
-/// for each entry, and finalizes once at the end. Saves N-1 prepare/finalize
-/// cycles per function call.
 pub fn logWithStmt(
+    database: db.Database,
     stmt: *db.Statement,
     entity_type: []const u8,
     entity_id: i64,
@@ -53,7 +81,7 @@ pub fn logWithStmt(
     performed_by: []const u8,
     book_id: i64,
 ) !void {
-    try bindAndStep(stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
+    try bindAndStep(database, stmt, entity_type, entity_id, action, field_changed, old_value, new_value, performed_by, book_id);
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -170,9 +198,9 @@ test "logWithStmt writes three sequential entries correctly" {
     var stmt = try database.prepare(insert_sql);
     defer stmt.finalize();
 
-    try logWithStmt(&stmt, "entry_line", 1, "update", "debit_amount", "100", "200", "admin", 1);
-    try logWithStmt(&stmt, "entry_line", 1, "update", "credit_amount", "0", "50", "admin", 1);
-    try logWithStmt(&stmt, "entry_line", 1, "update", "fx_rate", "10000000000", "20000000000", "admin", 1);
+    try logWithStmt(database, &stmt, "entry_line", 1, "update", "debit_amount", "100", "200", "admin", 1);
+    try logWithStmt(database, &stmt, "entry_line", 1, "update", "credit_amount", "0", "50", "admin", 1);
+    try logWithStmt(database, &stmt, "entry_line", 1, "update", "fx_rate", "10000000000", "20000000000", "admin", 1);
     try database.commit();
 
     var count_stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log;");
@@ -189,8 +217,8 @@ test "logWithStmt resets statement between calls" {
     var stmt = try database.prepare(insert_sql);
     defer stmt.finalize();
 
-    try logWithStmt(&stmt, "book", 1, "update", "name", "Old", "New", "admin", 1);
-    try logWithStmt(&stmt, "account", 2, "create", null, null, null, "user1", 1);
+    try logWithStmt(database, &stmt, "book", 1, "update", "name", "Old", "New", "admin", 1);
+    try logWithStmt(database, &stmt, "account", 2, "create", null, null, null, "user1", 1);
     try database.commit();
 
     // Verify both entries have correct distinct data
@@ -270,4 +298,37 @@ test "audit log old_value/new_value at max length" {
     _ = try stmt.step();
     try std.testing.expectEqual(@as(usize, 4000), stmt.columnText(0).?.len);
     try std.testing.expectEqual(@as(usize, 4000), stmt.columnText(1).?.len);
+}
+
+test "hash chain populated on every audit insert" {
+    const database = try setupTestDb();
+    defer database.close();
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try log(database, "book", 1, "create", null, null, null, "admin", 1);
+    try log(database, "book", 1, "update", "name", "Old", "New", "admin", 1);
+    var stmt = try database.prepare("SELECT hash_chain FROM ledger_audit_log ORDER BY id;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    const h1_raw = stmt.columnText(0).?;
+    try std.testing.expectEqual(@as(usize, 64), h1_raw.len);
+    var h1_copy: [64]u8 = undefined;
+    @memcpy(&h1_copy, h1_raw[0..64]);
+    _ = try stmt.step();
+    const h2 = stmt.columnText(0).?;
+    try std.testing.expectEqual(@as(usize, 64), h2.len);
+    try std.testing.expect(!std.mem.eql(u8, &h1_copy, h2));
+}
+
+test "hash chain links from genesis hash" {
+    const database = try setupTestDb();
+    defer database.close();
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try log(database, "book", 1, "create", null, null, null, "admin", 1);
+    var stmt = try database.prepare("SELECT hash_chain FROM ledger_audit_log WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    var h1_buf: [64]u8 = undefined;
+    @memcpy(&h1_buf, stmt.columnText(0).?[0..64]);
+    const expected = computeHash(genesis_hash, "book", 1, "create");
+    try std.testing.expect(std.mem.eql(u8, &h1_buf, &expected));
 }

@@ -11,11 +11,35 @@ pub fn describeSchema(database: db.Database, buf: []u8, format: export_mod.Expor
         version = stmt.columnInt(0);
     }
 
+    var foreign_keys: i32 = 0;
+    var journal_mode_buf: [16]u8 = undefined;
+    var journal_mode_len: usize = 0;
+    {
+        var fk_stmt = try database.prepare("PRAGMA foreign_keys;");
+        defer fk_stmt.finalize();
+        _ = try fk_stmt.step();
+        foreign_keys = fk_stmt.columnInt(0);
+    }
+    {
+        var jm_stmt = try database.prepare("PRAGMA journal_mode;");
+        defer jm_stmt.finalize();
+        _ = try jm_stmt.step();
+        if (jm_stmt.columnText(0)) |jm| {
+            journal_mode_len = @min(jm.len, journal_mode_buf.len);
+            @memcpy(journal_mode_buf[0..journal_mode_len], jm[0..journal_mode_len]);
+        }
+    }
+    const journal_mode = journal_mode_buf[0..journal_mode_len];
+
     var pos: usize = 0;
 
     switch (format) {
         .json => {
-            const prefix = std.fmt.bufPrint(buf[pos..], "{{\"schema_version\":{d}", .{version}) catch return error.BufferTooSmall;
+            const prefix = std.fmt.bufPrint(buf[pos..], "{{\"schema_version\":{d},\"foreign_keys\":{s},\"journal_mode\":\"{s}\"", .{
+                version,
+                if (foreign_keys != 0) "true" else "false",
+                journal_mode,
+            }) catch return error.BufferTooSmall;
             pos += prefix.len;
 
             const object_types = [_]struct { key: []const u8, sql_type: []const u8 }{
@@ -68,7 +92,11 @@ pub fn describeSchema(database: db.Database, buf: []u8, format: export_mod.Expor
             pos += 1;
         },
         .csv => {
-            const header = std.fmt.bufPrint(buf[pos..], "# schema_version={d}\ntype,name,sql\n", .{version}) catch return error.BufferTooSmall;
+            const header = std.fmt.bufPrint(buf[pos..], "# schema_version={d}\n# foreign_keys={s}\n# journal_mode={s}\ntype,name,sql\n", .{
+                version,
+                if (foreign_keys != 0) "ON" else "OFF",
+                journal_mode,
+            }) catch return error.BufferTooSmall;
             pos += header.len;
 
             var stmt = try database.prepare("SELECT type, name, sql FROM sqlite_master WHERE name LIKE 'ledger_%' ORDER BY type, name;");

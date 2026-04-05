@@ -117,7 +117,7 @@ pub const Classification = struct {
             defer audit_stmt.finalize();
             while (try node_stmt.step()) {
                 const node_id = node_stmt.columnInt64(0);
-                try audit.logWithStmt(&audit_stmt, "classification_node", node_id, "delete", null, null, null, performed_by, book_id);
+                try audit.logWithStmt(database, &audit_stmt, "classification_node", node_id, "delete", null, null, null, performed_by, book_id);
             }
         }
 

@@ -283,25 +283,25 @@ pub const Entry = struct {
             if (old_debit != debit_amount) {
                 const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_debit}) catch unreachable;
                 const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{debit_amount}) catch unreachable;
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "debit_amount", old_s, new_s, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "debit_amount", old_s, new_s, performed_by, entry_book_id);
             }
             if (old_credit != credit_amount) {
                 const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_credit}) catch unreachable;
                 const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{credit_amount}) catch unreachable;
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "credit_amount", old_s, new_s, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "credit_amount", old_s, new_s, performed_by, entry_book_id);
             }
             if (!std.mem.eql(u8, old_currency_buf[0..old_currency_len], transaction_currency)) {
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "transaction_currency", old_currency_buf[0..old_currency_len], transaction_currency, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "transaction_currency", old_currency_buf[0..old_currency_len], transaction_currency, performed_by, entry_book_id);
             }
             if (old_fx != fx_rate) {
                 const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_fx}) catch unreachable;
                 const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{fx_rate}) catch unreachable;
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "fx_rate", old_s, new_s, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "fx_rate", old_s, new_s, performed_by, entry_book_id);
             }
             if (old_account != account_id) {
                 const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_account}) catch unreachable;
                 const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{account_id}) catch unreachable;
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "account_id", old_s, new_s, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "account_id", old_s, new_s, performed_by, entry_book_id);
             }
             const new_cp = counterparty_id orelse 0;
             if (old_counterparty != new_cp) {
@@ -311,12 +311,12 @@ pub const Entry = struct {
                 const new_cp_s: ?[]const u8 = if (counterparty_id) |cp| blk: {
                     break :blk std.fmt.bufPrint(&new_buf, "{d}", .{cp}) catch unreachable;
                 } else null;
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "counterparty_id", old_cp_s, new_cp_s, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "counterparty_id", old_cp_s, new_cp_s, performed_by, entry_book_id);
             }
             const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
             const new_desc = description orelse "";
             if (!std.mem.eql(u8, old_desc, new_desc)) {
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry_line", line_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
             }
         }
 
@@ -683,8 +683,8 @@ pub const Entry = struct {
         {
             var audit_stmt = try database.prepare(audit.insert_sql);
             defer audit_stmt.finalize();
-            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "void", "status", "posted", "void", performed_by, entry_book_id);
-            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "void", "void_reason", null, reason, performed_by, entry_book_id);
+            try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "void", "status", "posted", "void", performed_by, entry_book_id);
+            try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "void", "void_reason", null, reason, performed_by, entry_book_id);
         }
 
         if (owns_txn) try database.commit();
@@ -844,9 +844,9 @@ pub const Entry = struct {
         {
             var audit_stmt = try database.prepare(audit.insert_sql);
             defer audit_stmt.finalize();
-            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "reverse", "status", "posted", "reversed", performed_by, entry_book_id);
-            try audit.logWithStmt(&audit_stmt, "entry", entry_id, "reverse", "reversed_reason", null, reason, performed_by, entry_book_id);
-            try audit.logWithStmt(&audit_stmt, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
+            try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "reverse", "status", "posted", "reversed", performed_by, entry_book_id);
+            try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "reverse", "reversed_reason", null, reason, performed_by, entry_book_id);
+            try audit.logWithStmt(database, &audit_stmt, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
         }
 
         if (owns_txn) try database.commit();
@@ -952,25 +952,25 @@ pub const Entry = struct {
             defer audit_stmt.finalize();
 
             if (!std.mem.eql(u8, old_doc_buf[0..old_doc_len], document_number)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "document_number", old_doc_buf[0..old_doc_len], document_number, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "document_number", old_doc_buf[0..old_doc_len], document_number, performed_by, entry_book_id);
             }
             if (!std.mem.eql(u8, old_txn_date_buf[0..old_txn_date_len], transaction_date)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "transaction_date", old_txn_date_buf[0..old_txn_date_len], transaction_date, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "transaction_date", old_txn_date_buf[0..old_txn_date_len], transaction_date, performed_by, entry_book_id);
             }
             if (!std.mem.eql(u8, old_post_date_buf[0..old_post_date_len], posting_date)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "posting_date", old_post_date_buf[0..old_post_date_len], posting_date, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "posting_date", old_post_date_buf[0..old_post_date_len], posting_date, performed_by, entry_book_id);
             }
 
             const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
             const new_desc = description orelse "";
             if (!std.mem.eql(u8, old_desc, new_desc)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
             }
 
             const old_meta = if (old_has_meta) old_meta_buf[0..old_meta_len] else "";
             const new_meta = metadata orelse "";
             if (!std.mem.eql(u8, old_meta, new_meta)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "metadata", if (old_has_meta) old_meta_buf[0..old_meta_len] else null, metadata, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "metadata", if (old_has_meta) old_meta_buf[0..old_meta_len] else null, metadata, performed_by, entry_book_id);
             }
 
             if (old_period_id != period_id) {
@@ -978,7 +978,7 @@ pub const Entry = struct {
                 var new_buf: [amt_buf_len]u8 = undefined;
                 const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_period_id}) catch unreachable;
                 const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{period_id}) catch unreachable;
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "period_id", old_s, new_s, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "period_id", old_s, new_s, performed_by, entry_book_id);
             }
         }
 
@@ -1058,13 +1058,13 @@ pub const Entry = struct {
             const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
             const new_desc = description orelse "";
             if (!std.mem.eql(u8, old_desc, new_desc)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "description", if (old_has_desc) old_desc_buf[0..old_desc_len] else null, description, performed_by, entry_book_id);
             }
 
             const old_meta = if (old_has_meta) old_meta_buf[0..old_meta_len] else "";
             const new_meta = metadata orelse "";
             if (!std.mem.eql(u8, old_meta, new_meta)) {
-                try audit.logWithStmt(&audit_stmt, "entry", entry_id, "update", "metadata", if (old_has_meta) old_meta_buf[0..old_meta_len] else null, metadata, performed_by, entry_book_id);
+                try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "update", "metadata", if (old_has_meta) old_meta_buf[0..old_meta_len] else null, metadata, performed_by, entry_book_id);
             }
         }
 
