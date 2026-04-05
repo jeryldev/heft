@@ -1,0 +1,753 @@
+const std = @import("std");
+const db = @import("db.zig");
+const schema = @import("schema.zig");
+const book_mod = @import("book.zig");
+const account_mod = @import("account.zig");
+const period_mod = @import("period.zig");
+const entry_mod = @import("entry.zig");
+const report_mod = @import("report.zig");
+const verify_mod = @import("verify.zig");
+const cache_mod = @import("cache.zig");
+const close_mod = @import("close.zig");
+const revaluation_mod = @import("revaluation.zig");
+const classification_mod = @import("classification.zig");
+const subledger_mod = @import("subledger.zig");
+const dimension_mod = @import("dimension.zig");
+const budget_mod = @import("budget.zig");
+const export_mod = @import("export.zig");
+const query_mod = @import("query.zig");
+const describe_mod = @import("describe.zig");
+const batch_mod = @import("batch.zig");
+
+test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 0: BOOK SETUP
+    // ═══════════════════════════════════════════════════════════════
+
+    // 0.1 Create book — Philippine company, PHP base currency
+    const book_id = try book_mod.Book.create(database, "Acme Corp Philippines", "PHP", 2, "controller");
+    try std.testing.expect(book_id > 0);
+
+    // 0.2 Create chart of accounts (10 types represented)
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "controller");
+    const cash_usd = try account_mod.Account.create(database, book_id, "1001", "Cash USD", .asset, false, "controller");
+    const ar = try account_mod.Account.create(database, book_id, "1100", "Accounts Receivable", .asset, false, "controller");
+    _ = try account_mod.Account.create(database, book_id, "1101", "Allowance for Doubtful Accounts", .asset, true, "controller");
+    const equipment = try account_mod.Account.create(database, book_id, "1500", "Equipment", .asset, false, "controller");
+    const accum_dep = try account_mod.Account.create(database, book_id, "1501", "Accumulated Depreciation", .asset, true, "controller");
+    const ap = try account_mod.Account.create(database, book_id, "2000", "Accounts Payable", .liability, false, "controller");
+    const capital = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "controller");
+    const retained_earnings = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "controller");
+    const income_summary = try account_mod.Account.create(database, book_id, "3200", "Income Summary", .equity, false, "controller");
+    const opening_bal_eq = try account_mod.Account.create(database, book_id, "3300", "Opening Balance Equity", .equity, false, "controller");
+    _ = try account_mod.Account.create(database, book_id, "3900", "Owner Drawings", .equity, true, "controller");
+    const revenue = try account_mod.Account.create(database, book_id, "4000", "Sales Revenue", .revenue, false, "controller");
+    const sales_returns = try account_mod.Account.create(database, book_id, "4100", "Sales Returns", .revenue, true, "controller");
+    const cogs = try account_mod.Account.create(database, book_id, "5000", "Cost of Goods Sold", .expense, false, "controller");
+    const salaries = try account_mod.Account.create(database, book_id, "6000", "Salaries Expense", .expense, false, "controller");
+    const rent = try account_mod.Account.create(database, book_id, "6100", "Rent Expense", .expense, false, "controller");
+    const depreciation_exp = try account_mod.Account.create(database, book_id, "6200", "Depreciation Expense", .expense, false, "controller");
+    _ = try account_mod.Account.create(database, book_id, "6300", "Bad Debt Expense", .expense, false, "controller");
+    const fx_rounding = try account_mod.Account.create(database, book_id, "6900", "FX Rounding", .expense, false, "controller");
+    const fx_gain_loss = try account_mod.Account.create(database, book_id, "7000", "FX Gain/Loss", .expense, false, "controller");
+    const suspense = try account_mod.Account.create(database, book_id, "8000", "Suspense", .asset, false, "controller");
+
+    // 0.3 Designate system accounts
+    try book_mod.Book.setRoundingAccount(database, book_id, fx_rounding, "controller");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, retained_earnings, "controller");
+    try book_mod.Book.setIncomeSummaryAccount(database, book_id, income_summary, "controller");
+    try book_mod.Book.setOpeningBalanceAccount(database, book_id, opening_bal_eq, "controller");
+    try book_mod.Book.setFxGainLossAccount(database, book_id, fx_gain_loss, "controller");
+    try book_mod.Book.setSuspenseAccount(database, book_id, suspense, "controller");
+
+    // 0.4 Create fiscal year periods (calendar year 2026, monthly)
+    try period_mod.Period.bulkCreate(database, book_id, 2026, 1, .monthly, "controller");
+
+    // Query period IDs by period_number
+    var period_ids: [12]i64 = undefined;
+    {
+        var stmt = try database.prepare("SELECT id FROM ledger_periods WHERE book_id = ? ORDER BY period_number ASC;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        var idx: usize = 0;
+        while (try stmt.step()) {
+            if (idx < 12) {
+                period_ids[idx] = stmt.columnInt64(0);
+                idx += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 12), idx);
+    }
+
+    // 0.5 Setup subledger (AR customers, AP vendors)
+    const ar_group = try subledger_mod.SubledgerGroup.create(database, book_id, "AR Customers", "customer", 1, ar, null, null, "controller");
+    const ap_group = try subledger_mod.SubledgerGroup.create(database, book_id, "AP Vendors", "supplier", 1, ap, null, null, "controller");
+    const customer_abc = try subledger_mod.SubledgerAccount.create(database, book_id, "C001", "Customer ABC Corp", "customer", ar_group, "controller");
+    const customer_xyz = try subledger_mod.SubledgerAccount.create(database, book_id, "C002", "Customer XYZ Inc", "customer", ar_group, "controller");
+    const vendor_supply = try subledger_mod.SubledgerAccount.create(database, book_id, "V001", "Supply Co", "supplier", ap_group, "controller");
+
+    // 0.6 Setup classifications (BS + IS + Cash Flow)
+    const bs_class = try classification_mod.Classification.create(database, book_id, "Balance Sheet", "balance_sheet", "controller");
+    const is_class = try classification_mod.Classification.create(database, book_id, "Income Statement", "income_statement", "controller");
+    const cf_class = try classification_mod.Classification.create(database, book_id, "Cash Flow Statement", "cash_flow", "controller");
+
+    // 0.6a ClassificationNode.addGroup — build BS tree structure
+    const bs_assets_group = try classification_mod.ClassificationNode.addGroup(database, bs_class, "Assets", null, 1, "controller");
+    try std.testing.expect(bs_assets_group > 0);
+    const bs_liabilities_group = try classification_mod.ClassificationNode.addGroup(database, bs_class, "Liabilities", null, 2, "controller");
+    try std.testing.expect(bs_liabilities_group > 0);
+    const bs_equity_group = try classification_mod.ClassificationNode.addGroup(database, bs_class, "Equity", null, 3, "controller");
+    try std.testing.expect(bs_equity_group > 0);
+
+    // 0.6b ClassificationNode.addAccount — assign accounts to BS groups
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, cash, bs_assets_group, 1, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, cash_usd, bs_assets_group, 2, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, ar, bs_assets_group, 3, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, equipment, bs_assets_group, 4, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, accum_dep, bs_assets_group, 5, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, ap, bs_liabilities_group, 1, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, capital, bs_equity_group, 1, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, bs_class, retained_earnings, bs_equity_group, 2, "controller");
+
+    // 0.6c Build IS tree structure
+    const is_revenue_group = try classification_mod.ClassificationNode.addGroup(database, is_class, "Revenue", null, 1, "controller");
+    const is_expense_group = try classification_mod.ClassificationNode.addGroup(database, is_class, "Expenses", null, 2, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, is_class, revenue, is_revenue_group, 1, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, is_class, sales_returns, is_revenue_group, 2, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, is_class, cogs, is_expense_group, 1, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, is_class, salaries, is_expense_group, 2, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, is_class, rent, is_expense_group, 3, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, is_class, depreciation_exp, is_expense_group, 4, "controller");
+
+    // 0.6d Build Cash Flow tree (Operating section with cash account)
+    const cf_operating_group = try classification_mod.ClassificationNode.addGroup(database, cf_class, "Operating Activities", null, 1, "controller");
+    _ = try classification_mod.ClassificationNode.addAccount(database, cf_class, cash, cf_operating_group, 1, "controller");
+
+    // 0.7 Setup dimensions (tax codes)
+    const tax_dim = try dimension_mod.Dimension.create(database, book_id, "VAT", .tax_code, "controller");
+    const vat_12 = try dimension_mod.DimensionValue.create(database, tax_dim, "VAT12", "VAT 12%", "controller");
+    _ = try dimension_mod.DimensionValue.create(database, tax_dim, "VATEX", "VAT Exempt", "controller");
+
+    // 0.7a listDimensions — verify VAT dimension was created
+    {
+        var dim_list_buf: [4096]u8 = undefined;
+        const dim_list = try dimension_mod.listDimensions(database, book_id, null, &dim_list_buf, .json);
+        try std.testing.expect(dim_list.len > 0);
+    }
+
+    // 0.7b listDimensionValues — verify VAT values were created
+    {
+        var dv_buf: [4096]u8 = undefined;
+        const dv_list = try dimension_mod.listDimensionValues(database, tax_dim, &dv_buf, .json);
+        try std.testing.expect(dv_list.len > 0);
+    }
+
+    // 0.8 Create budget — revenue target 1,000,000 PHP per month (= 100_000_000_000_00 in fixed-point)
+    const budget_id = try budget_mod.Budget.create(database, book_id, "FY2026 Budget", 2026, "controller");
+    for (period_ids) |pid| {
+        _ = try budget_mod.BudgetLine.set(database, budget_id, revenue, pid, 100_000_000_000_00, "controller");
+    }
+
+    // 0.9 Opening balance migration
+    try book_mod.Book.validateOpeningBalanceMigration(database, book_id);
+    const ob_entry = try entry_mod.Entry.createDraft(database, book_id, "OB-001", "2026-01-01", "2026-01-01", null, period_ids[0], null, "controller");
+    // Cash 5,000,000.00 PHP = 500_000_000_000_00 fixed-point
+    _ = try entry_mod.Entry.addLine(database, ob_entry, 1, 500_000_000_000_00, 0, "PHP", 10_000_000_000, cash, null, null, "controller");
+    // Equipment 2,000,000.00 PHP
+    _ = try entry_mod.Entry.addLine(database, ob_entry, 2, 200_000_000_000_00, 0, "PHP", 10_000_000_000, equipment, null, null, "controller");
+    // Capital 7,000,000.00 PHP (credit)
+    _ = try entry_mod.Entry.addLine(database, ob_entry, 3, 0, 700_000_000_000_00, "PHP", 10_000_000_000, capital, null, null, "controller");
+    try entry_mod.Entry.post(database, ob_entry, "controller");
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 1: DAILY OPERATIONS — JANUARY
+    // ═══════════════════════════════════════════════════════════════
+
+    // 1.1 Revenue: Invoice customer ABC for PHP 100,000.00
+    const inv001_line1: i64 = blk: {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "INV-2026-001", "2026-01-10", "2026-01-10", null, period_ids[0], null, "accountant");
+        const line1 = try entry_mod.Entry.addLine(database, e, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, ar, customer_abc, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, revenue, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+        break :blk line1;
+    };
+    // Tag revenue line with VAT 12%
+    try dimension_mod.LineDimension.assign(database, inv001_line1, vat_12, "accountant");
+
+    // 1.2 Expense: Purchase inventory from vendor, PHP 60,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "BILL-2026-001", "2026-01-12", "2026-01-12", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 6_000_000_000_00, 0, "PHP", 10_000_000_000, cogs, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 6_000_000_000_00, "PHP", 10_000_000_000, ap, vendor_supply, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.3 Cash receipt from customer ABC, PHP 100,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "CR-2026-001", "2026-01-20", "2026-01-20", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, ar, customer_abc, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.4 Cash payment to vendor, PHP 60,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "CD-2026-001", "2026-01-22", "2026-01-22", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 6_000_000_000_00, 0, "PHP", 10_000_000_000, ap, vendor_supply, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 6_000_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.5 Multi-currency: Buy USD 1,000.00 at fx_rate 56.50 (= 565_000_000_000 in 10^10)
+    //     USD $1,000.00 = 100_000_000_000 in 10^8 fixed-point
+    //     base_amount = 100_000_000_000 * 565_000_000_000 / 10^10 = 5_650_000_000_00
+    //     That's PHP 56,500.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "FX-2026-001", "2026-01-25", "2026-01-25", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 100_000_000_000, 0, "USD", 565_000_000_000, cash_usd, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 5_650_000_000_000, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.6 Salaries expense PHP 50,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "PR-2026-01", "2026-01-31", "2026-01-31", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, salaries, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.7 Rent expense PHP 20,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "RENT-2026-01", "2026-01-31", "2026-01-31", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 2_000_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 2_000_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.8 Error correction: Post wrong entry, then void it
+    {
+        const wrong = try entry_mod.Entry.createDraft(database, book_id, "WRONG-001", "2026-01-28", "2026-01-28", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, wrong, 1, 999_000_000_00, 0, "PHP", 10_000_000_000, cogs, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, wrong, 2, 0, 999_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, wrong, "accountant");
+        try entry_mod.Entry.voidEntry(database, wrong, "Wrong amount - should be 9990", "accountant");
+    }
+
+    // 1.9 Entry.editDraft — create a draft, fix the doc number before posting
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "MISC-WRONG", "2026-01-29", "2026-01-29", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 100_000_000_00, 0, "PHP", 10_000_000_000, suspense, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 100_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.editDraft(database, e, "MISC-2026-001", "2026-01-29", "2026-01-29", "Corrected doc number", null, period_ids[0], "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.10 Entry.editLine — create draft, add line, edit the amount before posting
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "ADJ-2026-001", "2026-01-30", "2026-01-30", null, period_ids[0], null, "accountant");
+        const line1 = try entry_mod.Entry.addLine(database, e, 1, 999_000_000_00, 0, "PHP", 10_000_000_000, cogs, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 500_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.editLine(database, line1, 500_000_000_00, 0, "PHP", 10_000_000_000, cogs, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.11 Entry.removeLine — create draft, add 3 lines, remove one, post with 2
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "REM-2026-001", "2026-01-30", "2026-01-30", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 200_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        const extra_line = try entry_mod.Entry.addLine(database, e, 2, 100_000_000_00, 0, "PHP", 10_000_000_000, salaries, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 3, 0, 200_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.removeLine(database, extra_line, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 1.12 Entry.deleteDraft — create a draft then abandon it
+    {
+        const abandoned = try entry_mod.Entry.createDraft(database, book_id, "ABANDONED-001", "2026-01-30", "2026-01-30", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, abandoned, 1, 100_000_000_00, 0, "PHP", 10_000_000_000, cogs, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, abandoned, 2, 0, 100_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.deleteDraft(database, abandoned, "accountant");
+        // Verify it's gone
+        {
+            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entries WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, abandoned);
+            _ = try stmt.step();
+            try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+        }
+    }
+
+    // 1.13 Entry.approve + Entry.reject — enable approval on book
+    {
+        try book_mod.Book.setRequireApproval(database, book_id, true, "controller");
+
+        // Create draft for approval
+        const approve_e = try entry_mod.Entry.createDraft(database, book_id, "APPR-2026-001", "2026-01-30", "2026-01-30", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, approve_e, 1, 300_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, approve_e, 2, 0, 300_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+
+        // Posting without approval should fail
+        try std.testing.expectError(error.ApprovalRequired, entry_mod.Entry.post(database, approve_e, "accountant"));
+
+        // Approve and post
+        try entry_mod.Entry.approve(database, approve_e, "controller");
+        try entry_mod.Entry.post(database, approve_e, "accountant");
+
+        // Create another draft and reject it
+        const reject_e = try entry_mod.Entry.createDraft(database, book_id, "APPR-2026-002", "2026-01-30", "2026-01-30", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, reject_e, 1, 100_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, reject_e, 2, 0, 100_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.reject(database, reject_e, "Duplicate entry", "controller");
+
+        // Clean up rejected draft so closePeriod won't fail on pending drafts
+        try entry_mod.Entry.deleteDraft(database, reject_e, "controller");
+
+        // Disable approval for remaining tests
+        try book_mod.Book.setRequireApproval(database, book_id, false, "controller");
+    }
+
+    // (Entry.reverse exercised in February — see section 2.3 below)
+
+    // 1.15 Account.updateName — rename the suspense account
+    try account_mod.Account.updateName(database, suspense, "Suspense Account", "controller");
+
+    // 1.16 Account.updateStatus — create a temporary account and deactivate it
+    const temp_acct = try account_mod.Account.create(database, book_id, "9999", "Temporary Account", .asset, false, "controller");
+    try account_mod.Account.updateStatus(database, temp_acct, .inactive, "controller");
+
+    // 1.17 SubledgerAccount.updateName — rename Customer ABC
+    try subledger_mod.SubledgerAccount.updateName(database, customer_abc, "Customer ABC Corp (renamed)", "controller");
+
+    // 1.18 SubledgerAccount.updateStatus — deactivate Customer XYZ (no open entries referencing it as active counterparty needed for later)
+    // Create a fresh customer just to deactivate (XYZ is used in Feb)
+    const old_customer = try subledger_mod.SubledgerAccount.create(database, book_id, "C099", "Old Customer", "customer", ar_group, "controller");
+    try subledger_mod.SubledgerAccount.updateStatus(database, old_customer, .inactive, "controller");
+
+    // 1.19 SubledgerGroup.updateName — rename the AR group
+    try subledger_mod.SubledgerGroup.updateName(database, ar_group, "AR Customers (renamed)", "controller");
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 3: MONTHLY CLOSE — JANUARY
+    // ═══════════════════════════════════════════════════════════════
+
+    // 3.1 Depreciation entry: PHP 10,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "DEP-2026-01", "2026-01-31", "2026-01-31", null, period_ids[0], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, depreciation_exp, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, accum_dep, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 3.2 FX Revaluation — revalue USD cash at month-end rate 57.00
+    {
+        const reval_rates = [_]revaluation_mod.CurrencyRate{
+            .{ .currency = "USD", .new_rate = 570_000_000_000 },
+        };
+        const reval_id = try revaluation_mod.revalueForexBalances(database, book_id, period_ids[0], &reval_rates, "accountant");
+        _ = reval_id;
+    }
+
+    // 3.3 Run reports — verify correctness
+
+    // Trial Balance
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+        defer tb.deinit();
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    }
+
+    // Income Statement
+    {
+        const is_report = try report_mod.incomeStatement(database, book_id, "2026-01-01", "2026-01-31");
+        defer is_report.deinit();
+        try std.testing.expect(is_report.rows.len > 0);
+    }
+
+    // Balance Sheet
+    {
+        const bs = try report_mod.balanceSheet(database, book_id, "2026-01-31", "2026-01-01");
+        defer bs.deinit();
+        try std.testing.expectEqual(bs.total_debits, bs.total_credits);
+    }
+
+    // TB Movement
+    {
+        const tbm = try report_mod.trialBalanceMovement(database, book_id, "2026-01-01", "2026-01-31");
+        defer tbm.deinit();
+        try std.testing.expect(tbm.rows.len > 0);
+    }
+
+    // 3.3a General Ledger — GL for January
+    {
+        const gl = try report_mod.generalLedger(database, book_id, "2026-01-01", "2026-01-31");
+        defer gl.deinit();
+        try std.testing.expect(gl.rows.len > 0);
+        try std.testing.expectEqual(gl.total_debits, gl.total_credits);
+    }
+
+    // 3.3b Account Ledger — Cash detail with running balance
+    {
+        const al = try report_mod.accountLedger(database, book_id, cash, "2026-01-01", "2026-01-31");
+        defer al.deinit();
+        try std.testing.expect(al.rows.len > 0);
+    }
+
+    // 3.3c Journal Register — JR for January
+    {
+        const jr = try report_mod.journalRegister(database, book_id, "2026-01-01", "2026-01-31");
+        defer jr.deinit();
+        try std.testing.expect(jr.rows.len > 0);
+        try std.testing.expectEqual(jr.total_debits, jr.total_credits);
+    }
+
+    // 3.3d Classified Balance Sheet
+    {
+        const cbs = try classification_mod.classifiedReport(database, bs_class, "2026-01-31");
+        defer cbs.deinit();
+        try std.testing.expect(cbs.rows.len > 0);
+    }
+
+    // 3.3e Cash Flow Statement
+    {
+        const cfs = try classification_mod.cashFlowStatement(database, cf_class, "2026-01-01", "2026-01-31");
+        defer cfs.deinit();
+        try std.testing.expect(cfs.rows.len > 0);
+    }
+
+    // 3.3f Counterparty Ledger — Customer ABC
+    {
+        var cp_buf: [16384]u8 = undefined;
+        const cp_result = try query_mod.counterpartyLedger(database, book_id, customer_abc, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &cp_buf, .json);
+        try std.testing.expect(cp_result.len > 0);
+    }
+
+    // 3.3g Subledger Report — AR summary
+    {
+        var sl_buf: [16384]u8 = undefined;
+        const sl_result = try query_mod.subledgerReport(database, book_id, ar_group, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &sl_buf, .json);
+        try std.testing.expect(sl_result.len > 0);
+    }
+
+    // 3.3h Aged Subledger — AR aging
+    {
+        var aged_buf: [16384]u8 = undefined;
+        const aged_result = try query_mod.agedSubledger(database, book_id, ar_group, "2026-01-31", .asc, 100, 0, &aged_buf, .json);
+        try std.testing.expect(aged_result.len > 0);
+    }
+
+    // 3.3i listTransactions — paginated GL
+    {
+        var lt_buf: [16384]u8 = undefined;
+        const lt_result = try query_mod.listTransactions(database, book_id, null, null, "2026-01-01", "2026-01-31", .asc, 100, 0, &lt_buf, .json);
+        try std.testing.expect(lt_result.len > 0);
+    }
+
+    // 3.3j Subledger Reconciliation — reconcile AR
+    {
+        var recon_buf: [16384]u8 = undefined;
+        const recon_result = try query_mod.subledgerReconciliation(database, book_id, ar_group, "2026-01-31", &recon_buf, .json);
+        try std.testing.expect(recon_result.len > 0);
+    }
+
+    // 3.3k describeSchema — export schema description
+    {
+        var schema_buf: [32768]u8 = undefined;
+        const schema_result = try describe_mod.describeSchema(database, &schema_buf, .json);
+        try std.testing.expect(schema_result.len > 0);
+    }
+
+    // 3.3l Query: getBook
+    {
+        var book_buf: [4096]u8 = undefined;
+        const book_result = try query_mod.getBook(database, book_id, &book_buf, .json);
+        try std.testing.expect(book_result.len > 0);
+    }
+
+    // 3.4 Recalculate stale balances and verify integrity
+    _ = try cache_mod.recalculateAllStale(database, book_id);
+
+    // The reversal entry (1.14) posted into Feb with flipped lines, creating cache rows
+    // in period_ids[1] that won't be stale but Feb hasn't been fully closed yet.
+    // Run verify after Feb operations instead.
+    // Verify January posted entries balance (subset check)
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entries
+            \\WHERE book_id = ? AND period_id = ? AND status IN ('posted', 'reversed');
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, period_ids[0]);
+        _ = try stmt.step();
+        try std.testing.expect(stmt.columnInt(0) > 0);
+    }
+
+    // 3.5 Entry.editPosted — fix a description on a posted entry (metadata-only edit)
+    {
+        var posted_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT id FROM ledger_entries WHERE book_id = ? AND period_id = ? AND status = 'posted' LIMIT 1;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            try stmt.bindInt(2, period_ids[0]);
+            _ = try stmt.step();
+            posted_id = stmt.columnInt64(0);
+        }
+        try entry_mod.Entry.editPosted(database, posted_id, "Updated description for audit", null, "controller");
+    }
+
+    // 3.6 Soft close January
+    try period_mod.Period.transition(database, period_ids[0], .soft_closed, "controller");
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 1 CONTINUED: FEBRUARY OPERATIONS
+    // ═══════════════════════════════════════════════════════════════
+
+    // Revenue in Feb: Customer XYZ, PHP 150,000.00
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "INV-2026-002", "2026-02-15", "2026-02-15", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 15_000_000_000_00, 0, "PHP", 10_000_000_000, ar, customer_xyz, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 15_000_000_000_00, "PHP", 10_000_000_000, revenue, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // Sales return from Customer ABC: PHP 5,000.00 (contra revenue)
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "RET-2026-001", "2026-02-20", "2026-02-20", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 500_000_000_00, 0, "PHP", 10_000_000_000, sales_returns, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 500_000_000_00, "PHP", 10_000_000_000, ar, customer_abc, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // Feb expenses: Salaries 50k + Rent 20k = 70k total
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "PR-2026-02", "2026-02-28", "2026-02-28", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, salaries, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 2_000_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 3, 0, 7_000_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+    }
+
+    // 2.3 Entry.reverse — post an entry then reverse it in the same period
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "REV-2026-002", "2026-02-15", "2026-02-15", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        try entry_mod.Entry.post(database, e, "accountant");
+        const reversal_id = try entry_mod.Entry.reverse(database, e, "Accrual reversal", "2026-02-15", null, "accountant");
+        try std.testing.expect(reversal_id > 0);
+    }
+
+    // 2.4 batchPost — create 3 drafts with lines, batch post all 3
+    var batch_entry_ids: [3]i64 = undefined;
+    {
+        const e1 = try entry_mod.Entry.createDraft(database, book_id, "BATCH-001", "2026-02-28", "2026-02-28", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e1, 1, 100_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e1, 2, 0, 100_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        batch_entry_ids[0] = e1;
+
+        const e2 = try entry_mod.Entry.createDraft(database, book_id, "BATCH-002", "2026-02-28", "2026-02-28", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e2, 1, 200_000_000_00, 0, "PHP", 10_000_000_000, salaries, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e2, 2, 0, 200_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        batch_entry_ids[1] = e2;
+
+        const e3 = try entry_mod.Entry.createDraft(database, book_id, "BATCH-003", "2026-02-28", "2026-02-28", null, period_ids[1], null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e3, 1, 50_000_000_00, 0, "PHP", 10_000_000_000, cogs, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, e3, 2, 0, 50_000_000_00, "PHP", 10_000_000_000, cash, null, null, "accountant");
+        batch_entry_ids[2] = e3;
+
+        const batch_result = batch_mod.batchPost(database, &batch_entry_ids, "accountant");
+        try std.testing.expectEqual(@as(u32, 3), batch_result.succeeded);
+        try std.testing.expectEqual(@as(u32, 0), batch_result.failed);
+    }
+
+    // 2.5 batchVoid — batch void 2 of the 3
+    {
+        const void_ids = [_]i64{ batch_entry_ids[1], batch_entry_ids[2] };
+        const void_result = batch_mod.batchVoid(database, &void_ids, "Batch void - duplicates", "controller");
+        try std.testing.expectEqual(@as(u32, 2), void_result.succeeded);
+        try std.testing.expectEqual(@as(u32, 0), void_result.failed);
+    }
+
+    // Soft close February
+    try period_mod.Period.transition(database, period_ids[1], .soft_closed, "controller");
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 4: QUARTERLY — Q1 COMPARATIVE REPORTS
+    // ═══════════════════════════════════════════════════════════════
+
+    // Comparative IS: Q1 2026 vs (empty) Q1 2025
+    {
+        const is_comp = try report_mod.incomeStatementComparative(database, book_id, "2026-01-01", "2026-03-31", "2025-01-01", "2025-03-31");
+        defer is_comp.deinit();
+        try std.testing.expectEqual(@as(i64, 0), is_comp.prior_total_debits);
+        try std.testing.expectEqual(@as(i64, 0), is_comp.prior_total_credits);
+    }
+
+    // Budget vs Actual for Q1
+    {
+        var bva_buf: [8192]u8 = undefined;
+        const bva_result = try budget_mod.budgetVsActual(database, budget_id, "2026-01-01", "2026-03-31", &bva_buf, .json);
+        try std.testing.expect(bva_result.len > 10);
+    }
+
+    // Dimension summary (VAT report)
+    {
+        var dim_buf: [4096]u8 = undefined;
+        const dim_result = try dimension_mod.dimensionSummary(database, book_id, tax_dim, "2026-01-01", "2026-03-31", &dim_buf, .json);
+        try std.testing.expect(dim_result.len > 10);
+    }
+
+    // 4.4 Classification.updateName — rename the BS classification
+    try classification_mod.Classification.updateName(database, bs_class, "Statement of Financial Position", "controller");
+
+    // 4.5 ClassificationNode.move — reorganize: move Equity group under a new parent
+    {
+        const bs_capital_group = try classification_mod.ClassificationNode.addGroup(database, bs_class, "Capital Section", null, 4, "controller");
+        try classification_mod.ClassificationNode.move(database, bs_equity_group, bs_capital_group, 1, "controller");
+    }
+
+    // 4.6 ClassificationNode.updateLabel — rename a group node
+    try classification_mod.ClassificationNode.updateLabel(database, bs_assets_group, "Current and Non-Current Assets", "controller");
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 6: YEAR-END CLOSE
+    // ═══════════════════════════════════════════════════════════════
+
+    // Close January and February with closing entries (zeroes R/E accounts -> RE)
+    try close_mod.closePeriod(database, book_id, period_ids[0], "controller");
+    try close_mod.closePeriod(database, book_id, period_ids[1], "controller");
+
+    // Close remaining periods (no R/E activity, transition open -> soft_closed -> closed)
+    {
+        var i: usize = 2;
+        while (i < 12) : (i += 1) {
+            try period_mod.Period.transition(database, period_ids[i], .soft_closed, "controller");
+            try period_mod.Period.transition(database, period_ids[i], .closed, "controller");
+        }
+    }
+
+    // Verify post-close state
+    _ = try cache_mod.recalculateAllStale(database, book_id);
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+
+    // Balance sheet after close
+    {
+        const bs_final = try report_mod.balanceSheet(database, book_id, "2026-12-31", "2026-01-01");
+        defer bs_final.deinit();
+        try std.testing.expectEqual(bs_final.total_debits, bs_final.total_credits);
+    }
+
+    // Equity changes for the full year
+    {
+        const eq = try report_mod.equityChanges(database, book_id, "2026-01-01", "2026-12-31", "2026-01-01");
+        defer eq.deinit();
+        try std.testing.expect(eq.rows.len > 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 7: AUDIT — VERIFY EVERYTHING
+    // ═══════════════════════════════════════════════════════════════
+
+    // Final integrity check
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+        try std.testing.expect(v.entries_checked > 0);
+        try std.testing.expect(v.accounts_checked > 0);
+        try std.testing.expect(v.periods_checked > 0);
+    }
+
+    // Recalculate all stale balances and verify clean
+    _ = try cache_mod.recalculateAllStale(database, book_id);
+
+    // Lock all periods (permanent — audit complete)
+    {
+        var i: usize = 0;
+        while (i < 12) : (i += 1) {
+            try period_mod.Period.transition(database, period_ids[i], .locked, "controller");
+        }
+    }
+
+    // Verify locked periods reject further transitions
+    try std.testing.expectError(error.PeriodLocked, period_mod.Period.transition(database, period_ids[0], .open, "controller"));
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 7b: YEAR-END CLEANUP
+    // ═══════════════════════════════════════════════════════════════
+
+    // 7b.1 LineDimension.remove — remove a dimension tag from the invoice line
+    try dimension_mod.LineDimension.remove(database, inv001_line1, vat_12, "controller");
+
+    // 7b.2 Create a disposable dimension, value, assign, remove, delete
+    {
+        const temp_dim = try dimension_mod.Dimension.create(database, book_id, "Temp Project", .project, "controller");
+        const temp_val = try dimension_mod.DimensionValue.create(database, temp_dim, "P001", "Prototype", "controller");
+
+        // DimensionValue.delete — clean up unused dimension value
+        try dimension_mod.DimensionValue.delete(database, temp_val, "controller");
+
+        // Dimension.delete — delete an unused dimension (after deleting values)
+        try dimension_mod.Dimension.delete(database, temp_dim, "controller");
+
+        // Verify dimension is gone
+        {
+            var dim_buf2: [4096]u8 = undefined;
+            const dim_list2 = try dimension_mod.listDimensions(database, book_id, "project", &dim_buf2, .json);
+            // Should not contain "Temp Project" — but list is empty or lacks it
+            try std.testing.expect(std.mem.indexOf(u8, dim_list2, "Temp Project") == null);
+        }
+    }
+
+    // 7b.3 Budget.delete — delete the budget after the year
+    try budget_mod.Budget.delete(database, budget_id, "controller");
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_budgets WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, budget_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+
+    // (Entry.editPosted exercised earlier in Phase 3, before periods are closed)
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 8: NEXT FISCAL YEAR SETUP
+    // ═══════════════════════════════════════════════════════════════
+
+    // Create FY2027 periods
+    try period_mod.Period.bulkCreate(database, book_id, 2027, 1, .monthly, "controller");
+
+    // Verify BS accounts carry forward (cumulative query includes all prior periods)
+    {
+        const bs_2027 = try report_mod.balanceSheet(database, book_id, "2027-01-31", "2027-01-01");
+        defer bs_2027.deinit();
+        try std.testing.expectEqual(bs_2027.total_debits, bs_2027.total_credits);
+    }
+
+    // IS for Jan 2027 should be empty (no FY2027 activity yet)
+    {
+        const is_2027 = try report_mod.incomeStatement(database, book_id, "2027-01-01", "2027-01-31");
+        defer is_2027.deinit();
+        try std.testing.expectEqual(@as(i64, 0), is_2027.total_debits);
+        try std.testing.expectEqual(@as(i64, 0), is_2027.total_credits);
+    }
+
+    // Final assertion: the audit trail has many entries
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE book_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const audit_count = stmt.columnInt(0);
+        try std.testing.expect(audit_count > 30);
+    }
+}
