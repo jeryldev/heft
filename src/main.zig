@@ -628,6 +628,7 @@ fn mapError(err: anyerror) i32 {
         error.FxGainLossAccountRequired => 27,
         error.OpeningBalanceAccountRequired => 28,
         error.IncomeSummaryAccountRequired => 29,
+        error.ApprovalRequired => 30,
         error.SqliteOpenFailed => 90,
         error.SqliteExecFailed => 91,
         error.SqlitePrepareFailed => 92,
@@ -726,6 +727,19 @@ pub export fn ledger_update_subledger_account_name(handle: ?*LedgerDB, account_i
 pub export fn ledger_delete_subledger_account(handle: ?*LedgerDB, account_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.subledger.SubledgerAccount.delete(h.sqlite, account_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_update_subledger_account_status(handle: ?*LedgerDB, account_id: i64, new_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const status = heft.subledger.SubledgerAccountStatus.fromString(std.mem.span(new_status)) orelse {
+        setError(mapError(error.InvalidInput));
+        return false;
+    };
+    heft.subledger.SubledgerAccount.updateStatus(h.sqlite, account_id, status, std.mem.span(performed_by)) catch |err| {
         setError(mapError(err));
         return false;
     };
@@ -1126,6 +1140,79 @@ pub export fn ledger_dimension_summary(handle: ?*LedgerDB, book_id: i64, dimensi
         return -1;
     };
     return safeIntCast(result.len);
+}
+
+// ── Sprint 20D: Dimension List Exports ───────────────────────
+
+pub export fn ledger_list_dimensions(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const tf: ?[]const u8 = if (type_filter) |s| std.mem.span(s) else null;
+    const result = heft.dimension.listDimensions(h.sqlite, book_id, tf, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_list_dimension_values(handle: ?*LedgerDB, dimension_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.dimension.listDimensionValues(h.sqlite, dimension_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+// ── Sprint 20C: Schema Self-Description ──────────────────────
+
+pub export fn ledger_describe_schema(handle: ?*LedgerDB, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.describe.describeSchema(h.sqlite, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+// ── Sprint 20B: Approval Workflow ─────────────────────────────
+
+pub export fn ledger_approve_entry(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.entry.Entry.approve(h.sqlite, entry_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_reject_entry(handle: ?*LedgerDB, entry_id: i64, reason: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.entry.Entry.reject(h.sqlite, entry_id, std.mem.span(reason), std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_set_require_approval(handle: ?*LedgerDB, book_id: i64, require: i32, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.setRequireApproval(h.sqlite, book_id, require != 0, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
 }
 
 // ── Sprint 18B: Budget C ABI ──────────────────────────────────
@@ -2069,6 +2156,7 @@ test "C ABI: null handle returns false for all CRUD exports" {
     try std.testing.expect(!ledger_update_subledger_group_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_delete_subledger_group(null, 1, "admin"));
     try std.testing.expect(!ledger_update_subledger_account_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_update_subledger_account_status(null, 1, "inactive", "admin"));
     try std.testing.expect(!ledger_delete_subledger_account(null, 1, "admin"));
     try std.testing.expect(!ledger_edit_line_full(null, 1, 100, 0, "PHP", 10_000_000_000, 1, 0, null, "admin"));
 }

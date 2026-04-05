@@ -54,6 +54,8 @@ const tables = [_][*:0]const u8{
     \\  income_summary_account_id INTEGER,
     \\  opening_balance_account_id INTEGER,
     \\  suspense_account_id INTEGER,
+    \\  require_approval INTEGER NOT NULL DEFAULT 0
+    \\    CHECK (require_approval IN (0, 1)),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     \\);
@@ -185,6 +187,8 @@ const tables = [_][*:0]const u8{
     \\    CHECK (type IN ('customer', 'supplier', 'both')),
     \\  group_id INTEGER NOT NULL REFERENCES ledger_subledger_groups(id),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+    \\  status TEXT NOT NULL DEFAULT 'active'
+    \\    CHECK (status IN ('active', 'inactive', 'archived')),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  UNIQUE (book_id, number)
@@ -217,6 +221,11 @@ const tables = [_][*:0]const u8{
     \\    CHECK (posted_by IS NULL OR length(posted_by) <= 100),
     \\  metadata TEXT
     \\    CHECK (metadata IS NULL OR length(metadata) <= 10000),
+    \\  approval_status TEXT NOT NULL DEFAULT 'none'
+    \\    CHECK (approval_status IN ('none', 'pending', 'approved', 'rejected')),
+    \\  approved_by TEXT
+    \\    CHECK (approved_by IS NULL OR length(approved_by) <= 100),
+    \\  approved_at TEXT,
     \\  period_id INTEGER NOT NULL REFERENCES ledger_periods(id),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),

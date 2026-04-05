@@ -350,6 +350,155 @@ pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, 
     return buf[0..pos];
 }
 
+pub fn listDimensions(database: db.Database, book_id: i64, type_filter: ?[]const u8, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var pos: usize = 0;
+
+    const has_filter = type_filter != null;
+    var stmt = if (has_filter)
+        try database.prepare("SELECT id, name, dimension_type FROM ledger_dimensions WHERE book_id = ? AND dimension_type = ? ORDER BY name;")
+    else
+        try database.prepare("SELECT id, name, dimension_type FROM ledger_dimensions WHERE book_id = ? ORDER BY name;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    if (type_filter) |tf| try stmt.bindText(2, tf);
+
+    switch (format) {
+        .csv => {
+            const header = "id,name,dimension_type\n";
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            while (try stmt.step()) {
+                const id = stmt.columnInt64(0);
+                const name = stmt.columnText(1) orelse "";
+                const dim_type = stmt.columnText(2) orelse "";
+
+                const id_str = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
+                pos += id_str.len;
+                pos += try export_mod.csvField(buf[pos..], name);
+                if (pos >= buf.len) return error.BufferTooSmall;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], dim_type);
+                if (pos >= buf.len) return error.BufferTooSmall;
+                buf[pos] = '\n';
+                pos += 1;
+            }
+        },
+        .json => {
+            const open = "{\"rows\":[";
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + open.len], open);
+            pos += open.len;
+
+            var first = true;
+            while (try stmt.step()) {
+                const id = stmt.columnInt64(0);
+                const name = stmt.columnText(1) orelse "";
+                const dim_type = stmt.columnText(2) orelse "";
+
+                if (!first) {
+                    if (pos >= buf.len) return error.BufferTooSmall;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
+                first = false;
+
+                const pre = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.BufferTooSmall;
+                pos += pre.len;
+                pos += try export_mod.jsonString(buf[pos..], name);
+                const mid = std.fmt.bufPrint(buf[pos..], "\",\"dimension_type\":\"", .{}) catch return error.BufferTooSmall;
+                pos += mid.len;
+                pos += try export_mod.jsonString(buf[pos..], dim_type);
+                if (pos + 2 > buf.len) return error.BufferTooSmall;
+                buf[pos] = '"';
+                pos += 1;
+                buf[pos] = '}';
+                pos += 1;
+            }
+
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
+pub fn listDimensionValues(database: db.Database, dimension_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var pos: usize = 0;
+
+    var stmt = try database.prepare("SELECT id, code, label FROM ledger_dimension_values WHERE dimension_id = ? ORDER BY code;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, dimension_id);
+
+    switch (format) {
+        .csv => {
+            const header = "id,code,label\n";
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            while (try stmt.step()) {
+                const id = stmt.columnInt64(0);
+                const code = stmt.columnText(1) orelse "";
+                const label = stmt.columnText(2) orelse "";
+
+                const id_str = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
+                pos += id_str.len;
+                pos += try export_mod.csvField(buf[pos..], code);
+                if (pos >= buf.len) return error.BufferTooSmall;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], label);
+                if (pos >= buf.len) return error.BufferTooSmall;
+                buf[pos] = '\n';
+                pos += 1;
+            }
+        },
+        .json => {
+            const open = "{\"rows\":[";
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + open.len], open);
+            pos += open.len;
+
+            var first = true;
+            while (try stmt.step()) {
+                const id = stmt.columnInt64(0);
+                const code = stmt.columnText(1) orelse "";
+                const label = stmt.columnText(2) orelse "";
+
+                if (!first) {
+                    if (pos >= buf.len) return error.BufferTooSmall;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
+                first = false;
+
+                const pre = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"code\":\"", .{id}) catch return error.BufferTooSmall;
+                pos += pre.len;
+                pos += try export_mod.jsonString(buf[pos..], code);
+                const mid = std.fmt.bufPrint(buf[pos..], "\",\"label\":\"", .{}) catch return error.BufferTooSmall;
+                pos += mid.len;
+                pos += try export_mod.jsonString(buf[pos..], label);
+                if (pos + 2 > buf.len) return error.BufferTooSmall;
+                buf[pos] = '"';
+                pos += 1;
+                buf[pos] = '}';
+                pos += 1;
+            }
+
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
@@ -737,4 +886,68 @@ test "all dimension types create successfully" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 6), stmt.columnInt(0));
+}
+
+test "listDimensions returns all dimensions for a book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    _ = try Dimension.create(database, 1, "Cost Center", .cost_center, "admin");
+    _ = try Dimension.create(database, 1, "Department", .department, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try listDimensions(database, 1, null, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Tax Code") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Cost Center") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Department") != null);
+}
+
+test "listDimensions filtered by type returns only matching" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    _ = try Dimension.create(database, 1, "Cost Center", .cost_center, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try listDimensions(database, 1, "tax_code", &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Tax Code") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Cost Center") == null);
+}
+
+test "listDimensionValues returns all values for a dimension" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    _ = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    _ = try DimensionValue.create(database, dim_id, "VAT0", "VAT Exempt", "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try listDimensionValues(database, dim_id, &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, result, "VAT12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "VAT 12%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "VAT0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "VAT Exempt") != null);
+}
+
+test "dimensionSummary with tax_code dimension produces correct tax totals" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-TAX", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 10000_00000000, 0, "PHP", 10000000000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 10000_00000000, "PHP", 10000000000, 2, null, null, "admin");
+
+    try LineDimension.assign(database, line1, val_id, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try dimensionSummary(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, result, "VAT12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"total_debits\":") != null);
 }

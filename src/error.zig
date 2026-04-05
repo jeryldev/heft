@@ -32,5 +32,6 @@ pub const LedgerError = error{
     ReverseReasonRequired,
     TooFewLines,
     UnbalancedEntry,
+    ApprovalRequired,
     VoidReasonRequired,
 };
