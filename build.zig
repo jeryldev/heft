@@ -41,14 +41,7 @@ pub fn build(b: *std.Build) void {
 
     const shared_lib = b.addLibrary(.{
         .name = "heft",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "heft", .module = mod },
-            },
-        }),
+        .root_module = main_mod,
         .linkage = .dynamic,
     });
     b.installArtifact(shared_lib);

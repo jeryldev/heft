@@ -128,6 +128,7 @@ pub const Statement = struct {
     /// Caller must keep `value` alive until the next step() or finalize().
     /// Uses SQLITE_STATIC (no copy) — safe for bind-then-step-in-same-scope patterns.
     pub fn bindText(self: Statement, col: c_int, value: []const u8) !void {
+        if (value.len > std.math.maxInt(c_int)) return error.SqliteBindFailed;
         const rc = c.sqlite3_bind_text(
             self.handle,
             col,
@@ -503,6 +504,47 @@ test "reset and rebind in a loop inserts correct count" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 100), stmt.columnInt(0));
+}
+
+test "bindNull on NOT NULL column fails on step" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    try database.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+    var stmt = try database.prepare("INSERT INTO test (name) VALUES (?);");
+    defer stmt.finalize();
+    try stmt.bindNull(1);
+    try std.testing.expectError(error.SqliteStepFailed, stmt.step());
+}
+
+test "transaction rollback undoes changes" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    try database.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+    try database.beginTransaction();
+    try database.exec("INSERT INTO test VALUES (1, 100);");
+    database.rollback();
+    var stmt = try database.prepare("SELECT COUNT(*) FROM test;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "statement reset and reuse with bindInt and columnInt64" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    try database.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER);");
+    try database.exec("INSERT INTO test VALUES (1, 10);");
+    try database.exec("INSERT INTO test VALUES (2, 20);");
+    var stmt = try database.prepare("SELECT val FROM test WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, 1);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 10), stmt.columnInt64(0));
+    stmt.reset();
+    stmt.clearBindings();
+    try stmt.bindInt(1, 2);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 20), stmt.columnInt64(0));
 }
 
 test "nested begin fails with SQLITE_ERROR" {
