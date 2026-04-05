@@ -224,6 +224,23 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         if (stmt.columnInt(0) > 0) result.warnings += 1;
     }
 
+    // Check 9: Closed periods should have zero revenue/expense balances
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND p.status IN ('closed', 'locked')
+            \\  AND a.account_type IN ('revenue', 'expense')
+            \\  AND (ab.debit_sum != ab.credit_sum);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const count = stmt.columnInt(0);
+        if (count > 0) result.warnings += 1;
+    }
+
     return result;
 }
 

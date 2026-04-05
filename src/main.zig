@@ -519,6 +519,15 @@ pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by
     return true;
 }
 
+pub export fn ledger_close_period(handle: ?*LedgerDB, book_id: i64, period_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.close.closePeriod(h.sqlite, book_id, period_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 // ── Error Reporting ────────────────────────────────────────────
 
 threadlocal var last_error_code: i32 = 0;
@@ -2031,4 +2040,10 @@ test "C ABI: system account designation happy path" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"income_summary_account_id\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"opening_balance_account_id\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"suspense_account_id\":") != null);
+}
+
+// ── Sprint 14: Period closing C ABI tests ──
+
+test "C ABI: null handle returns false for ledger_close_period" {
+    try std.testing.expect(!ledger_close_period(null, 1, 1, "admin"));
 }
