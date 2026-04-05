@@ -29,7 +29,7 @@ pub fn createAll(database: db.Database) !void {
     try database.commit();
 }
 
-// ── Tables (14) ─────────────────────────────────────────────────
+// ── Tables (16) ─────────────────────────────────────────────────
 // Order matters — foreign keys reference earlier tables.
 
 const tables = [_][*:0]const u8{
@@ -323,7 +323,38 @@ const tables = [_][*:0]const u8{
     \\);
     ,
 
-    // ── 14. Audit Log ───────────────────────────────────────────
+    // ── 14. Budgets ─────────────────────────────────────────────
+    // Budget headers. One budget per book+name. Informational only —
+    // budgets do not block posting or affect balance cache.
+    \\CREATE TABLE IF NOT EXISTS ledger_budgets (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 255),
+    \\  fiscal_year INTEGER NOT NULL,
+    \\  status TEXT NOT NULL DEFAULT 'draft'
+    \\    CHECK (status IN ('draft', 'approved', 'closed')),
+    \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+    \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  UNIQUE (book_id, name)
+    \\);
+    ,
+
+    // ── 15. Budget Lines ──────────────────────────────────────────
+    // Per-account, per-period budget amounts. Fixed-point x 10^8.
+    \\CREATE TABLE IF NOT EXISTS ledger_budget_lines (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  amount INTEGER NOT NULL DEFAULT 0,
+    \\  budget_id INTEGER NOT NULL REFERENCES ledger_budgets(id),
+    \\  account_id INTEGER NOT NULL REFERENCES ledger_accounts(id),
+    \\  period_id INTEGER NOT NULL REFERENCES ledger_periods(id),
+    \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  UNIQUE (budget_id, account_id, period_id)
+    \\);
+    ,
+
+    // ── 16. Audit Log ───────────────────────────────────────────
     // Append-only change log. Every mutation writes here in the same
     // SQLite transaction. Required for GoBD (Germany), UGB/BAO (Austria),
     // BIR (Philippines), ACRA (Singapore) compliance.
@@ -470,7 +501,7 @@ const triggers = [_][*:0]const u8{
 
 // ── Tests ───────────────────────────────────────────────────────
 
-test "createAll creates 14 tables" {
+test "createAll creates 16 tables" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -480,7 +511,7 @@ test "createAll creates 14 tables" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 14), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 16), stmt.columnInt(0));
 }
 
 test "createAll creates 13 indexes" {

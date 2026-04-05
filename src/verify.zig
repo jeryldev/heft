@@ -241,6 +241,50 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         if (count > 0) result.warnings += 1;
     }
 
+    // Check 10: GL-SL reconciliation — subledger totals should match control account balances
+    {
+        var stmt = try database.prepare(
+            \\SELECT sg.id, sg.gl_account_id,
+            \\  COALESCE(gl.gl_debit, 0) as gl_debit,
+            \\  COALESCE(gl.gl_credit, 0) as gl_credit,
+            \\  COALESCE(sl.sl_debit, 0) as sl_debit,
+            \\  COALESCE(sl.sl_credit, 0) as sl_credit
+            \\FROM ledger_subledger_groups sg
+            \\LEFT JOIN (
+            \\  SELECT ab.account_id, SUM(ab.debit_sum) as gl_debit, SUM(ab.credit_sum) as gl_credit
+            \\  FROM ledger_account_balances ab
+            \\  WHERE ab.book_id = ?
+            \\  GROUP BY ab.account_id
+            \\) gl ON gl.account_id = sg.gl_account_id
+            \\LEFT JOIN (
+            \\  SELECT sa.group_id,
+            \\    SUM(el.base_debit_amount) as sl_debit,
+            \\    SUM(el.base_credit_amount) as sl_credit
+            \\  FROM ledger_entry_lines el
+            \\  JOIN ledger_entries e ON e.id = el.entry_id AND e.status = 'posted'
+            \\  JOIN ledger_subledger_accounts sa ON sa.id = el.counterparty_id
+            \\  WHERE e.book_id = ?
+            \\  GROUP BY sa.group_id
+            \\) sl ON sl.group_id = sg.id
+            \\WHERE sg.book_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, book_id);
+        try stmt.bindInt(3, book_id);
+
+        while (try stmt.step()) {
+            const gl_debit = stmt.columnInt64(2);
+            const gl_credit = stmt.columnInt64(3);
+            const sl_debit = stmt.columnInt64(4);
+            const sl_credit = stmt.columnInt64(5);
+
+            if (gl_debit != sl_debit or gl_credit != sl_credit) {
+                result.warnings += 1;
+            }
+        }
+    }
+
     return result;
 }
 
@@ -252,6 +296,7 @@ const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
 const money = @import("money.zig");
+const subledger_mod = @import("subledger.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -588,6 +633,57 @@ test "verify: duplicate line numbers detected" {
         \\VALUES (1, 100000000, 0, 'PHP', 10000000000, 1, 1, 100000000, 0);
     );
     try database.exec("PRAGMA foreign_keys = ON;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.warnings > 0);
+}
+
+test "verify: GL-SL reconciliation passes when balanced" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create AR account (account_id=6) as the GL control account
+    _ = try account_mod.Account.create(database, 1, "1100", "AR", .asset, false, "admin");
+
+    // Create subledger group linked to AR control account (gl_account_id=6)
+    const group_id = try subledger_mod.SubledgerGroup.create(database, 1, "AR Customers", "customer", 1, 6, null, null, "admin");
+
+    // Create subledger account (customer)
+    const customer_id = try subledger_mod.SubledgerAccount.create(database, 1, "C-001", "Acme Corp", "customer", group_id, "admin");
+
+    // Post entry: Debit AR (control account) with counterparty, Credit Revenue
+    const eid = try entry_mod.Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 6, customer_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 4, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    const result = try verify(database, 1);
+    try std.testing.expectEqual(@as(u32, 0), result.warnings);
+    try std.testing.expect(result.passed());
+}
+
+test "verify: GL-SL reconciliation warns on mismatch" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create AR account (account_id=6) as the GL control account
+    _ = try account_mod.Account.create(database, 1, "1100", "AR", .asset, false, "admin");
+
+    // Create subledger group linked to AR control account (gl_account_id=6)
+    const group_id = try subledger_mod.SubledgerGroup.create(database, 1, "AR Customers", "customer", 1, 6, null, null, "admin");
+
+    // Create subledger account (customer)
+    const customer_id = try subledger_mod.SubledgerAccount.create(database, 1, "C-001", "Acme Corp", "customer", group_id, "admin");
+
+    // Post entry: Debit AR with counterparty, Credit Revenue
+    const eid = try entry_mod.Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 6, customer_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 4, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    // Corrupt GL balance: add extra debit to the control account cache
+    // This simulates a raw SQL manipulation that bypasses the subledger
+    try database.exec("UPDATE ledger_account_balances SET debit_sum = debit_sum + 50000000000 WHERE account_id = 6;");
 
     const result = try verify(database, 1);
     try std.testing.expect(result.warnings > 0);

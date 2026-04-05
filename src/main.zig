@@ -1128,6 +1128,47 @@ pub export fn ledger_dimension_summary(handle: ?*LedgerDB, book_id: i64, dimensi
     return safeIntCast(result.len);
 }
 
+// ── Sprint 18B: Budget C ABI ──────────────────────────────────
+
+pub export fn ledger_create_budget(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, fiscal_year: i32, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.budget.Budget.create(h.sqlite, book_id, std.mem.span(name), fiscal_year, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+}
+
+pub export fn ledger_delete_budget(handle: ?*LedgerDB, budget_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.budget.Budget.delete(h.sqlite, budget_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_set_budget_line(handle: ?*LedgerDB, budget_id: i64, account_id: i64, period_id: i64, amount: i64, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.budget.BudgetLine.set(h.sqlite, budget_id, account_id, period_id, amount, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+}
+
+pub export fn ledger_budget_vs_actual(handle: ?*LedgerDB, budget_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const b = safeBuf(buf, buf_len) orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.budget.budgetVsActual(h.sqlite, budget_id, std.mem.span(start_date), std.mem.span(end_date), b, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
 // ── Sprint 13A: Cache Recalculation ────────────────────────────
 
 pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 {
@@ -1166,7 +1207,7 @@ test "ledger_open returns non-null, ledger_close cleans up" {
     if (handle) |h| ledger_close(h);
 }
 
-test "ledger_open creates all 14 schema tables" {
+test "ledger_open creates all 16 schema tables" {
     defer cleanupTestFile("test-schema-main.ledger");
     const handle = ledger_open("test-schema-main.ledger");
     try std.testing.expect(handle != null);
@@ -1188,6 +1229,8 @@ test "ledger_open creates all 14 schema tables" {
             "ledger_dimensions",
             "ledger_dimension_values",
             "ledger_line_dimensions",
+            "ledger_budgets",
+            "ledger_budget_lines",
             "ledger_audit_log",
         };
 
@@ -2281,4 +2324,14 @@ test "C ABI: dimension full lifecycle through C boundary" {
         try std.testing.expect(ledger_delete_dimension_value(h, val_id, "admin"));
         try std.testing.expect(ledger_delete_dimension(h, dim_id, "admin"));
     }
+}
+
+// ── Sprint 18B: Budget C ABI tests ──
+
+test "C ABI: null handle returns error for budget exports" {
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_budget(null, 1, "FY2026", 2026, "admin"));
+    try std.testing.expect(!ledger_delete_budget(null, 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_set_budget_line(null, 1, 1, 1, 100, "admin"));
+    var buf: [1024]u8 = undefined;
+    try std.testing.expectEqual(@as(i32, -1), ledger_budget_vs_actual(null, 1, "2026-01-01", "2026-01-31", &buf, 1024, 1));
 }
