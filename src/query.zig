@@ -37,7 +37,10 @@ fn writeCsvMeta(buf: []u8, total: i64, limit: i32, offset: i32) !usize {
 
 pub fn getBook(database: db_mod.Database, book_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
     var stmt = try database.prepare(
-        \\SELECT id, name, base_currency, decimal_places, status
+        \\SELECT id, name, base_currency, decimal_places, status,
+        \\rounding_account_id, fx_gain_loss_account_id,
+        \\retained_earnings_account_id, income_summary_account_id,
+        \\opening_balance_account_id, suspense_account_id
         \\FROM ledger_books WHERE id = ?;
     );
     defer stmt.finalize();
@@ -50,11 +53,17 @@ pub fn getBook(database: db_mod.Database, book_id: i64, buf: []u8, format: expor
     const currency = stmt.columnText(2) orelse "";
     const decimals = stmt.columnInt(3);
     const status = stmt.columnText(4) orelse "";
+    const rounding_id = stmt.columnInt64(5);
+    const fx_gl_id = stmt.columnInt64(6);
+    const re_id = stmt.columnInt64(7);
+    const is_id = stmt.columnInt64(8);
+    const ob_id = stmt.columnInt64(9);
+    const suspense_id = stmt.columnInt64(10);
 
     var pos: usize = 0;
     switch (format) {
         .csv => {
-            const header = "id,name,base_currency,decimal_places,status\n";
+            const header = "id,name,base_currency,decimal_places,status,rounding_account_id,fx_gain_loss_account_id,retained_earnings_account_id,income_summary_account_id,opening_balance_account_id,suspense_account_id\n";
             if (pos + header.len > buf.len) return error.InvalidInput;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
@@ -68,9 +77,8 @@ pub fn getBook(database: db_mod.Database, book_id: i64, buf: []u8, format: expor
             const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.InvalidInput;
             pos += rest.len;
             pos += try export_mod.csvField(buf[pos..], status);
-            if (pos >= buf.len) return error.InvalidInput;
-            buf[pos] = '\n';
-            pos += 1;
+            const sys_accts = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d},{d}\n", .{ rounding_id, fx_gl_id, re_id, is_id, ob_id, suspense_id }) catch return error.InvalidInput;
+            pos += sys_accts.len;
         },
         .json => {
             const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.InvalidInput;
@@ -84,9 +92,7 @@ pub fn getBook(database: db_mod.Database, book_id: i64, buf: []u8, format: expor
             const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.InvalidInput;
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], status);
-            const j4 = "\"}";
-            if (pos + j4.len > buf.len) return error.InvalidInput;
-            @memcpy(buf[pos .. pos + j4.len], j4);
+            const j4 = std.fmt.bufPrint(buf[pos..], "\",\"rounding_account_id\":{d},\"fx_gain_loss_account_id\":{d},\"retained_earnings_account_id\":{d},\"income_summary_account_id\":{d},\"opening_balance_account_id\":{d},\"suspense_account_id\":{d}}}", .{ rounding_id, fx_gl_id, re_id, is_id, ob_id, suspense_id }) catch return error.InvalidInput;
             pos += j4.len;
         },
     }
@@ -307,9 +313,27 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (type_filter) |tf| { try stmt.bindText(2, tf); try stmt.bindText(3, tf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-        if (status_filter) |sf| { try stmt.bindText(4, sf); try stmt.bindText(5, sf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-        if (name_search) |ns| { try stmt.bindText(6, ns); try stmt.bindText(7, ns); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+        if (type_filter) |tf| {
+            try stmt.bindText(2, tf);
+            try stmt.bindText(3, tf);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
+        if (status_filter) |sf| {
+            try stmt.bindText(4, sf);
+            try stmt.bindText(5, sf);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
+        if (name_search) |ns| {
+            try stmt.bindText(6, ns);
+            try stmt.bindText(7, ns);
+        } else {
+            try stmt.bindNull(6);
+            try stmt.bindNull(7);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -335,9 +359,27 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (type_filter) |tf| { try stmt.bindText(2, tf); try stmt.bindText(3, tf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-    if (status_filter) |sf| { try stmt.bindText(4, sf); try stmt.bindText(5, sf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-    if (name_search) |ns| { try stmt.bindText(6, ns); try stmt.bindText(7, ns); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+    if (type_filter) |tf| {
+        try stmt.bindText(2, tf);
+        try stmt.bindText(3, tf);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
+    if (status_filter) |sf| {
+        try stmt.bindText(4, sf);
+        try stmt.bindText(5, sf);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
+    if (name_search) |ns| {
+        try stmt.bindText(6, ns);
+        try stmt.bindText(7, ns);
+    } else {
+        try stmt.bindNull(6);
+        try stmt.bindNull(7);
+    }
     try stmt.bindInt(8, limit);
     try stmt.bindInt(9, offset);
 
@@ -526,8 +568,20 @@ pub fn listPeriods(database: db_mod.Database, book_id: i64, year_filter: ?i32, s
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (year_filter) |yf| { try stmt.bindInt(2, yf); try stmt.bindInt(3, yf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-        if (status_filter) |sf| { try stmt.bindText(4, sf); try stmt.bindText(5, sf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+        if (year_filter) |yf| {
+            try stmt.bindInt(2, yf);
+            try stmt.bindInt(3, yf);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
+        if (status_filter) |sf| {
+            try stmt.bindText(4, sf);
+            try stmt.bindText(5, sf);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -547,8 +601,20 @@ pub fn listPeriods(database: db_mod.Database, book_id: i64, year_filter: ?i32, s
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (year_filter) |yf| { try stmt.bindInt(2, yf); try stmt.bindInt(3, yf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-    if (status_filter) |sf| { try stmt.bindText(4, sf); try stmt.bindText(5, sf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+    if (year_filter) |yf| {
+        try stmt.bindInt(2, yf);
+        try stmt.bindInt(3, yf);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
+    if (status_filter) |sf| {
+        try stmt.bindText(4, sf);
+        try stmt.bindText(5, sf);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
     try stmt.bindInt(6, limit);
     try stmt.bindInt(7, offset);
 
@@ -589,7 +655,11 @@ pub fn listPeriods(database: db_mod.Database, book_id: i64, year_filter: ?i32, s
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -644,23 +714,47 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (status_filter) |sf| { try stmt.bindText(2, sf); try stmt.bindText(3, sf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-        if (start_date) |sd| { try stmt.bindText(4, sd); try stmt.bindText(5, sd); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-        if (end_date) |ed| { try stmt.bindText(6, ed); try stmt.bindText(7, ed); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
-        if (doc_search) |ds| { try stmt.bindText(8, ds); try stmt.bindText(9, ds); } else { try stmt.bindNull(8); try stmt.bindNull(9); }
+        if (status_filter) |sf| {
+            try stmt.bindText(2, sf);
+            try stmt.bindText(3, sf);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
+        if (start_date) |sd| {
+            try stmt.bindText(4, sd);
+            try stmt.bindText(5, sd);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
+        if (end_date) |ed| {
+            try stmt.bindText(6, ed);
+            try stmt.bindText(7, ed);
+        } else {
+            try stmt.bindNull(6);
+            try stmt.bindNull(7);
+        }
+        if (doc_search) |ds| {
+            try stmt.bindText(8, ds);
+            try stmt.bindText(9, ds);
+        } else {
+            try stmt.bindNull(8);
+            try stmt.bindNull(9);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
 
     const order_sql: [*:0]const u8 = if (order == .asc)
-        \\SELECT id, document_number, transaction_date, posting_date, description, status, period_id
+        \\SELECT id, document_number, transaction_date, posting_date, description, status, period_id, metadata
         \\FROM ledger_entries WHERE book_id = ?
         \\  AND (? IS NULL OR status = ?)
         \\  AND (? IS NULL OR posting_date >= ?) AND (? IS NULL OR posting_date <= ?)
         \\  AND (? IS NULL OR document_number LIKE '%' || ? || '%')
         \\ORDER BY posting_date ASC, document_number ASC LIMIT ? OFFSET ?;
     else
-        \\SELECT id, document_number, transaction_date, posting_date, description, status, period_id
+        \\SELECT id, document_number, transaction_date, posting_date, description, status, period_id, metadata
         \\FROM ledger_entries WHERE book_id = ?
         \\  AND (? IS NULL OR status = ?)
         \\  AND (? IS NULL OR posting_date >= ?) AND (? IS NULL OR posting_date <= ?)
@@ -671,10 +765,34 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (status_filter) |sf| { try stmt.bindText(2, sf); try stmt.bindText(3, sf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-    if (start_date) |sd| { try stmt.bindText(4, sd); try stmt.bindText(5, sd); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-    if (end_date) |ed| { try stmt.bindText(6, ed); try stmt.bindText(7, ed); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
-    if (doc_search) |ds| { try stmt.bindText(8, ds); try stmt.bindText(9, ds); } else { try stmt.bindNull(8); try stmt.bindNull(9); }
+    if (status_filter) |sf| {
+        try stmt.bindText(2, sf);
+        try stmt.bindText(3, sf);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
+    if (start_date) |sd| {
+        try stmt.bindText(4, sd);
+        try stmt.bindText(5, sd);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
+    if (end_date) |ed| {
+        try stmt.bindText(6, ed);
+        try stmt.bindText(7, ed);
+    } else {
+        try stmt.bindNull(6);
+        try stmt.bindNull(7);
+    }
+    if (doc_search) |ds| {
+        try stmt.bindText(8, ds);
+        try stmt.bindText(9, ds);
+    } else {
+        try stmt.bindNull(8);
+        try stmt.bindNull(9);
+    }
     try stmt.bindInt(10, limit);
     try stmt.bindInt(11, offset);
 
@@ -682,7 +800,7 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
     switch (format) {
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
-            const header = "id,document_number,transaction_date,posting_date,description,status,period_id\n";
+            const header = "id,document_number,transaction_date,posting_date,description,status,period_id,metadata\n";
             if (pos + header.len > buf.len) return error.InvalidInput;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
@@ -707,16 +825,25 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-                const pid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(6)}) catch return error.InvalidInput;
+                const pid = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(6)}) catch return error.InvalidInput;
                 pos += pid.len;
+                pos += try export_mod.csvField(buf[pos..], stmt.columnText(7) orelse "");
+                if (pos >= buf.len) return error.InvalidInput;
+                buf[pos] = '\n';
+                pos += 1;
             }
         },
         .json => {
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
+                const le_meta = stmt.columnText(7);
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"document_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
@@ -740,8 +867,24 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
-                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}}}", .{stmt.columnInt64(6)}) catch return error.InvalidInput;
+                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}", .{stmt.columnInt64(6)}) catch return error.InvalidInput;
                 pos += j6.len;
+                if (le_meta) |mv| {
+                    const j7 = ",\"metadata\":\"";
+                    if (pos + j7.len > buf.len) return error.InvalidInput;
+                    @memcpy(buf[pos .. pos + j7.len], j7);
+                    pos += j7.len;
+                    pos += try export_mod.jsonString(buf[pos..], mv);
+                    const j8 = "\"}";
+                    if (pos + j8.len > buf.len) return error.InvalidInput;
+                    @memcpy(buf[pos .. pos + j8.len], j8);
+                    pos += j8.len;
+                } else {
+                    const j7 = ",\"metadata\":null}";
+                    if (pos + j7.len > buf.len) return error.InvalidInput;
+                    @memcpy(buf[pos .. pos + j7.len], j7);
+                    pos += j7.len;
+                }
             }
             const close = "]}";
             if (pos + close.len > buf.len) return error.InvalidInput;
@@ -770,10 +913,34 @@ pub fn listAuditLog(database: db_mod.Database, book_id: i64, entity_type_filter:
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (entity_type_filter) |et| { try stmt.bindText(2, et); try stmt.bindText(3, et); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-        if (action_filter) |af| { try stmt.bindText(4, af); try stmt.bindText(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-        if (start_date) |sd| { try stmt.bindText(6, sd); try stmt.bindText(7, sd); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
-        if (end_date) |ed| { try stmt.bindText(8, ed); try stmt.bindText(9, ed); } else { try stmt.bindNull(8); try stmt.bindNull(9); }
+        if (entity_type_filter) |et| {
+            try stmt.bindText(2, et);
+            try stmt.bindText(3, et);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
+        if (action_filter) |af| {
+            try stmt.bindText(4, af);
+            try stmt.bindText(5, af);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
+        if (start_date) |sd| {
+            try stmt.bindText(6, sd);
+            try stmt.bindText(7, sd);
+        } else {
+            try stmt.bindNull(6);
+            try stmt.bindNull(7);
+        }
+        if (end_date) |ed| {
+            try stmt.bindText(8, ed);
+            try stmt.bindText(9, ed);
+        } else {
+            try stmt.bindNull(8);
+            try stmt.bindNull(9);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -795,10 +962,34 @@ pub fn listAuditLog(database: db_mod.Database, book_id: i64, entity_type_filter:
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (entity_type_filter) |et| { try stmt.bindText(2, et); try stmt.bindText(3, et); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-    if (action_filter) |af| { try stmt.bindText(4, af); try stmt.bindText(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-    if (start_date) |sd| { try stmt.bindText(6, sd); try stmt.bindText(7, sd); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
-    if (end_date) |ed| { try stmt.bindText(8, ed); try stmt.bindText(9, ed); } else { try stmt.bindNull(8); try stmt.bindNull(9); }
+    if (entity_type_filter) |et| {
+        try stmt.bindText(2, et);
+        try stmt.bindText(3, et);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
+    if (action_filter) |af| {
+        try stmt.bindText(4, af);
+        try stmt.bindText(5, af);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
+    if (start_date) |sd| {
+        try stmt.bindText(6, sd);
+        try stmt.bindText(7, sd);
+    } else {
+        try stmt.bindNull(6);
+        try stmt.bindNull(7);
+    }
+    if (end_date) |ed| {
+        try stmt.bindText(8, ed);
+        try stmt.bindText(9, ed);
+    } else {
+        try stmt.bindNull(8);
+        try stmt.bindNull(9);
+    }
     try stmt.bindInt(10, limit);
     try stmt.bindInt(11, offset);
 
@@ -847,7 +1038,11 @@ pub fn listAuditLog(database: db_mod.Database, book_id: i64, entity_type_filter:
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"entity_type\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -896,13 +1091,14 @@ pub fn listAuditLog(database: db_mod.Database, book_id: i64, entity_type_filter:
 
 // ── getEntry ───────────────────────────────────────────────────
 
-pub fn getEntry(database: db_mod.Database, entry_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+pub fn getEntry(database: db_mod.Database, entry_id: i64, book_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
     var stmt = try database.prepare(
         \\SELECT id, document_number, transaction_date, posting_date, description, status, period_id, metadata
-        \\FROM ledger_entries WHERE id = ?;
+        \\FROM ledger_entries WHERE id = ? AND book_id = ?;
     );
     defer stmt.finalize();
     try stmt.bindInt(1, entry_id);
+    try stmt.bindInt(2, book_id);
     const has_row = try stmt.step();
     if (!has_row) return error.NotFound;
 
@@ -913,11 +1109,12 @@ pub fn getEntry(database: db_mod.Database, entry_id: i64, buf: []u8, format: exp
     const desc = stmt.columnText(4) orelse "";
     const status = stmt.columnText(5) orelse "";
     const period_id = stmt.columnInt64(6);
+    const metadata_val = stmt.columnText(7);
 
     var pos: usize = 0;
     switch (format) {
         .csv => {
-            const header = "id,document_number,transaction_date,posting_date,description,status,period_id\n";
+            const header = "id,document_number,transaction_date,posting_date,description,status,period_id,metadata\n";
             if (pos + header.len > buf.len) return error.InvalidInput;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
@@ -940,8 +1137,12 @@ pub fn getEntry(database: db_mod.Database, entry_id: i64, buf: []u8, format: exp
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], status);
-            const pid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{period_id}) catch return error.InvalidInput;
+            const pid = std.fmt.bufPrint(buf[pos..], ",{d},", .{period_id}) catch return error.InvalidInput;
             pos += pid.len;
+            pos += try export_mod.csvField(buf[pos..], metadata_val orelse "");
+            if (pos >= buf.len) return error.InvalidInput;
+            buf[pos] = '\n';
+            pos += 1;
         },
         .json => {
             const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"document_number\":\"", .{id}) catch return error.InvalidInput;
@@ -967,8 +1168,24 @@ pub fn getEntry(database: db_mod.Database, entry_id: i64, buf: []u8, format: exp
             @memcpy(buf[pos .. pos + j5.len], j5);
             pos += j5.len;
             pos += try export_mod.jsonString(buf[pos..], status);
-            const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}}}", .{period_id}) catch return error.InvalidInput;
+            const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}", .{period_id}) catch return error.InvalidInput;
             pos += j6.len;
+            if (metadata_val) |mv| {
+                const j7 = ",\"metadata\":\"";
+                if (pos + j7.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j7.len], j7);
+                pos += j7.len;
+                pos += try export_mod.jsonString(buf[pos..], mv);
+                const j8 = "\"}";
+                if (pos + j8.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j8.len], j8);
+                pos += j8.len;
+            } else {
+                const j7 = ",\"metadata\":null}";
+                if (pos + j7.len > buf.len) return error.InvalidInput;
+                @memcpy(buf[pos .. pos + j7.len], j7);
+                pos += j7.len;
+            }
         },
     }
     return buf[0..pos];
@@ -1025,7 +1242,11 @@ pub fn listEntryLines(database: db_mod.Database, entry_id: i64, buf: []u8, forma
 
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"line_number\":{d},\"account_number\":\"", .{ stmt.columnInt64(0), stmt.columnInt(1) }) catch return error.InvalidInput;
                 pos += j1.len;
@@ -1218,7 +1439,13 @@ pub fn listClassifications(database: db_mod.Database, book_id: i64, type_filter:
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (type_filter) |tf| { try stmt.bindText(2, tf); try stmt.bindText(3, tf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
+        if (type_filter) |tf| {
+            try stmt.bindText(2, tf);
+            try stmt.bindText(3, tf);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -1236,7 +1463,13 @@ pub fn listClassifications(database: db_mod.Database, book_id: i64, type_filter:
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (type_filter) |tf| { try stmt.bindText(2, tf); try stmt.bindText(3, tf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
+    if (type_filter) |tf| {
+        try stmt.bindText(2, tf);
+        try stmt.bindText(3, tf);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
     try stmt.bindInt(4, limit);
     try stmt.bindInt(5, offset);
 
@@ -1266,7 +1499,11 @@ pub fn listClassifications(database: db_mod.Database, book_id: i64, type_filter:
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -1304,7 +1541,13 @@ pub fn listSubledgerGroups(database: db_mod.Database, book_id: i64, type_filter:
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (type_filter) |tf| { try stmt.bindText(2, tf); try stmt.bindText(3, tf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
+        if (type_filter) |tf| {
+            try stmt.bindText(2, tf);
+            try stmt.bindText(3, tf);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -1326,7 +1569,13 @@ pub fn listSubledgerGroups(database: db_mod.Database, book_id: i64, type_filter:
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (type_filter) |tf| { try stmt.bindText(2, tf); try stmt.bindText(3, tf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
+    if (type_filter) |tf| {
+        try stmt.bindText(2, tf);
+        try stmt.bindText(3, tf);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
     try stmt.bindInt(4, limit);
     try stmt.bindInt(5, offset);
 
@@ -1359,7 +1608,11 @@ pub fn listSubledgerGroups(database: db_mod.Database, book_id: i64, type_filter:
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -1402,8 +1655,20 @@ pub fn listSubledgerAccounts(database: db_mod.Database, book_id: i64, group_filt
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        if (group_filter) |gf| { try stmt.bindInt(2, gf); try stmt.bindInt(3, gf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-        if (name_search) |ns| { try stmt.bindText(4, ns); try stmt.bindText(5, ns); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+        if (group_filter) |gf| {
+            try stmt.bindInt(2, gf);
+            try stmt.bindInt(3, gf);
+        } else {
+            try stmt.bindNull(2);
+            try stmt.bindNull(3);
+        }
+        if (name_search) |ns| {
+            try stmt.bindText(4, ns);
+            try stmt.bindText(5, ns);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -1423,8 +1688,20 @@ pub fn listSubledgerAccounts(database: db_mod.Database, book_id: i64, group_filt
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
-    if (group_filter) |gf| { try stmt.bindInt(2, gf); try stmt.bindInt(3, gf); } else { try stmt.bindNull(2); try stmt.bindNull(3); }
-    if (name_search) |ns| { try stmt.bindText(4, ns); try stmt.bindText(5, ns); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+    if (group_filter) |gf| {
+        try stmt.bindInt(2, gf);
+        try stmt.bindInt(3, gf);
+    } else {
+        try stmt.bindNull(2);
+        try stmt.bindNull(3);
+    }
+    if (name_search) |ns| {
+        try stmt.bindText(4, ns);
+        try stmt.bindText(5, ns);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
     try stmt.bindInt(6, limit);
     try stmt.bindInt(7, offset);
 
@@ -1457,7 +1734,11 @@ pub fn listSubledgerAccounts(database: db_mod.Database, book_id: i64, group_filt
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -1503,8 +1784,20 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
         try stmt.bindInt(1, book_id);
         try stmt.bindText(2, start_date);
         try stmt.bindText(3, end_date);
-        if (group_id) |gf| { try stmt.bindInt(4, gf); try stmt.bindInt(5, gf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-        if (name_search) |ns| { try stmt.bindText(6, ns); try stmt.bindText(7, ns); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+        if (group_id) |gf| {
+            try stmt.bindInt(4, gf);
+            try stmt.bindInt(5, gf);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
+        if (name_search) |ns| {
+            try stmt.bindText(6, ns);
+            try stmt.bindText(7, ns);
+        } else {
+            try stmt.bindNull(6);
+            try stmt.bindNull(7);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -1538,8 +1831,20 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
     try stmt.bindInt(1, book_id);
     try stmt.bindText(2, start_date);
     try stmt.bindText(3, end_date);
-    if (group_id) |gf| { try stmt.bindInt(4, gf); try stmt.bindInt(5, gf); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-    if (name_search) |ns| { try stmt.bindText(6, ns); try stmt.bindText(7, ns); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+    if (group_id) |gf| {
+        try stmt.bindInt(4, gf);
+        try stmt.bindInt(5, gf);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
+    if (name_search) |ns| {
+        try stmt.bindText(6, ns);
+        try stmt.bindText(7, ns);
+    } else {
+        try stmt.bindNull(6);
+        try stmt.bindNull(7);
+    }
     try stmt.bindInt(8, limit);
     try stmt.bindInt(9, offset);
 
@@ -1576,7 +1881,11 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -1627,12 +1936,35 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
         try stmt.bindInt(2, counterparty_id);
         try stmt.bindText(3, start_date);
         try stmt.bindText(4, end_date);
-        if (account_filter) |af| { try stmt.bindInt(5, af); try stmt.bindInt(6, af); } else { try stmt.bindNull(5); try stmt.bindNull(6); }
+        if (account_filter) |af| {
+            try stmt.bindInt(5, af);
+            try stmt.bindInt(6, af);
+        } else {
+            try stmt.bindNull(5);
+            try stmt.bindNull(6);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
 
-    // Compute opening balance from prior transactions
+    var is_debit_normal = true;
+    {
+        var nb_stmt = try database.prepare(
+            \\SELECT a.normal_balance
+            \\FROM ledger_subledger_accounts sa
+            \\JOIN ledger_subledger_groups sg ON sg.id = sa.group_id
+            \\JOIN ledger_accounts a ON a.id = sg.gl_account_id
+            \\WHERE sa.id = ?;
+        );
+        defer nb_stmt.finalize();
+        try nb_stmt.bindInt(1, counterparty_id);
+        const has_nb = try nb_stmt.step();
+        if (has_nb) {
+            const nb = nb_stmt.columnText(0) orelse "debit";
+            is_debit_normal = std.mem.eql(u8, nb, "debit");
+        }
+    }
+
     var opening_balance: i64 = 0;
     {
         var stmt = try database.prepare(
@@ -1646,11 +1978,17 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
         try stmt.bindInt(1, book_id);
         try stmt.bindInt(2, counterparty_id);
         try stmt.bindText(3, start_date);
-        if (account_filter) |af| { try stmt.bindInt(4, af); try stmt.bindInt(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
+        if (account_filter) |af| {
+            try stmt.bindInt(4, af);
+            try stmt.bindInt(5, af);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
         _ = try stmt.step();
         const prior_debits = stmt.columnInt64(0);
         const prior_credits = stmt.columnInt64(1);
-        opening_balance = prior_debits - prior_credits;
+        opening_balance = if (is_debit_normal) prior_debits - prior_credits else prior_credits - prior_debits;
     }
 
     const order_sql: [*:0]const u8 = if (order == .asc)
@@ -1679,7 +2017,13 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
     try stmt.bindInt(2, counterparty_id);
     try stmt.bindText(3, start_date);
     try stmt.bindText(4, end_date);
-    if (account_filter) |af| { try stmt.bindInt(5, af); try stmt.bindInt(6, af); } else { try stmt.bindNull(5); try stmt.bindNull(6); }
+    if (account_filter) |af| {
+        try stmt.bindInt(5, af);
+        try stmt.bindInt(6, af);
+    } else {
+        try stmt.bindNull(5);
+        try stmt.bindNull(6);
+    }
     try stmt.bindInt(7, limit);
     try stmt.bindInt(8, offset);
 
@@ -1698,7 +2042,11 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
             while (try stmt.step()) {
                 const debit = stmt.columnInt64(5);
                 const credit = stmt.columnInt64(6);
-                running += debit - credit;
+                if (is_debit_normal) {
+                    running += debit - credit;
+                } else {
+                    running += credit - debit;
+                }
 
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(0) orelse "");
                 if (pos >= buf.len) return error.InvalidInput;
@@ -1729,11 +2077,19 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
 
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const debit = stmt.columnInt64(5);
                 const credit = stmt.columnInt64(6);
-                running += debit - credit;
+                if (is_debit_normal) {
+                    running += debit - credit;
+                } else {
+                    running += credit - debit;
+                }
 
                 const j1 = "{\"posting_date\":\"";
                 if (pos + j1.len > buf.len) return error.InvalidInput;
@@ -1790,8 +2146,20 @@ pub fn listTransactions(database: db_mod.Database, book_id: i64, account_filter:
         try stmt.bindInt(1, book_id);
         try stmt.bindText(2, start_date);
         try stmt.bindText(3, end_date);
-        if (account_filter) |af| { try stmt.bindInt(4, af); try stmt.bindInt(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-        if (counterparty_filter) |cf| { try stmt.bindInt(6, cf); try stmt.bindInt(7, cf); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+        if (account_filter) |af| {
+            try stmt.bindInt(4, af);
+            try stmt.bindInt(5, af);
+        } else {
+            try stmt.bindNull(4);
+            try stmt.bindNull(5);
+        }
+        if (counterparty_filter) |cf| {
+            try stmt.bindInt(6, cf);
+            try stmt.bindInt(7, cf);
+        } else {
+            try stmt.bindNull(6);
+            try stmt.bindNull(7);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -1821,8 +2189,20 @@ pub fn listTransactions(database: db_mod.Database, book_id: i64, account_filter:
     try stmt.bindInt(1, book_id);
     try stmt.bindText(2, start_date);
     try stmt.bindText(3, end_date);
-    if (account_filter) |af| { try stmt.bindInt(4, af); try stmt.bindInt(5, af); } else { try stmt.bindNull(4); try stmt.bindNull(5); }
-    if (counterparty_filter) |cf| { try stmt.bindInt(6, cf); try stmt.bindInt(7, cf); } else { try stmt.bindNull(6); try stmt.bindNull(7); }
+    if (account_filter) |af| {
+        try stmt.bindInt(4, af);
+        try stmt.bindInt(5, af);
+    } else {
+        try stmt.bindNull(4);
+        try stmt.bindNull(5);
+    }
+    if (counterparty_filter) |cf| {
+        try stmt.bindInt(6, cf);
+        try stmt.bindInt(7, cf);
+    } else {
+        try stmt.bindNull(6);
+        try stmt.bindNull(7);
+    }
     try stmt.bindInt(8, limit);
     try stmt.bindInt(9, offset);
 
@@ -1869,7 +2249,11 @@ pub fn listTransactions(database: db_mod.Database, book_id: i64, account_filter:
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = "{\"posting_date\":\"";
                 if (pos + j1.len > buf.len) return error.InvalidInput;
@@ -1940,35 +2324,40 @@ pub fn subledgerReconciliation(database: db_mod.Database, book_id: i64, group_id
         sl_credits = stmt.columnInt64(1);
     }
 
-    // Control account total: from balance cache
     var gl_debits: i64 = 0;
     var gl_credits: i64 = 0;
     var control_account_number: [50]u8 = undefined;
     var control_number_len: usize = 0;
     {
-        var stmt = try database.prepare(
-            \\SELECT a.number, COALESCE(SUM(ab.debit_sum), 0), COALESCE(SUM(ab.credit_sum), 0)
-            \\FROM ledger_subledger_groups sg
+        var num_stmt = try database.prepare(
+            \\SELECT a.number FROM ledger_subledger_groups sg
             \\JOIN ledger_accounts a ON a.id = sg.gl_account_id
-            \\LEFT JOIN ledger_account_balances ab ON ab.account_id = a.id
-            \\  AND ab.book_id = sg.book_id
-            \\LEFT JOIN ledger_periods p ON p.id = ab.period_id AND p.end_date <= ?
-            \\WHERE sg.id = ? AND sg.book_id = ?
-            \\GROUP BY a.id;
+            \\WHERE sg.id = ? AND sg.book_id = ?;
         );
-        defer stmt.finalize();
-        try stmt.bindText(1, as_of_date);
-        try stmt.bindInt(2, group_id);
-        try stmt.bindInt(3, book_id);
-        if (try stmt.step()) {
-            const num = stmt.columnText(0) orelse "";
+        defer num_stmt.finalize();
+        try num_stmt.bindInt(1, group_id);
+        try num_stmt.bindInt(2, book_id);
+        if (try num_stmt.step()) {
+            const num = num_stmt.columnText(0) orelse "";
             control_number_len = @min(num.len, control_account_number.len);
             @memcpy(control_account_number[0..control_number_len], num[0..control_number_len]);
-            gl_debits = stmt.columnInt64(1);
-            gl_credits = stmt.columnInt64(2);
         } else {
             return error.NotFound;
         }
+    }
+    {
+        var stmt = try database.prepare(
+            \\SELECT COALESCE(SUM(th.base_debit_amount), 0), COALESCE(SUM(th.base_credit_amount), 0)
+            \\FROM ledger_transaction_history th
+            \\JOIN ledger_subledger_groups sg ON sg.id = ?
+            \\WHERE th.account_id = sg.gl_account_id AND th.posting_date <= ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, group_id);
+        try stmt.bindText(2, as_of_date);
+        _ = try stmt.step();
+        gl_debits = stmt.columnInt64(0);
+        gl_credits = stmt.columnInt64(1);
     }
 
     const sl_balance = sl_debits - sl_credits;
@@ -2025,7 +2414,13 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
         try stmt.bindText(2, as_of_date);
-        if (group_id) |gf| { try stmt.bindInt(3, gf); try stmt.bindInt(4, gf); } else { try stmt.bindNull(3); try stmt.bindNull(4); }
+        if (group_id) |gf| {
+            try stmt.bindInt(3, gf);
+            try stmt.bindInt(4, gf);
+        } else {
+            try stmt.bindNull(3);
+            try stmt.bindNull(4);
+        }
         _ = try stmt.step();
         total = stmt.columnInt64(0);
     }
@@ -2075,7 +2470,13 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
     try stmt.bindText(4, as_of_date);
     try stmt.bindInt(5, book_id);
     try stmt.bindText(6, as_of_date);
-    if (group_id) |gf| { try stmt.bindInt(7, gf); try stmt.bindInt(8, gf); } else { try stmt.bindNull(7); try stmt.bindNull(8); }
+    if (group_id) |gf| {
+        try stmt.bindInt(7, gf);
+        try stmt.bindInt(8, gf);
+    } else {
+        try stmt.bindNull(7);
+        try stmt.bindNull(8);
+    }
     try stmt.bindInt(9, limit);
     try stmt.bindInt(10, offset);
 
@@ -2106,7 +2507,11 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
             pos += try writeJsonMeta(buf[pos..], total, limit, offset);
             var first = true;
             while (try stmt.step()) {
-                if (!first) { if (pos >= buf.len) return error.InvalidInput; buf[pos] = ','; pos += 1; }
+                if (!first) {
+                    if (pos >= buf.len) return error.InvalidInput;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
                 first = false;
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
                 pos += j1.len;
@@ -2148,6 +2553,12 @@ test "getBook: returns book data as JSON" {
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Test Book\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"base_currency\":\"PHP\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"rounding_account_id\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"fx_gain_loss_account_id\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"retained_earnings_account_id\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"income_summary_account_id\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"opening_balance_account_id\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"suspense_account_id\":0") != null);
     try std.testing.expect(json[0] == '{');
     try std.testing.expect(json[json.len - 1] == '}');
 }
@@ -2171,8 +2582,9 @@ test "getBook: CSV format" {
     var buf: [4096]u8 = undefined;
     const csv = try getBook(database, 1, &buf, .csv);
 
-    try std.testing.expect(std.mem.indexOf(u8, csv, "id,name,base_currency") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "id,name,base_currency,decimal_places,status,rounding_account_id,fx_gain_loss_account_id") != null);
     try std.testing.expect(std.mem.indexOf(u8, csv, "Test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, ",0,0,0,0,0,0\n") != null);
 }
 
 test "listBooks: returns all books with pagination metadata" {
@@ -2520,7 +2932,7 @@ test "getEntry: returns entry data as JSON" {
     _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", "Test entry", 1, null, "admin");
 
     var buf: [4096]u8 = undefined;
-    const json = try getEntry(database, 1, &buf, .json);
+    const json = try getEntry(database, 1, 1, &buf, .json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"document_number\":\"JE-001\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"description\":\"Test entry\"") != null);
@@ -2533,7 +2945,22 @@ test "getEntry: NotFound" {
     try schema.createAll(database);
 
     var buf: [4096]u8 = undefined;
-    try std.testing.expectError(error.NotFound, getEntry(database, 999, &buf, .json));
+    try std.testing.expectError(error.NotFound, getEntry(database, 999, 1, &buf, .json));
+}
+
+test "getEntry: cross-book entry returns NotFound" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Book 1", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", "Test entry", 1, null, "admin");
+
+    const book2_id = try book_mod.Book.create(database, "Book 2", "USD", 2, "admin");
+
+    var buf: [4096]u8 = undefined;
+    try std.testing.expectError(error.NotFound, getEntry(database, 1, book2_id, &buf, .json));
 }
 
 // ── listEntryLines tests ───────────────────────────────────────
@@ -2875,6 +3302,29 @@ test "subledgerReconciliation: JSON structure" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"sl_balance\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"difference\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"reconciled\":") != null);
+}
+
+test "subledgerReconciliation: reconciled with posted entries" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "1200", "AR", .asset, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const gid = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    _ = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", gid, "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 5_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try database.exec("INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, counterparty_id) VALUES (2, 0, 500000000000, 'PHP', 10000000000, 2, 1, 1);");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const json = try subledgerReconciliation(database, 1, gid, "2026-01-31", &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"difference\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"reconciled\":true") != null);
 }
 
 // ── agedSubledger tests ────────────────────────────────────────

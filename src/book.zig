@@ -1,6 +1,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 const audit = @import("audit.zig");
+const account_mod = @import("account.zig");
 
 pub const BookStatus = enum {
     active,
@@ -54,6 +55,9 @@ pub const Book = struct {
     }
 
     pub fn setRoundingAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is not archived
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -61,7 +65,8 @@ pub const Book = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
         }
 
         // Verify account exists, is active, and belongs to the same book
@@ -71,13 +76,10 @@ pub const Book = struct {
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const acct_status = stmt.columnText(0).?;
-            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            const acct_status_enum = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status_enum != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         // Update book
         {
@@ -97,11 +99,245 @@ pub const Book = struct {
         try database.commit();
     }
 
+    pub fn setFxGainLossAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status_enum = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status_enum != .active) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = stmt.columnText(2).?;
+            if (!std.mem.eql(u8, acct_type, "revenue") and !std.mem.eql(u8, acct_type, "expense")) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET fx_gain_loss_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "fx_gain_loss_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn setRetainedEarningsAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type, is_contra FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = stmt.columnText(2).?;
+            const is_contra = stmt.columnInt(3);
+            if (!std.mem.eql(u8, acct_type, "equity") or is_contra != 0) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET retained_earnings_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "retained_earnings_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn setIncomeSummaryAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type, is_contra FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = stmt.columnText(2).?;
+            const is_contra = stmt.columnInt(3);
+            if (!std.mem.eql(u8, acct_type, "equity") or is_contra != 0) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET income_summary_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "income_summary_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn setOpeningBalanceAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type, is_contra FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = stmt.columnText(2).?;
+            const is_contra = stmt.columnInt(3);
+            if (!std.mem.eql(u8, acct_type, "equity") or is_contra != 0) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET opening_balance_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "opening_balance_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn setSuspenseAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = stmt.columnText(2).?;
+            if (!std.mem.eql(u8, acct_type, "asset") and !std.mem.eql(u8, acct_type, "liability")) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET suspense_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "suspense_account_id", null, id_str, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn validateOpeningBalanceMigration(database: db.Database, book_id: i64) !void {
+        var stmt = try database.prepare("SELECT status, opening_balance_account_id FROM ledger_books WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+        if (status == .archived) return error.BookArchived;
+        const ob_id = stmt.columnInt64(1);
+        if (ob_id <= 0) return error.OpeningBalanceAccountRequired;
+    }
+
     pub fn updateName(database: db.Database, book_id: i64, new_name: []const u8, performed_by: []const u8) !void {
         if (new_name.len == 0) return error.InvalidInput;
 
         var old_name_buf: [256]u8 = undefined;
         var old_name_len: usize = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT name, status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
@@ -111,12 +347,9 @@ pub const Book = struct {
             const old = stmt.columnText(0).?;
             old_name_len = @min(old.len, old_name_buf.len);
             @memcpy(old_name_buf[0..old_name_len], old[0..old_name_len]);
-            const status = stmt.columnText(1).?;
-            if (std.mem.eql(u8, status, "archived")) return error.InvalidInput;
+            const status = BookStatus.fromString(stmt.columnText(1).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("UPDATE ledger_books SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -132,6 +365,9 @@ pub const Book = struct {
     }
 
     pub fn archive(database: db.Database, book_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -151,9 +387,6 @@ pub const Book = struct {
             _ = try stmt.step();
             if (stmt.columnInt(0) > 0) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("UPDATE ledger_books SET status = 'archived', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -357,14 +590,13 @@ test "setRoundingAccount rejects archived book" {
     try Book.archive(database, book_id, "admin");
 
     const result = Book.setRoundingAccount(database, book_id, 1, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BookArchived, result);
 }
 
 test "setRoundingAccount rejects inactive account" {
     const database = try setupTestDb();
     defer database.close();
 
-    const account_mod = @import("account.zig");
     _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
     _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
     try account_mod.Account.updateStatus(database, 1, .inactive, "admin");
@@ -521,6 +753,22 @@ test "updateName rejects archived book" {
     _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
     try Book.archive(database, 1, "admin");
     const result = Book.updateName(database, 1, "New", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "create book rejects empty base_currency" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Book.create(database, "Test", "", 2, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "create book rejects base_currency longer than 3" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Book.create(database, "Test", "PHPP", 2, "admin");
     try std.testing.expectError(error.InvalidInput, result);
 }
 
@@ -531,12 +779,402 @@ test "create operations on archived book should fail at entity level" {
     const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
     try Book.archive(database, book_id, "admin");
 
-    // Account creation on archived book — the account.create checks book exists
-    // but doesn't check book status. This is a Sprint 3 concern (posting engine
-    // will check book status). For now, verify the book IS archived.
+    // Account creation on archived book — account.create checks book exists
+    // AND checks book status, rejecting archived books. Verify the book IS archived.
     var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
     _ = try stmt.step();
     try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+// ── setFxGainLossAccount tests ─────────────────────────────────
+
+test "setFxGainLossAccount happy path with expense account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "8001", "FX Gain/Loss", .expense, false, "admin");
+
+    try Book.setFxGainLossAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT fx_gain_loss_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setFxGainLossAccount happy path with revenue account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "4001", "FX Gain", .revenue, false, "admin");
+
+    try Book.setFxGainLossAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT fx_gain_loss_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setFxGainLossAccount rejects asset account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1001", "Cash", .asset, false, "admin");
+
+    const result = Book.setFxGainLossAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setFxGainLossAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "8001", "FX Gain/Loss", .expense, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setFxGainLossAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setFxGainLossAccount rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "8001", "FX Gain/Loss", .expense, false, "admin");
+
+    const result = Book.setFxGainLossAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── setRetainedEarningsAccount tests ───────────────────────────
+
+test "setRetainedEarningsAccount happy path with equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3100", "Retained Earnings", .equity, false, "admin");
+
+    try Book.setRetainedEarningsAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT retained_earnings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setRetainedEarningsAccount rejects asset account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1001", "Cash", .asset, false, "admin");
+
+    const result = Book.setRetainedEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setRetainedEarningsAccount rejects equity contra account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3200", "Treasury Stock", .equity, true, "admin");
+
+    const result = Book.setRetainedEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setRetainedEarningsAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3100", "Retained Earnings", .equity, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setRetainedEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setRetainedEarningsAccount rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "3100", "Retained Earnings", .equity, false, "admin");
+
+    const result = Book.setRetainedEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── setIncomeSummaryAccount tests ──────────────────────────────
+
+test "setIncomeSummaryAccount happy path with equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3300", "Income Summary", .equity, false, "admin");
+
+    try Book.setIncomeSummaryAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT income_summary_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setIncomeSummaryAccount rejects revenue account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "4001", "Sales", .revenue, false, "admin");
+
+    const result = Book.setIncomeSummaryAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setIncomeSummaryAccount rejects equity contra account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3200", "Treasury Stock", .equity, true, "admin");
+
+    const result = Book.setIncomeSummaryAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setIncomeSummaryAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3300", "Income Summary", .equity, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setIncomeSummaryAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setIncomeSummaryAccount rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "3300", "Income Summary", .equity, false, "admin");
+
+    const result = Book.setIncomeSummaryAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── setOpeningBalanceAccount tests ─────────────────────────────
+
+test "setOpeningBalanceAccount happy path with equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3400", "Opening Balance Equity", .equity, false, "admin");
+
+    try Book.setOpeningBalanceAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT opening_balance_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setOpeningBalanceAccount rejects expense account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "8001", "Misc Expense", .expense, false, "admin");
+
+    const result = Book.setOpeningBalanceAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setOpeningBalanceAccount rejects equity contra account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3200", "Treasury Stock", .equity, true, "admin");
+
+    const result = Book.setOpeningBalanceAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setOpeningBalanceAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3400", "Opening Balance Equity", .equity, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setOpeningBalanceAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setOpeningBalanceAccount rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "3400", "Opening Balance Equity", .equity, false, "admin");
+
+    const result = Book.setOpeningBalanceAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── setSuspenseAccount tests ───────────────────────────────────
+
+test "setSuspenseAccount happy path with asset account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1900", "Suspense", .asset, false, "admin");
+
+    try Book.setSuspenseAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT suspense_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setSuspenseAccount happy path with liability account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "2900", "Suspense Liability", .liability, false, "admin");
+
+    try Book.setSuspenseAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT suspense_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setSuspenseAccount rejects equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3100", "Equity Acct", .equity, false, "admin");
+
+    const result = Book.setSuspenseAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setSuspenseAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1900", "Suspense", .asset, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setSuspenseAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setSuspenseAccount rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "1900", "Suspense", .asset, false, "admin");
+
+    const result = Book.setSuspenseAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+// ── validateOpeningBalanceMigration tests ───────────────────────
+
+test "validateOpeningBalanceMigration without designation returns error" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+
+    const result = Book.validateOpeningBalanceMigration(database, 1);
+    try std.testing.expectError(error.OpeningBalanceAccountRequired, result);
+}
+
+test "validateOpeningBalanceMigration with designation succeeds" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3400", "Opening Balance Equity", .equity, false, "admin");
+    try Book.setOpeningBalanceAccount(database, 1, 1, "admin");
+
+    try Book.validateOpeningBalanceMigration(database, 1);
+}
+
+test "validateOpeningBalanceMigration rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.validateOpeningBalanceMigration(database, 1);
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "validateOpeningBalanceMigration rejects nonexistent book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Book.validateOpeningBalanceMigration(database, 999);
+    try std.testing.expectError(error.NotFound, result);
+}
+
+// ── integration: designate all system accounts ─────────────────
+
+test "integration: designate RE, OB, IS accounts and verify book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    const re_id = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    const ob_id = try account_mod.Account.create(database, book_id, "3400", "Opening Balance Equity", .equity, false, "admin");
+    const is_id = try account_mod.Account.create(database, book_id, "3300", "Income Summary", .equity, false, "admin");
+
+    try Book.setRetainedEarningsAccount(database, book_id, re_id, "admin");
+    try Book.setOpeningBalanceAccount(database, book_id, ob_id, "admin");
+    try Book.setIncomeSummaryAccount(database, book_id, is_id, "admin");
+
+    try Book.validateOpeningBalanceMigration(database, book_id);
+
+    var stmt = try database.prepare("SELECT retained_earnings_account_id, opening_balance_account_id, income_summary_account_id FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(re_id, stmt.columnInt64(0));
+    try std.testing.expectEqual(ob_id, stmt.columnInt64(1));
+    try std.testing.expectEqual(is_id, stmt.columnInt64(2));
 }
