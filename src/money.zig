@@ -14,11 +14,17 @@ pub fn computeBaseAmount(amount: i64, fx_rate: i64) !i64 {
     const wide_amount: i128 = @as(i128, amount);
     const wide_rate: i128 = @as(i128, fx_rate);
     const intermediate = wide_amount * wide_rate;
-    const result = @divTrunc(intermediate, @as(i128, FX_RATE_SCALE));
-    if (result > std.math.maxInt(i64) or result < std.math.minInt(i64)) {
+    const scale: i128 = @as(i128, FX_RATE_SCALE);
+    const quotient = @divTrunc(intermediate, scale);
+    const remainder = @rem(intermediate, scale);
+    const rounded = if (intermediate >= 0)
+        (if (remainder * 2 >= scale) quotient + 1 else quotient)
+    else
+        (if (-remainder * 2 >= scale) quotient - 1 else quotient);
+    if (rounded > std.math.maxInt(i64) or rounded < std.math.minInt(i64)) {
         return error.AmountOverflow;
     }
-    return @intCast(result);
+    return @intCast(rounded);
 }
 
 /// Parse a decimal string into a scaled i64. Currently used by tests and language bindings.
@@ -286,13 +292,43 @@ test "parseDecimal: FX rate scale" {
     try std.testing.expectEqual(@as(i64, 565_000_000_000), result);
 }
 
-test "computeBaseAmount: FX rounding truncates (not rounds)" {
-    // 100.01 * 1.33333 = 133.3433333... — truncation at i64 boundary
-    const amount: i64 = 10_001_000_000; // 100.01 * 10^8
-    const fx_rate: i64 = 13_333_300_000; // 1.33333 * 10^10
-    // exact: 10_001_000_000 * 13_333_300_000 / 10_000_000_000 = 13_334_633_330
+test "computeBaseAmount: FX rounding half-away-from-zero" {
+    // 100.01 * 1.33333 = exact division, no rounding needed
+    const amount: i64 = 10_001_000_000;
+    const fx_rate: i64 = 13_333_300_000;
     const result = try computeBaseAmount(amount, fx_rate);
     try std.testing.expectEqual(@as(i64, 13_334_633_330), result);
+}
+
+test "computeBaseAmount: rounds up when remainder >= 0.5" {
+    // 1.00000000 * 1.00000000005 -> product = 10^8 * (10^10 + 5) = 10^18 + 5*10^8
+    // quotient = 10^8, remainder = 5*10^8 = 500_000_000
+    // 500_000_000 * 2 = 1_000_000_000 >= 10^10? No, 1B < 10B. So no round up.
+    // Let me use: amount=3, rate=10_000_000_001 (1.0000000001)
+    // product = 3 * 10_000_000_001 = 30_000_000_003
+    // quotient = 3, remainder = 3. 3*2=6 < 10B. No round.
+    // Better: use a rate that produces remainder >= half of FX_RATE_SCALE
+    // amount=1 (1e-8), rate=15_000_000_000 (1.5)
+    // product = 1 * 15_000_000_000 = 15_000_000_000
+    // quotient = 1, remainder = 5_000_000_000. 5B*2 = 10B >= 10B. Round up!
+    const result = try computeBaseAmount(1, 15_000_000_000);
+    try std.testing.expectEqual(@as(i64, 2), result);
+}
+
+test "computeBaseAmount: does not round when remainder < 0.5" {
+    // amount=1 (1e-8), rate=14_999_999_999 (1.4999999999)
+    // product = 14_999_999_999. quotient = 1, remainder = 4_999_999_999
+    // 4_999_999_999 * 2 = 9_999_999_998 < 10B. No round.
+    const result = try computeBaseAmount(1, 14_999_999_999);
+    try std.testing.expectEqual(@as(i64, 1), result);
+}
+
+test "computeBaseAmount: negative amount rounds away from zero" {
+    // amount=-1, rate=15_000_000_000
+    // product = -15_000_000_000. quotient = -1, remainder = -5_000_000_000
+    // -(-5B)*2 = 10B >= 10B. Round down (away from zero): -1 - 1 = -2
+    const result = try computeBaseAmount(-1, 15_000_000_000);
+    try std.testing.expectEqual(@as(i64, -2), result);
 }
 
 test "computeBaseAmount: FX with many decimal places in rate" {

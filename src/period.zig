@@ -151,13 +151,16 @@ pub const Period = struct {
     }
 
     pub fn transition(database: db.Database, period_id: i64, target_status: PeriodStatus, performed_by: []const u8) !void {
+        return transitionWithReason(database, period_id, target_status, null, performed_by);
+    }
+
+    pub fn transitionWithReason(database: db.Database, period_id: i64, target_status: PeriodStatus, reason: ?[]const u8, performed_by: []const u8) !void {
         var current: PeriodStatus = undefined;
         var period_book_id: i64 = 0;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
-        // Fetch current status and book_id
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_periods WHERE id = ?;");
             defer stmt.finalize();
@@ -171,6 +174,11 @@ pub const Period = struct {
         if (current == .locked) return error.PeriodLocked;
         if (!current.canTransitionTo(target_status)) return error.InvalidTransition;
 
+        const is_reopen = target_status == .open and (current == .closed or current == .soft_closed);
+        if (is_reopen) {
+            if (reason == null or reason.?.len == 0) return error.InvalidInput;
+        }
+
         {
             var stmt = try database.prepare("UPDATE ledger_periods SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
@@ -180,6 +188,9 @@ pub const Period = struct {
         }
 
         try audit.log(database, "period", period_id, "transition", "status", current.toString(), target_status.toString(), performed_by, period_book_id);
+        if (reason) |r| {
+            try audit.log(database, "period", period_id, "transition", "reopen_reason", null, r, performed_by, period_book_id);
+        }
 
         if (owns_txn) try database.commit();
     }
@@ -602,7 +613,7 @@ test "transition allows soft_closed -> open (revert)" {
 
     _ = try Period.create(database, 1, "January 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
     try Period.transition(database, 1, .soft_closed, "admin");
-    try Period.transition(database, 1, .open, "admin");
+    try Period.transitionWithReason(database, 1, .open, "Correction needed", "admin");
 
     var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = 1;");
     defer stmt.finalize();
@@ -617,7 +628,7 @@ test "transition allows closed -> open (emergency reopen)" {
     _ = try Period.create(database, 1, "January 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
     try Period.transition(database, 1, .soft_closed, "admin");
     try Period.transition(database, 1, .closed, "admin");
-    try Period.transition(database, 1, .open, "admin");
+    try Period.transitionWithReason(database, 1, .open, "Emergency correction", "admin");
 
     var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = 1;");
     defer stmt.finalize();
@@ -1230,4 +1241,37 @@ test "full lifecycle audit trail: book -> account -> period -> transitions" {
     _ = try stmt.step();
     try std.testing.expectEqualStrings("period", stmt.columnText(0).?);
     try std.testing.expectEqualStrings("transition", stmt.columnText(1).?);
+}
+
+test "reopen closed period requires reason" {
+    const database = try setupTestDb();
+    defer database.close();
+    const period_id = try Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try Period.transition(database, period_id, .soft_closed, "admin");
+    try Period.transition(database, period_id, .closed, "admin");
+    const no_reason = Period.transitionWithReason(database, period_id, .open, null, "admin");
+    try std.testing.expectError(error.InvalidInput, no_reason);
+    const empty_reason = Period.transitionWithReason(database, period_id, .open, "", "admin");
+    try std.testing.expectError(error.InvalidInput, empty_reason);
+    try Period.transitionWithReason(database, period_id, .open, "Year-end correction needed", "admin");
+}
+
+test "reopen closed period logs reason in audit" {
+    const database = try setupTestDb();
+    defer database.close();
+    const period_id = try Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try Period.transition(database, period_id, .soft_closed, "admin");
+    try Period.transition(database, period_id, .closed, "admin");
+    try Period.transitionWithReason(database, period_id, .open, "BIR audit requirement", "admin");
+    var stmt = try database.prepare("SELECT new_value FROM ledger_audit_log WHERE field_changed = 'reopen_reason';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("BIR audit requirement", stmt.columnText(0).?);
+}
+
+test "forward transition does not require reason" {
+    const database = try setupTestDb();
+    defer database.close();
+    const period_id = try Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try Period.transitionWithReason(database, period_id, .soft_closed, null, "admin");
 }

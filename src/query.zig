@@ -2464,6 +2464,22 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
         \\ORDER BY counterparty_number DESC LIMIT ? OFFSET ?;
     ;
 
+    var is_credit_normal = false;
+    if (group_id) |gid| {
+        var nb_stmt = try database.prepare(
+            \\SELECT a.normal_balance FROM ledger_subledger_groups sg
+            \\JOIN ledger_accounts a ON a.id = sg.gl_account_id
+            \\WHERE sg.id = ?;
+        );
+        defer nb_stmt.finalize();
+        try nb_stmt.bindInt(1, gid);
+        if (try nb_stmt.step()) {
+            if (nb_stmt.columnText(0)) |nb| {
+                is_credit_normal = std.mem.eql(u8, nb, "credit");
+            }
+        }
+    }
+
     var stmt = try database.prepare(order_sql);
     defer stmt.finalize();
     // Bind as_of_date 4 times for the 4 CASE expressions
@@ -2500,8 +2516,9 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
+                const sign: i64 = if (is_credit_normal) -1 else 1;
                 const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d}\n", .{
-                    stmt.columnInt64(3), stmt.columnInt64(4), stmt.columnInt64(5), stmt.columnInt64(6), stmt.columnInt64(7),
+                    stmt.columnInt64(3) * sign, stmt.columnInt64(4) * sign, stmt.columnInt64(5) * sign, stmt.columnInt64(6) * sign, stmt.columnInt64(7) * sign,
                 }) catch return error.InvalidInput;
                 pos += nums.len;
             }
@@ -2524,8 +2541,9 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
+                const sign: i64 = if (is_credit_normal) -1 else 1;
                 const j3 = std.fmt.bufPrint(buf[pos..], "\",\"current_0_30\":{d},\"past_due_31_60\":{d},\"past_due_61_90\":{d},\"past_due_90_plus\":{d},\"total\":{d}}}", .{
-                    stmt.columnInt64(3), stmt.columnInt64(4), stmt.columnInt64(5), stmt.columnInt64(6), stmt.columnInt64(7),
+                    stmt.columnInt64(3) * sign, stmt.columnInt64(4) * sign, stmt.columnInt64(5) * sign, stmt.columnInt64(6) * sign, stmt.columnInt64(7) * sign,
                 }) catch return error.InvalidInput;
                 pos += j3.len;
             }

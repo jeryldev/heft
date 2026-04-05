@@ -564,10 +564,11 @@ pub export fn ledger_revalue_forex_balances(handle: ?*LedgerDB, book_id: i64, pe
         return -1;
     }
 
-    return heft.revaluation.revalueForexBalances(h.sqlite, book_id, period_id, rates_buf[0..rate_count], std.mem.span(performed_by)) catch |err| {
+    const result = heft.revaluation.revalueForexBalances(h.sqlite, book_id, period_id, rates_buf[0..rate_count], std.mem.span(performed_by)) catch |err| {
         setError(mapError(err));
         return -1;
     };
+    return result.entry_id;
 }
 
 // ── Error Reporting ────────────────────────────────────────────
@@ -1486,12 +1487,14 @@ test "C ABI: full lifecycle book -> account -> period -> transition" {
 
         const acct_id = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
         try std.testing.expect(acct_id > 0);
+        const rounding_acct = ledger_create_account(h, book_id, "7000", "Rounding", "expense", 0, "admin");
+        try std.testing.expect(rounding_acct > 0);
 
         const period_id = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
         try std.testing.expect(period_id > 0);
 
         try std.testing.expect(ledger_transition_period(h, period_id, "soft_closed", "admin"));
-        try std.testing.expect(ledger_set_rounding_account(h, book_id, acct_id, "admin"));
+        try std.testing.expect(ledger_set_rounding_account(h, book_id, rounding_acct, "admin"));
         try std.testing.expect(ledger_update_account_status(h, acct_id, "archived", "admin"));
     }
 }

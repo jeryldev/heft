@@ -31,6 +31,33 @@ pub const Book = struct {
         \\VALUES (?, ?, ?);
     ;
 
+    fn isSystemAccount(database: db.Database, book_id: i64, account_id: i64, exclude_column: []const u8) !bool {
+        const columns = [_][]const u8{
+            "rounding_account_id",
+            "fx_gain_loss_account_id",
+            "retained_earnings_account_id",
+            "income_summary_account_id",
+            "opening_balance_account_id",
+            "suspense_account_id",
+        };
+        var stmt = try database.prepare(
+            \\SELECT rounding_account_id, fx_gain_loss_account_id,
+            \\  retained_earnings_account_id, income_summary_account_id,
+            \\  opening_balance_account_id, suspense_account_id
+            \\FROM ledger_books WHERE id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        const has_row = try stmt.step();
+        if (!has_row) return false;
+        inline for (columns, 0..) |col, i| {
+            if (!std.mem.eql(u8, col, exclude_column)) {
+                if (stmt.columnInt64(@intCast(i)) == account_id) return true;
+            }
+        }
+        return false;
+    }
+
     pub fn create(database: db.Database, name: []const u8, base_currency: []const u8, decimal_places: i32, performed_by: []const u8) !i64 {
         if (name.len == 0) return error.InvalidInput;
         if (base_currency.len != 3) return error.InvalidInput;
@@ -69,9 +96,8 @@ pub const Book = struct {
             if (status == .archived) return error.BookArchived;
         }
 
-        // Verify account exists, is active, and belongs to the same book
         {
-            var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, book_id, account_type FROM ledger_accounts WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
@@ -79,9 +105,12 @@ pub const Book = struct {
             const acct_status_enum = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             if (acct_status_enum != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = account_mod.AccountType.fromString(stmt.columnText(2).?) orelse return error.InvalidInput;
+            if (acct_type != .revenue and acct_type != .expense) return error.InvalidInput;
         }
 
-        // Update book
+        if (try isSystemAccount(database, book_id, account_id, "rounding_account_id")) return error.InvalidInput;
+
         {
             var stmt = try database.prepare("UPDATE ledger_books SET rounding_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
@@ -125,6 +154,8 @@ pub const Book = struct {
             const acct_type = stmt.columnText(2).?;
             if (!std.mem.eql(u8, acct_type, "revenue") and !std.mem.eql(u8, acct_type, "expense")) return error.InvalidInput;
         }
+
+        if (try isSystemAccount(database, book_id, account_id, "fx_gain_loss_account_id")) return error.InvalidInput;
 
         {
             var stmt = try database.prepare("UPDATE ledger_books SET fx_gain_loss_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -170,6 +201,8 @@ pub const Book = struct {
             if (!std.mem.eql(u8, acct_type, "equity") or is_contra != 0) return error.InvalidInput;
         }
 
+        if (try isSystemAccount(database, book_id, account_id, "retained_earnings_account_id")) return error.InvalidInput;
+
         {
             var stmt = try database.prepare("UPDATE ledger_books SET retained_earnings_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
@@ -213,6 +246,8 @@ pub const Book = struct {
             const is_contra = stmt.columnInt(3);
             if (!std.mem.eql(u8, acct_type, "equity") or is_contra != 0) return error.InvalidInput;
         }
+
+        if (try isSystemAccount(database, book_id, account_id, "income_summary_account_id")) return error.InvalidInput;
 
         {
             var stmt = try database.prepare("UPDATE ledger_books SET income_summary_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -258,6 +293,8 @@ pub const Book = struct {
             if (!std.mem.eql(u8, acct_type, "equity") or is_contra != 0) return error.InvalidInput;
         }
 
+        if (try isSystemAccount(database, book_id, account_id, "opening_balance_account_id")) return error.InvalidInput;
+
         {
             var stmt = try database.prepare("UPDATE ledger_books SET opening_balance_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
@@ -300,6 +337,8 @@ pub const Book = struct {
             const acct_type = stmt.columnText(2).?;
             if (!std.mem.eql(u8, acct_type, "asset") and !std.mem.eql(u8, acct_type, "liability")) return error.InvalidInput;
         }
+
+        if (try isSystemAccount(database, book_id, account_id, "suspense_account_id")) return error.InvalidInput;
 
         {
             var stmt = try database.prepare("UPDATE ledger_books SET suspense_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -1266,4 +1305,25 @@ test "setRequireApproval writes audit log" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "setRoundingAccount rejects non-PL account type" {
+    const database = try setupTestDb();
+    defer database.close();
+    _ = try Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    const result = Book.setRoundingAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "duplicate system account role rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+    _ = try Book.create(database, "Test", "PHP", 2, "admin");
+    const re = try account_mod.Account.create(database, 1, "3100", "RE", .equity, false, "admin");
+    const is_acct = try account_mod.Account.create(database, 1, "3200", "IS", .equity, false, "admin");
+    try Book.setIncomeSummaryAccount(database, 1, is_acct, "admin");
+    const result = Book.setRetainedEarningsAccount(database, 1, is_acct, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+    try Book.setRetainedEarningsAccount(database, 1, re, "admin");
 }

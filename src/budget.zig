@@ -3,12 +3,18 @@ const db = @import("db.zig");
 const audit = @import("audit.zig");
 const export_mod = @import("export.zig");
 
-/// Budget status lifecycle. Transition function not yet implemented.
-/// Will be exposed as ledger_transition_budget in a future sprint.
 pub const BudgetStatus = enum {
     draft,
     approved,
     closed,
+
+    pub fn canTransitionTo(self: BudgetStatus, target: BudgetStatus) bool {
+        return switch (self) {
+            .draft => target == .approved,
+            .approved => target == .closed,
+            .closed => false,
+        };
+    }
 
     pub fn toString(self: BudgetStatus) []const u8 {
         return @tagName(self);
@@ -100,6 +106,37 @@ pub const Budget = struct {
         try audit.log(database, "budget", budget_id, "delete", null, null, null, performed_by, book_id);
         if (owns_txn) try database.commit();
     }
+
+    pub fn transition(database: db.Database, budget_id: i64, target: BudgetStatus, performed_by: []const u8) !void {
+        var current: BudgetStatus = undefined;
+        var book_id: i64 = 0;
+
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id FROM ledger_budgets WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, budget_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            current = BudgetStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            book_id = stmt.columnInt64(1);
+        }
+
+        if (!current.canTransitionTo(target)) return error.InvalidTransition;
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_budgets SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, target.toString());
+            try stmt.bindInt(2, budget_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "budget", budget_id, "update", "status", current.toString(), target.toString(), performed_by, book_id);
+        if (owns_txn) try database.commit();
+    }
 };
 
 pub const BudgetLine = struct {
@@ -109,12 +146,14 @@ pub const BudgetLine = struct {
 
         var book_id: i64 = 0;
         {
-            var stmt = try database.prepare("SELECT book_id FROM ledger_budgets WHERE id = ?;");
+            var stmt = try database.prepare("SELECT book_id, status FROM ledger_budgets WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, budget_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             book_id = stmt.columnInt64(0);
+            const bstatus = BudgetStatus.fromString(stmt.columnText(1).?) orelse return error.InvalidInput;
+            if (bstatus != .draft) return error.InvalidTransition;
         }
 
         {
@@ -619,4 +658,53 @@ test "Budget audit log verified on create" {
     try stmt.bindInt(1, budget_id);
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "Budget.transition draft to approved" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const budget_id = try Budget.create(database, book_id, "FY2026 Budget", 2026, "admin");
+    try Budget.transition(database, budget_id, .approved, "admin");
+    var stmt = try database.prepare("SELECT status FROM ledger_budgets WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, budget_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("approved", stmt.columnText(0).?);
+}
+
+test "Budget.transition approved to closed" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const budget_id = try Budget.create(database, book_id, "FY2026 Budget", 2026, "admin");
+    try Budget.transition(database, budget_id, .approved, "admin");
+    try Budget.transition(database, budget_id, .closed, "admin");
+    var stmt = try database.prepare("SELECT status FROM ledger_budgets WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, budget_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("closed", stmt.columnText(0).?);
+}
+
+test "Budget.transition rejects invalid transition" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const budget_id = try Budget.create(database, book_id, "FY2026 Budget", 2026, "admin");
+    const result = Budget.transition(database, budget_id, .closed, "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
+}
+
+test "BudgetLine.set rejects approved budget" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const budget_id = try Budget.create(database, book_id, "FY2026 Budget", 2026, "admin");
+    try Budget.transition(database, budget_id, .approved, "admin");
+    const acct_id = try createTestAccount(database, book_id, "4000", "Revenue", .revenue);
+    const period_mod = @import("period.zig");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const result = BudgetLine.set(database, budget_id, acct_id, period_id, 100_000_000_000, "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
 }
