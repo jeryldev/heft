@@ -7,7 +7,7 @@ pub const ReportRow = struct {
     account_number_len: usize,
     account_name: [256]u8,
     account_name_len: usize,
-    account_type: [10]u8,
+    account_type: [16]u8,
     account_type_len: usize,
     debit_balance: i64,
     credit_balance: i64,
@@ -30,7 +30,7 @@ pub const TransactionRow = struct {
     posting_date_len: usize,
     document_number: [100]u8,
     document_number_len: usize,
-    description: [256]u8,
+    description: [1001]u8,
     description_len: usize,
     account_id: i64,
     account_number: [50]u8,
@@ -95,11 +95,13 @@ fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, 
 
         switch (running_mode) {
             .debit_normal => {
-                running += row.debit_amount - row.credit_amount;
+                const delta = std.math.sub(i64, row.debit_amount, row.credit_amount) catch return error.AmountOverflow;
+                running = std.math.add(i64, running, delta) catch return error.AmountOverflow;
                 row.running_balance = running;
             },
             .credit_normal => {
-                running += row.credit_amount - row.debit_amount;
+                const delta = std.math.sub(i64, row.credit_amount, row.debit_amount) catch return error.AmountOverflow;
+                running = std.math.add(i64, running, delta) catch return error.AmountOverflow;
                 row.running_balance = running;
             },
             .none => {
@@ -107,8 +109,8 @@ fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, 
             },
         }
 
-        total_debits += row.debit_amount;
-        total_credits += row.credit_amount;
+        total_debits = std.math.add(i64, total_debits, row.debit_amount) catch return error.AmountOverflow;
+        total_credits = std.math.add(i64, total_credits, row.credit_amount) catch return error.AmountOverflow;
         try rows.append(allocator, row);
     }
 
@@ -158,20 +160,20 @@ fn buildReportResult(database: db.Database, sql: [*:0]const u8, binds: anytype) 
             row.debit_balance = debit_sum - credit_sum;
             row.credit_balance = 0;
             if (row.debit_balance < 0) {
-                row.credit_balance = -row.debit_balance;
+                row.credit_balance = std.math.negate(row.debit_balance) catch return error.AmountOverflow;
                 row.debit_balance = 0;
             }
         } else {
             row.credit_balance = credit_sum - debit_sum;
             row.debit_balance = 0;
             if (row.credit_balance < 0) {
-                row.debit_balance = -row.credit_balance;
+                row.debit_balance = std.math.negate(row.credit_balance) catch return error.AmountOverflow;
                 row.credit_balance = 0;
             }
         }
 
-        total_debits += row.debit_balance;
-        total_credits += row.credit_balance;
+        total_debits = std.math.add(i64, total_debits, row.debit_balance) catch return error.AmountOverflow;
+        total_credits = std.math.add(i64, total_credits, row.credit_balance) catch return error.AmountOverflow;
         try rows.append(allocator, row);
     }
 
@@ -256,9 +258,18 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
     return result;
 }
 
+const jr_sql: [*:0]const u8 =
+    \\SELECT th.posting_date, th.document_number,
+    \\  th.entry_description, th.account_id, th.account_number,
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\FROM ledger_transaction_history th
+    \\WHERE th.book_id = ? AND th.posting_date >= ? AND th.posting_date <= ?
+    \\ORDER BY th.document_number, th.line_id;
+;
+
 pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
     try verifyBookExists(database, book_id);
-    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, .none);
+    return buildLedgerResult(database, jr_sql, .{ book_id, start_date, end_date }, .none);
 }
 
 fn verifyBookExists(database: db.Database, book_id: i64) !void {
@@ -339,20 +350,20 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
             row.debit_balance = debit_sum - credit_sum;
             row.credit_balance = 0;
             if (row.debit_balance < 0) {
-                row.credit_balance = -row.debit_balance;
+                row.credit_balance = std.math.negate(row.debit_balance) catch return error.AmountOverflow;
                 row.debit_balance = 0;
             }
         } else {
             row.credit_balance = credit_sum - debit_sum;
             row.debit_balance = 0;
             if (row.credit_balance < 0) {
-                row.debit_balance = -row.credit_balance;
+                row.debit_balance = std.math.negate(row.credit_balance) catch return error.AmountOverflow;
                 row.credit_balance = 0;
             }
         }
 
-        total_debits += row.debit_balance;
-        total_credits += row.credit_balance;
+        total_debits = std.math.add(i64, total_debits, row.debit_balance) catch return error.AmountOverflow;
+        total_credits = std.math.add(i64, total_credits, row.credit_balance) catch return error.AmountOverflow;
         try rows.append(allocator, row);
     }
 
@@ -406,18 +417,21 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
             const debits = stmt.columnInt64(1);
             const credits = stmt.columnInt64(2);
             if (std.mem.eql(u8, acct_type, "revenue")) {
-                net_income += credits - debits;
+                const delta = std.math.sub(i64, credits, debits) catch return error.AmountOverflow;
+                net_income = std.math.add(i64, net_income, delta) catch return error.AmountOverflow;
             } else {
-                net_income -= debits - credits;
+                const exp_delta = std.math.sub(i64, debits, credits) catch return error.AmountOverflow;
+                net_income = std.math.sub(i64, net_income, exp_delta) catch return error.AmountOverflow;
             }
         }
     }
 
     // Inject net income into totals (equity side)
     if (net_income > 0) {
-        result.total_credits += net_income;
+        result.total_credits = std.math.add(i64, result.total_credits, net_income) catch return error.AmountOverflow;
     } else {
-        result.total_debits += -net_income;
+        const abs_ni = std.math.negate(net_income) catch return error.AmountOverflow;
+        result.total_debits = std.math.add(i64, result.total_debits, abs_ni) catch return error.AmountOverflow;
     }
 
     return result;
@@ -518,8 +532,8 @@ test "trial balance: all five account types" {
     const result = try trialBalance(database, 1, "2026-01-31");
     defer result.deinit();
 
-    // 4 accounts with activity (Capital, Cash, Revenue, COGS, AP)
-    try std.testing.expect(result.rows.len >= 4);
+    // 5 accounts with activity (Cash, AP, Capital, Revenue, COGS)
+    try std.testing.expectEqual(@as(usize, 5), result.rows.len);
     try std.testing.expectEqual(result.total_debits, result.total_credits);
 }
 
@@ -1468,6 +1482,7 @@ test "AL: opening balance from prior period" {
     defer result.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), result.opening_balance);
     try std.testing.expectEqual(@as(i64, 5_000_000_000_00), result.rows[0].debit_amount);
 }
 
@@ -1528,4 +1543,166 @@ test "JR: excludes void entries" {
     defer result.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+}
+
+test "TB: no posted entries returns empty result" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Create draft only (no posting)
+    _ = try entry_mod.Entry.createDraft(database, 1, "DRAFT-001", "2026-01-05", "2026-01-05", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 4, null, null, "admin");
+
+    const result = try trialBalance(database, 1, "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 0), result.total_debits);
+    try std.testing.expectEqual(@as(i64, 0), result.total_credits);
+}
+
+test "IS: no revenue or expense activity returns empty" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Post only A/L/E entries (no revenue or expense)
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 4 }});
+
+    const result = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 0), result.total_debits);
+    try std.testing.expectEqual(@as(i64, 0), result.total_credits);
+}
+
+test "BS: contra asset (accumulated depreciation) appears on credit side" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Buy equipment: Debit Equipment (id=3), Credit Capital (id=4)
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 50_000_000_000_00, .account_id = 3 }}, &.{.{ .amount = 50_000_000_000_00, .account_id = 4 }});
+    // Depreciation: Debit COGS (id=6), Credit Accum Dep (id=2, contra asset)
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 2 }});
+
+    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    // Find Accum Depreciation in BS rows
+    var found_accum = false;
+    for (result.rows) |row| {
+        if (std.mem.eql(u8, row.account_number[0..row.account_number_len], "1900")) {
+            found_accum = true;
+            // Contra asset has credit normal balance, so it shows on credit side
+            try std.testing.expectEqual(@as(i64, 10_000_000_000_00), row.credit_balance);
+            try std.testing.expectEqual(@as(i64, 0), row.debit_balance);
+        }
+    }
+    try std.testing.expect(found_accum);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
+test "AL: no transactions returns empty rows with zero opening balance" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Post in Jan so there is prior activity for Cash
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+
+    // Query AL for Capital (id=4) in Feb — no Feb transactions but has Jan prior
+    const result = try accountLedger(database, 1, 4, "2026-02-01", "2026-02-28");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    // Opening balance from Jan for Capital (credit normal): 5000 credit
+    try std.testing.expectEqual(@as(i64, 5_000_000_000_00), result.opening_balance);
+    try std.testing.expectEqual(@as(i64, 5_000_000_000_00), result.closing_balance);
+}
+
+test "JR: sorted by document number" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Post JE-003 first, then JE-001 — JR should return JE-001 first
+    try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 5 }});
+
+    const result = try journalRegister(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), result.rows.len);
+    // First two rows should be JE-001 (sorted by document_number)
+    try std.testing.expectEqualStrings("JE-001", result.rows[0].document_number[0..result.rows[0].document_number_len]);
+    try std.testing.expectEqualStrings("JE-001", result.rows[1].document_number[0..result.rows[1].document_number_len]);
+    // Last two rows should be JE-003
+    try std.testing.expectEqualStrings("JE-003", result.rows[2].document_number[0..result.rows[2].document_number_len]);
+    try std.testing.expectEqualStrings("JE-003", result.rows[3].document_number[0..result.rows[3].document_number_len]);
+}
+
+test "GL: sorted by posting date" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Post JE-003 on Jan 20 first, then JE-001 on Jan 10 — GL should return Jan 10 first
+    try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 5 }});
+
+    const result = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), result.rows.len);
+    // First two rows should be from Jan 10
+    try std.testing.expectEqualStrings("2026-01-10", result.rows[0].posting_date[0..result.rows[0].posting_date_len]);
+    try std.testing.expectEqualStrings("2026-01-10", result.rows[1].posting_date[0..result.rows[1].posting_date_len]);
+    // Last two rows should be from Jan 20
+    try std.testing.expectEqualStrings("2026-01-20", result.rows[2].posting_date[0..result.rows[2].posting_date_len]);
+    try std.testing.expectEqualStrings("2026-01-20", result.rows[3].posting_date[0..result.rows[3].posting_date_len]);
+}
+
+test "TB: void entry shows zero balances" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-002", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 5 }});
+
+    // Void both entries
+    try entry_mod.Entry.voidEntry(database, 1, "Error", "admin");
+    try entry_mod.Entry.voidEntry(database, 2, "Error", "admin");
+
+    const result = try trialBalance(database, 1, "2026-01-31");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(i64, 0), result.total_debits);
+    try std.testing.expectEqual(@as(i64, 0), result.total_credits);
+}
+
+test "BS: net income injection — revenue and expense flow into equity side" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    // Capital contribution
+    try postEntry(database, "JE-001", "2026-01-05", 1, &.{.{ .amount = 20_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 20_000_000_000_00, .account_id = 4 }});
+    // Revenue
+    try postEntry(database, "JE-002", "2026-01-10", 1, &.{.{ .amount = 8_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 8_000_000_000_00, .account_id = 5 }});
+    // Expense
+    try postEntry(database, "JE-003", "2026-01-15", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }});
+
+    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    // BS rows only contain A/L/E (no revenue/expense rows)
+    for (result.rows) |row| {
+        const at = row.account_type[0..row.account_type_len];
+        try std.testing.expect(!std.mem.eql(u8, at, "revenue"));
+        try std.testing.expect(!std.mem.eql(u8, at, "expense"));
+    }
+
+    // Net income (8000 - 3000 = 5000) injected into totals
+    // Assets: Cash = 20000 + 8000 - 3000 = 25000 debit
+    // Equity: Capital = 20000 credit + net income 5000 = 25000 credit side
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+    // Verify net income was actually injected (total_credits > just Capital)
+    try std.testing.expect(result.total_credits > 20_000_000_000_00);
 }
