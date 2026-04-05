@@ -56,6 +56,9 @@ pub const Entry = struct {
     pub fn createDraft(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, performed_by: []const u8) !i64 {
         if (document_number.len == 0) return error.InvalidInput;
 
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -81,9 +84,6 @@ pub const Entry = struct {
             }
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
-
         var stmt = try database.prepare(create_sql);
         defer stmt.finalize();
 
@@ -107,6 +107,10 @@ pub const Entry = struct {
     pub fn addLine(database: db.Database, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !i64 {
         // Verify entry exists and is draft
         var entry_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -129,9 +133,6 @@ pub const Entry = struct {
             if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
             if (stmt.columnInt64(1) != entry_book_id) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         var stmt = try database.prepare(line_sql);
         defer stmt.finalize();
@@ -159,6 +160,10 @@ pub const Entry = struct {
         // Fetch line's entry_id and verify entry is draft
         var entry_id: i64 = 0;
         var entry_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT el.entry_id, e.status, e.book_id
@@ -175,9 +180,6 @@ pub const Entry = struct {
             if (!std.mem.eql(u8, status, "draft")) return error.AlreadyPosted;
             entry_book_id = stmt.columnInt64(2);
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("DELETE FROM ledger_entry_lines WHERE id = ?;");
@@ -206,6 +208,10 @@ pub const Entry = struct {
         var old_desc_buf: [1001]u8 = undefined;
         var old_desc_len: usize = 0;
         var old_has_desc = false;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT e.status, e.book_id, el.debit_amount, el.credit_amount,
@@ -248,9 +254,6 @@ pub const Entry = struct {
             if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
             if (stmt.columnInt64(1) != entry_book_id) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -305,9 +308,13 @@ pub const Entry = struct {
             }
             const new_cp = counterparty_id orelse 0;
             if (old_counterparty != new_cp) {
-                const old_s = std.fmt.bufPrint(&old_buf, "{d}", .{old_counterparty}) catch unreachable;
-                const new_s = std.fmt.bufPrint(&new_buf, "{d}", .{new_cp}) catch unreachable;
-                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "counterparty_id", old_s, new_s, performed_by, entry_book_id);
+                const old_cp_s: ?[]const u8 = if (old_counterparty != 0) blk: {
+                    break :blk std.fmt.bufPrint(&old_buf, "{d}", .{old_counterparty}) catch unreachable;
+                } else null;
+                const new_cp_s: ?[]const u8 = if (counterparty_id) |cp| blk: {
+                    break :blk std.fmt.bufPrint(&new_buf, "{d}", .{cp}) catch unreachable;
+                } else null;
+                try audit.logWithStmt(&audit_stmt, "entry_line", line_id, "update", "counterparty_id", old_cp_s, new_cp_s, performed_by, entry_book_id);
             }
             const old_desc = if (old_has_desc) old_desc_buf[0..old_desc_len] else "";
             const new_desc = description orelse "";
@@ -321,6 +328,10 @@ pub const Entry = struct {
 
     pub fn deleteDraft(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
         var entry_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -331,9 +342,6 @@ pub const Entry = struct {
             if (!std.mem.eql(u8, status, "draft")) return error.AlreadyPosted;
             entry_book_id = stmt.columnInt64(1);
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         // Delete all lines first (FK constraint)
         {
@@ -360,6 +368,10 @@ pub const Entry = struct {
         // Step 1: Fetch entry — verify status = 'draft'
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -394,13 +406,11 @@ pub const Entry = struct {
             if (line_count < 2) return error.TooFewLines;
         }
 
-        // Steps 3b + 4 + 5 + 7 combined into a single pass over entry_lines.
+        // Steps 3b + 4 + 5 combined into a single pass over entry_lines.
         // Previously this was 3 separate SELECT queries + 1 SUM query on the same table.
         // Single-pass approach: one SELECT with correlated subquery for control account
         // check, then compute base amounts, verify balance, and update cache in the same
         // iteration. Reduces DB round-trips from 6 to 3 (1 read + 1 update reuse + 1 cache reuse).
-        try database.beginTransaction();
-        errdefer database.rollback();
         {
             var read_stmt = try database.prepare(
                 \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.fx_rate,
@@ -446,8 +456,8 @@ pub const Entry = struct {
                 update_stmt.reset();
                 update_stmt.clearBindings();
 
-                total_base_debits += base_debit;
-                total_base_credits += base_credit;
+                total_base_debits = std.math.add(i64, total_base_debits, base_debit) catch return error.AmountOverflow;
+                total_base_credits = std.math.add(i64, total_base_credits, base_credit) catch return error.AmountOverflow;
 
                 // Update balance cache
                 try cache_stmt.bindInt(1, acct_id);
@@ -464,8 +474,8 @@ pub const Entry = struct {
 
             // Verify balance equation — auto-post rounding if book has rounding account
             if (total_base_debits != total_base_credits) {
-                const diff = total_base_debits - total_base_credits;
-                const abs_diff = if (diff < 0) -diff else diff;
+                const diff = std.math.sub(i64, total_base_debits, total_base_credits) catch return error.AmountOverflow;
+                const abs_diff: i64 = if (diff == std.math.minInt(i64)) return error.AmountOverflow else if (diff < 0) -diff else diff;
                 const max_rounding: i64 = 100; // 0.000001 in 10^8 scale — sub-cent tolerance
 
                 if (abs_diff > max_rounding) return error.UnbalancedEntry;
@@ -510,6 +520,9 @@ pub const Entry = struct {
                     try round_stmt.bindInt(8, entry_id);
                     _ = try round_stmt.step();
 
+                    const rounding_line_id = database.lastInsertRowId();
+                    try audit.log(database, "entry_line", rounding_line_id, "create", null, null, "FX rounding auto-post", performed_by, entry_book_id);
+
                     // Update cache for rounding line
                     try cache_stmt.bindInt(1, ra_id);
                     try cache_stmt.bindInt(2, period_id);
@@ -536,20 +549,22 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        // Step 8: Mark future periods stale
+        // Step 7: Mark future periods stale
         {
             var stale_stmt = try database.prepare(
                 \\UPDATE ledger_account_balances
                 \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE book_id = ? AND period_id != ? AND is_stale = 0;
+                \\WHERE book_id = ? AND is_stale = 0
+                \\  AND period_id IN (SELECT id FROM ledger_periods WHERE book_id = ? AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?));
             );
             defer stale_stmt.finalize();
             try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, period_id);
+            try stale_stmt.bindInt(2, entry_book_id);
+            try stale_stmt.bindInt(3, period_id);
             _ = try stale_stmt.step();
         }
 
-        // Step 9: Audit log
+        // Step 8: Audit log
         try audit.log(database, "entry", entry_id, "post", "status", "draft", "posted", performed_by, entry_book_id);
 
         try database.commit();
@@ -560,6 +575,10 @@ pub const Entry = struct {
 
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -582,9 +601,6 @@ pub const Entry = struct {
             if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
             if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         // Update entry status
         {
@@ -621,16 +637,18 @@ pub const Entry = struct {
             }
         }
 
-        // Mark other periods stale
+        // Mark future periods stale
         {
             var stale_stmt = try database.prepare(
                 \\UPDATE ledger_account_balances
                 \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE book_id = ? AND period_id != ? AND is_stale = 0;
+                \\WHERE book_id = ? AND is_stale = 0
+                \\  AND period_id IN (SELECT id FROM ledger_periods WHERE book_id = ? AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?));
             );
             defer stale_stmt.finalize();
             try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, period_id);
+            try stale_stmt.bindInt(2, entry_book_id);
+            try stale_stmt.bindInt(3, period_id);
             _ = try stale_stmt.step();
         }
 
@@ -651,6 +669,10 @@ pub const Entry = struct {
         var entry_book_id: i64 = 0;
         var doc_number_buf: [128]u8 = undefined;
         var doc_number_len: usize = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id, document_number FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -687,9 +709,6 @@ pub const Entry = struct {
                 return error.InvalidInput;
             }
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         // Mark original as reversed
         {
@@ -779,16 +798,18 @@ pub const Entry = struct {
             }
         }
 
-        // Mark other periods stale
+        // Mark future periods stale
         {
             var stale_stmt = try database.prepare(
                 \\UPDATE ledger_account_balances
                 \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE book_id = ? AND period_id != ? AND is_stale = 0;
+                \\WHERE book_id = ? AND is_stale = 0
+                \\  AND period_id IN (SELECT id FROM ledger_periods WHERE book_id = ? AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?));
             );
             defer stale_stmt.finalize();
             try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, reversal_period_id);
+            try stale_stmt.bindInt(2, entry_book_id);
+            try stale_stmt.bindInt(3, reversal_period_id);
             _ = try stale_stmt.step();
         }
 
@@ -821,6 +842,10 @@ pub const Entry = struct {
         var old_meta_len: usize = 0;
         var old_has_meta = false;
         var old_period_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT status, book_id, document_number, transaction_date,
@@ -873,9 +898,6 @@ pub const Entry = struct {
                 return error.InvalidInput;
             }
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -944,6 +966,10 @@ pub const Entry = struct {
         var old_meta_len: usize = 0;
         var old_has_meta = false;
         var period_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT status, book_id, description, metadata, period_id
@@ -982,9 +1008,6 @@ pub const Entry = struct {
             if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
             if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -2964,4 +2987,132 @@ test "editPosted: no audit when nothing changed" {
     try stmt.bindInt(1, eid);
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+// ── P1: Auto-rounding audit entry verification ──────────────────
+
+test "post: auto-rounding line has audit entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try account_mod.Account.create(database, 1, "9999", "FX Rounding", .expense, false, "admin");
+    try book_mod.Book.setRoundingAccount(database, 1, 3, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "FX-003", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 10_000_000_000, 0, "USD", 56_500_000_000, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 10_000_000_000, "USD", 56_500_000_001, 2, null, null, "admin");
+
+    try Entry.post(database, eid, "admin");
+
+    // Verify rounding line was inserted (precondition)
+    {
+        var check_stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
+        defer check_stmt.finalize();
+        try check_stmt.bindInt(1, eid);
+        _ = try check_stmt.step();
+        try std.testing.expectEqual(@as(i32, 3), check_stmt.columnInt(0));
+    }
+
+    // Verify audit entry exists for the auto-rounding line
+    {
+        var audit_stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_audit_log
+            \\WHERE entity_type = 'entry_line' AND action = 'create'
+            \\  AND new_value = 'FX rounding auto-post';
+        );
+        defer audit_stmt.finalize();
+        _ = try audit_stmt.step();
+        try std.testing.expect(audit_stmt.columnInt(0) >= 1);
+    }
+}
+
+// ── P1: Stale-marking only affects future periods ───────────────
+
+test "post: stale marking only affects future periods" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // setupTestDb: book_id=1, Cash=1, AP=2, Jan 2026 period=1 (2026-01-01 to 2026-01-31)
+    const feb_id = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    const dec_id = try period_mod.Period.create(database, 1, "Dec 2025", 12, 2025, "2025-12-01", "2025-12-31", "regular", "admin");
+
+    // Post in Feb to create cache entries for both accounts in Feb
+    const feb_entry = try Entry.createDraft(database, 1, "FEB-001", "2026-02-15", "2026-02-15", null, feb_id, null, "admin");
+    _ = try Entry.addLine(database, feb_entry, 1, 100_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, feb_entry, 2, 0, 100_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, feb_entry, "admin");
+
+    // Post in Dec to create cache entries for both accounts in Dec
+    const dec_entry = try Entry.createDraft(database, 1, "DEC-001", "2025-12-15", "2025-12-15", null, dec_id, null, "admin");
+    _ = try Entry.addLine(database, dec_entry, 1, 50_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, dec_entry, 2, 0, 50_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, dec_entry, "admin");
+
+    // Clear all stale flags via direct SQL
+    {
+        var reset_stmt = try database.prepare("UPDATE ledger_account_balances SET is_stale = 0;");
+        defer reset_stmt.finalize();
+        _ = reset_stmt.step() catch {};
+    }
+
+    // Post in Jan (period 1, end_date = 2026-01-31) — should mark Feb stale but not Dec
+    const jan_entry = try Entry.createDraft(database, 1, "JAN-002", "2026-01-20", "2026-01-20", null, 1, null, "admin");
+    _ = try Entry.addLine(database, jan_entry, 1, 200_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, jan_entry, 2, 0, 200_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, jan_entry, "admin");
+
+    // Feb cache should be stale (future period)
+    {
+        var feb_stmt = try database.prepare("SELECT is_stale FROM ledger_account_balances WHERE period_id = ? LIMIT 1;");
+        defer feb_stmt.finalize();
+        try feb_stmt.bindInt(1, feb_id);
+        if (try feb_stmt.step()) {
+            try std.testing.expectEqual(@as(i32, 1), feb_stmt.columnInt(0));
+        }
+    }
+
+    // Dec cache should NOT be stale (past period)
+    {
+        var dec_stmt = try database.prepare("SELECT is_stale FROM ledger_account_balances WHERE period_id = ? LIMIT 1;");
+        defer dec_stmt.finalize();
+        try dec_stmt.bindInt(1, dec_id);
+        if (try dec_stmt.step()) {
+            try std.testing.expectEqual(@as(i32, 0), dec_stmt.columnInt(0));
+        }
+    }
+}
+
+test "reverse: 96-char document number produces 100-char REV- doc" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const doc_96 = "A" ** 96;
+    _ = try Entry.createDraft(database, 1, doc_96, "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    const rev_id = try Entry.reverse(database, 1, "Correction", "2026-01-31", null, "admin");
+
+    var stmt = try database.prepare("SELECT document_number FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, rev_id);
+    _ = try stmt.step();
+    const rev_doc = stmt.columnText(0).?;
+    try std.testing.expectEqual(@as(usize, 100), rev_doc.len);
+    try std.testing.expect(std.mem.startsWith(u8, rev_doc, "REV-"));
+}
+
+test "editDraft on void entry returns AlreadyPosted" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, 1, "admin");
+    try Entry.voidEntry(database, 1, "Error", "admin");
+
+    const result = Entry.editDraft(database, 1, "JE-002", "2026-01-20", "2026-01-20", null, null, 1, "admin");
+    try std.testing.expectError(error.AlreadyPosted, result);
 }
