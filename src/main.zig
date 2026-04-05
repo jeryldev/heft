@@ -1310,6 +1310,99 @@ pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 
     return safeIntCast(count);
 }
 
+// ── Export Wrappers ────────────────────────────────────────────
+
+pub export fn ledger_export_chart_of_accounts(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.export_mod.exportChartOfAccounts(h.sqlite, book_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_export_journal_entries(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.export_mod.exportJournalEntries(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_export_audit_trail(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.export_mod.exportAuditTrail(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_export_periods(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.export_mod.exportPeriods(h.sqlite, book_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_export_subledger(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.export_mod.exportSubledger(h.sqlite, book_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_export_book_metadata(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.export_mod.exportBookMetadata(h.sqlite, book_id, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_transition_budget(handle: ?*LedgerDB, budget_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const target = heft.budget.BudgetStatus.fromString(std.mem.span(target_status)) orelse {
+        setError(mapError(error.InvalidInput));
+        return false;
+    };
+    heft.budget.Budget.transition(h.sqlite, budget_id, target, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 fn cleanupTestFile(name: [*:0]const u8) void {
@@ -2651,4 +2744,61 @@ test "C ABI: ledger_revalue_forex_balances with valid rates" {
 
     const reval_entry_id = ledger_revalue_forex_balances(handle, book_id, 1, "[{\"currency\":\"USD\",\"rate\":570000000000}]", "admin");
     try std.testing.expect(reval_entry_id > 0);
+}
+
+test "C ABI: export wrappers null handle returns -1" {
+    var buf: [4096]u8 = undefined;
+    try std.testing.expectEqual(@as(i32, -1), ledger_export_chart_of_accounts(null, 1, &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_export_journal_entries(null, 1, "2026-01-01", "2026-12-31", &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_export_audit_trail(null, 1, "2026-01-01", "2026-12-31", &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_export_periods(null, 1, &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_export_subledger(null, 1, &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_export_book_metadata(null, 1, &buf, 4096, 0));
+    try std.testing.expect(!ledger_transition_budget(null, 1, "approved", "admin"));
+}
+
+test "C ABI: export chart of accounts via C boundary" {
+    defer cleanupTestFile("test-cabi-export-coa.ledger");
+    const handle = ledger_open("test-cabi-export-coa.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const book_id = ledger_create_book(handle, "Export Test", "PHP", 2, "admin");
+    _ = ledger_create_account(handle, book_id, "1000", "Cash", "asset", 0, "admin");
+    _ = ledger_create_account(handle, book_id, "4000", "Revenue", "revenue", 0, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const csv_len = ledger_export_chart_of_accounts(handle, book_id, &buf, 8192, 0);
+    try std.testing.expect(csv_len > 0);
+    const csv = buf[0..@intCast(csv_len)];
+    try std.testing.expect(std.mem.indexOf(u8, csv, "1000") != null);
+
+    const json_len = ledger_export_chart_of_accounts(handle, book_id, &buf, 8192, 1);
+    try std.testing.expect(json_len > 0);
+    const json = buf[0..@intCast(json_len)];
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"number\":\"1000\"") != null);
+}
+
+test "C ABI: export audit trail via C boundary" {
+    defer cleanupTestFile("test-cabi-export-audit.ledger");
+    const handle = ledger_open("test-cabi-export-audit.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    _ = ledger_create_book(handle, "Audit Test", "PHP", 2, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const len = ledger_export_audit_trail(handle, 1, "2020-01-01", "2030-12-31", &buf, 8192, 1);
+    try std.testing.expect(len > 0);
+    const json = buf[0..@intCast(len)];
+    try std.testing.expect(std.mem.indexOf(u8, json, "create") != null);
+}
+
+test "C ABI: ledger_transition_budget via C boundary" {
+    defer cleanupTestFile("test-cabi-budget-trans.ledger");
+    const handle = ledger_open("test-cabi-budget-trans.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const book_id = ledger_create_book(handle, "Budget Test", "PHP", 2, "admin");
+    const budget_id = heft.budget.Budget.create(handle.sqlite, book_id, "FY2026", 2026, "admin") catch return error.TestUnexpectedResult;
+    try std.testing.expect(ledger_transition_budget(handle, budget_id, "approved", "admin"));
+    try std.testing.expect(!ledger_transition_budget(handle, budget_id, "draft", "admin"));
 }
