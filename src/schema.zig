@@ -14,10 +14,23 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
-/// Create all ledger tables, indexes, and views.
-/// Safe to call multiple times — uses IF NOT EXISTS.
+pub fn migrate(database: db.Database, from_version: i32) !void {
+    const owns_txn = try database.beginTransactionIfNeeded();
+    errdefer if (owns_txn) database.rollback();
+
+    if (from_version < 5) {
+        database.exec("ALTER TABLE ledger_audit_log ADD COLUMN hash_chain TEXT;") catch {};
+        database.exec("ALTER TABLE ledger_dimension_values ADD COLUMN parent_value_id INTEGER REFERENCES ledger_dimension_values(id);") catch {};
+    }
+
+    const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
+    try database.exec(version_pragma);
+
+    if (owns_txn) try database.commit();
+}
+
 pub fn createAll(database: db.Database) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
     errdefer if (owns_txn) database.rollback();
@@ -320,6 +333,7 @@ const tables = [_][*:0]const u8{
     \\  label TEXT NOT NULL
     \\    CHECK (length(label) BETWEEN 1 AND 255),
     \\  dimension_id INTEGER NOT NULL REFERENCES ledger_dimensions(id),
+    \\  parent_value_id INTEGER REFERENCES ledger_dimension_values(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  UNIQUE (dimension_id, code)
@@ -388,7 +402,8 @@ const tables = [_][*:0]const u8{
     \\    CHECK (length(performed_by) BETWEEN 1 AND 100),
     \\  performed_at TEXT NOT NULL
     \\    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id)
+    \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+    \\  hash_chain TEXT
     \\);
     ,
 };
@@ -560,7 +575,7 @@ test "createAll sets user_version to 4" {
     var stmt = try database.prepare("PRAGMA user_version;");
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+    try std.testing.expectEqual(SCHEMA_VERSION, stmt.columnInt(0));
 }
 
 test "createAll is idempotent" {
@@ -2347,4 +2362,36 @@ test "audit log trigger rejects UPDATE" {
     try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
     const result = database.exec("UPDATE ledger_audit_log SET action = 'modified' WHERE id = 1;");
     try std.testing.expectError(error.SqliteExecFailed, result);
+}
+
+test "migrate from v4 to v5 adds hash_chain and parent_value_id columns" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try database.exec("PRAGMA user_version = 4;");
+    try createAll(database);
+    try database.exec("PRAGMA user_version = 4;");
+    try migrate(database, 4);
+
+    var stmt = try database.prepare("PRAGMA user_version;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, SCHEMA_VERSION), stmt.columnInt(0));
+
+    var col_stmt = try database.prepare("SELECT hash_chain FROM ledger_audit_log LIMIT 0;");
+    defer col_stmt.finalize();
+
+    var dim_stmt = try database.prepare("SELECT parent_value_id FROM ledger_dimension_values LIMIT 0;");
+    defer dim_stmt.finalize();
+}
+
+test "migrate is no-op when already at current version" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+    try migrate(database, SCHEMA_VERSION);
+
+    var stmt = try database.prepare("PRAGMA user_version;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, SCHEMA_VERSION), stmt.columnInt(0));
 }

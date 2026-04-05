@@ -34,7 +34,9 @@ fn internal_open(path: [*:0]const u8) !*LedgerDB {
 
     if (version == 0) {
         try heft.schema.createAll(db);
-    } else if (version != SCHEMA_VERSION) {
+    } else if (version < SCHEMA_VERSION) {
+        try heft.schema.migrate(db, version);
+    } else if (version > SCHEMA_VERSION) {
         return error.SchemaVersionMismatch;
     }
 
@@ -1499,7 +1501,7 @@ test "ledger_open enables foreign keys" {
     }
 }
 
-test "ledger_open sets schema version 4 on new file" {
+test "ledger_open sets schema version on new file" {
     defer cleanupTestFile("test-version.ledger");
     const handle = ledger_open("test-version.ledger");
     try std.testing.expect(handle != null);
@@ -1510,7 +1512,7 @@ test "ledger_open sets schema version 4 on new file" {
         var stmt = try h.sqlite.prepare("PRAGMA user_version;");
         defer stmt.finalize();
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+        try std.testing.expectEqual(SCHEMA_VERSION, stmt.columnInt(0));
     }
 }
 
@@ -1544,7 +1546,7 @@ test "ledger_open preserves schema version on reopen" {
         var stmt = try h.sqlite.prepare("PRAGMA user_version;");
         defer stmt.finalize();
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+        try std.testing.expectEqual(SCHEMA_VERSION, stmt.columnInt(0));
     }
 }
 
