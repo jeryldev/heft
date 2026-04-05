@@ -12,6 +12,7 @@ pub const classification = @import("classification.zig");
 pub const verify_mod = @import("verify.zig");
 pub const export_mod = @import("export.zig");
 pub const query_mod = @import("query.zig");
+pub const cache = @import("cache.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
 comptime {
@@ -29,5 +30,6 @@ comptime {
     _ = verify_mod;
     _ = export_mod;
     _ = query_mod;
+    _ = cache;
     _ = LedgerError;
 }

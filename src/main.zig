@@ -315,6 +315,14 @@ pub export fn ledger_income_statement(handle: ?*LedgerDB, book_id: i64, start_da
     };
 }
 
+pub export fn ledger_trial_balance_movement(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.ReportResult {
+    const h = handle orelse return null;
+    return heft.report.trialBalanceMovement(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
 pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, fy_start_date: [*:0]const u8) ?*heft.report.ReportResult {
     const h = handle orelse return null;
     return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch |err| {
@@ -353,6 +361,43 @@ pub export fn ledger_free_ledger_result(result: ?*heft.report.LedgerResult) void
 }
 
 pub export fn ledger_free_result(result: ?*heft.report.ReportResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
+pub export fn ledger_trial_balance_comparative(handle: ?*LedgerDB, book_id: i64, current_date: [*:0]const u8, prior_date: [*:0]const u8) ?*heft.report.ComparativeReportResult {
+    const h = handle orelse return null;
+    return heft.report.trialBalanceComparative(h.sqlite, book_id, std.mem.span(current_date), std.mem.span(prior_date)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_income_statement_comparative(handle: ?*LedgerDB, book_id: i64, cur_start: [*:0]const u8, cur_end: [*:0]const u8, prior_start: [*:0]const u8, prior_end: [*:0]const u8) ?*heft.report.ComparativeReportResult {
+    const h = handle orelse return null;
+    return heft.report.incomeStatementComparative(h.sqlite, book_id, std.mem.span(cur_start), std.mem.span(cur_end), std.mem.span(prior_start), std.mem.span(prior_end)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_balance_sheet_comparative(handle: ?*LedgerDB, book_id: i64, current_date: [*:0]const u8, prior_date: [*:0]const u8, fy_start: [*:0]const u8) ?*heft.report.ComparativeReportResult {
+    const h = handle orelse return null;
+    return heft.report.balanceSheetComparative(h.sqlite, book_id, std.mem.span(current_date), std.mem.span(prior_date), std.mem.span(fy_start)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_trial_balance_movement_comparative(handle: ?*LedgerDB, book_id: i64, cur_start: [*:0]const u8, cur_end: [*:0]const u8, prior_start: [*:0]const u8, prior_end: [*:0]const u8) ?*heft.report.ComparativeReportResult {
+    const h = handle orelse return null;
+    return heft.report.trialBalanceMovementComparative(h.sqlite, book_id, std.mem.span(cur_start), std.mem.span(cur_end), std.mem.span(prior_start), std.mem.span(prior_end)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_free_comparative_result(result: ?*heft.report.ComparativeReportResult) void {
     const r = result orelse return;
     r.deinit();
 }
@@ -960,6 +1005,17 @@ pub export fn ledger_edit_line_full(handle: ?*LedgerDB, line_id: i64, debit_amou
     return true;
 }
 
+// ── Sprint 13A: Cache Recalculation ────────────────────────────
+
+pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 {
+    const h = handle orelse return -1;
+    const count = heft.cache.recalculateAllStale(h.sqlite, book_id) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return @intCast(count);
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 fn cleanupTestFile(name: [*:0]const u8) void {
@@ -1481,6 +1537,7 @@ test "C ABI: balance sheet through C boundary" {
 test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expect(ledger_trial_balance(null, 1, "2026-01-31") == null);
     try std.testing.expect(ledger_income_statement(null, 1, "2026-01-01", "2026-01-31") == null);
+    try std.testing.expect(ledger_trial_balance_movement(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_balance_sheet(null, 1, "2026-01-31", "2026-01-01") == null);
     try std.testing.expect(ledger_general_ledger(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_account_ledger(null, 1, 1, "2026-01-01", "2026-01-31") == null);
@@ -1493,6 +1550,10 @@ test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expect(!ledger_move_node(null, 1, 0, 0, "admin"));
     try std.testing.expect(!ledger_delete_classification(null, 1, "admin"));
     try std.testing.expect(ledger_classified_report(null, 1, "2026-01-31") == null);
+    try std.testing.expect(ledger_trial_balance_comparative(null, 1, "2026-01-31", "2025-12-31") == null);
+    try std.testing.expect(ledger_income_statement_comparative(null, 1, "2026-01-01", "2026-01-31", "2025-01-01", "2025-12-31") == null);
+    try std.testing.expect(ledger_balance_sheet_comparative(null, 1, "2026-01-31", "2025-12-31", "2026-01-01") == null);
+    try std.testing.expect(ledger_trial_balance_movement_comparative(null, 1, "2026-01-01", "2026-01-31", "2025-01-01", "2025-12-31") == null);
 }
 
 test "C ABI: free null classified result is safe" {
@@ -1534,6 +1595,7 @@ test "C ABI: classified report through C boundary" {
 test "C ABI: free null results is safe" {
     ledger_free_result(null);
     ledger_free_ledger_result(null);
+    ledger_free_comparative_result(null);
 }
 
 test "C ABI: GL through C boundary" {
