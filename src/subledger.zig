@@ -161,6 +161,36 @@ pub const SubledgerGroup = struct {
     }
 };
 
+pub const SubledgerAccountStatus = enum {
+    active,
+    inactive,
+    archived,
+
+    pub fn canTransitionTo(self: SubledgerAccountStatus, target: SubledgerAccountStatus) bool {
+        return switch (self) {
+            .active => target == .inactive or target == .archived,
+            .inactive => target == .active or target == .archived,
+            .archived => false,
+        };
+    }
+
+    pub fn toString(self: SubledgerAccountStatus) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromString(s: []const u8) ?SubledgerAccountStatus {
+        const map = .{
+            .{ "active", SubledgerAccountStatus.active },
+            .{ "inactive", SubledgerAccountStatus.inactive },
+            .{ "archived", SubledgerAccountStatus.archived },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
+};
+
 pub const SubledgerAccount = struct {
     const valid_types = [_][]const u8{ "customer", "supplier", "both" };
 
@@ -305,6 +335,38 @@ pub const SubledgerAccount = struct {
         }
 
         try audit.log(database, "subledger_account", account_id, "delete", null, null, null, performed_by, book_id);
+
+        try database.commit();
+    }
+
+    pub fn updateStatus(database: db.Database, account_id: i64, target: SubledgerAccountStatus, performed_by: []const u8) !void {
+        var current: SubledgerAccountStatus = undefined;
+        var acct_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id FROM ledger_subledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            current = SubledgerAccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            acct_book_id = stmt.columnInt64(1);
+        }
+
+        if (!current.canTransitionTo(target)) return error.InvalidTransition;
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_subledger_accounts SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, target.toString());
+            try stmt.bindInt(2, account_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "subledger_account", account_id, "update", "status", current.toString(), target.toString(), performed_by, acct_book_id);
 
         try database.commit();
     }
@@ -537,9 +599,113 @@ test "duplicate subledger group rejected" {
     defer database.close();
 
     _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
-    // Same type + group_number + book_id -> UNIQUE violation
     const result = SubledgerGroup.create(database, 1, "Also Customers", "customer", 1, 2, null, null, "admin");
     try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+test "updateStatus active to inactive" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const id = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.updateStatus(database, id, .inactive, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("inactive", stmt.columnText(0).?);
+}
+
+test "updateStatus inactive to active" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const id = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.updateStatus(database, id, .inactive, "admin");
+    try SubledgerAccount.updateStatus(database, id, .active, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("active", stmt.columnText(0).?);
+}
+
+test "updateStatus active to archived" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const id = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.updateStatus(database, id, .archived, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+test "updateStatus archived to anything rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const id = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.updateStatus(database, id, .archived, "admin");
+
+    const r1 = SubledgerAccount.updateStatus(database, id, .active, "admin");
+    try std.testing.expectError(error.InvalidTransition, r1);
+    const r2 = SubledgerAccount.updateStatus(database, id, .inactive, "admin");
+    try std.testing.expectError(error.InvalidTransition, r2);
+}
+
+test "updateStatus nonexistent returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = SubledgerAccount.updateStatus(database, 999, .inactive, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "updateStatus writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const id = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.updateStatus(database, id, .inactive, "admin");
+
+    var stmt = try database.prepare("SELECT field_changed, old_value, new_value FROM ledger_audit_log WHERE entity_type = 'subledger_account' AND action = 'update';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("status", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("active", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("inactive", stmt.columnText(2).?);
+}
+
+test "post rejects inactive counterparty" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const cid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+    try SubledgerAccount.updateStatus(database, cid, .inactive, "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+
+    try database.exec(
+        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+        \\  transaction_currency, fx_rate, account_id, entry_id, counterparty_id)
+        \\VALUES (2, 0, 100000000000, 'PHP', 10000000000, 2, 1, 1);
+    );
+
+    const result = entry_mod.Entry.post(database, 1, "admin");
+    try std.testing.expectError(error.AccountInactive, result);
 }
 
 // ── Real-world business scenario tests ──────────────────────────

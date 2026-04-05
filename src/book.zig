@@ -399,6 +399,35 @@ pub const Book = struct {
 
         try database.commit();
     }
+
+    pub fn setRequireApproval(database: db.Database, book_id: i64, require: bool, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET require_approval = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, if (require) @as(i64, 1) else @as(i64, 0));
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        const old_val = if (require) "0" else "1";
+        const new_val = if (require) "1" else "0";
+        try audit.log(database, "book", book_id, "update", "require_approval", old_val, new_val, performed_by, book_id);
+
+        try database.commit();
+    }
 };
 
 // ── Tests ───────────────────────────────────────────────────────

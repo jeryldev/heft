@@ -384,6 +384,22 @@ pub const Entry = struct {
             entry_book_id = stmt.columnInt64(2);
         }
 
+        // Step 1b: Check approval requirement
+        {
+            var appr_stmt = try database.prepare("SELECT require_approval FROM ledger_books WHERE id = ?;");
+            defer appr_stmt.finalize();
+            try appr_stmt.bindInt(1, entry_book_id);
+            _ = try appr_stmt.step();
+            if (appr_stmt.columnInt(0) == 1) {
+                var es_stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = ?;");
+                defer es_stmt.finalize();
+                try es_stmt.bindInt(1, entry_id);
+                _ = try es_stmt.step();
+                const approval = es_stmt.columnText(0).?;
+                if (!std.mem.eql(u8, approval, "approved")) return error.ApprovalRequired;
+            }
+        }
+
         // Step 2: Fetch period — verify status = 'open' or 'soft_closed'
         {
             var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
@@ -443,6 +459,17 @@ pub const Entry = struct {
                 // Control account enforcement
                 if (is_control and !has_counterparty) return error.MissingCounterparty;
                 if (!is_control and has_counterparty) return error.InvalidCounterparty;
+
+                // Counterparty status enforcement
+                if (has_counterparty) {
+                    const cp_id = read_stmt.columnInt64(5);
+                    var cp_stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
+                    defer cp_stmt.finalize();
+                    try cp_stmt.bindInt(1, cp_id);
+                    _ = try cp_stmt.step();
+                    const cp_status = cp_stmt.columnText(0).?;
+                    if (!std.mem.eql(u8, cp_status, "active")) return error.AccountInactive;
+                }
 
                 // Compute base amounts
                 const base_debit = try money.computeBaseAmount(debit, fx_rate);
@@ -1040,6 +1067,70 @@ pub const Entry = struct {
             }
         }
 
+        try database.commit();
+    }
+
+    pub fn approve(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
+            book_id = stmt.columnInt64(1);
+        }
+
+        {
+            var stmt = try database.prepare(
+                \\UPDATE ledger_entries SET approval_status = 'approved',
+                \\  approved_by = ?, approved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindText(1, performed_by);
+            try stmt.bindInt(2, entry_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "entry", entry_id, "approve", "approval_status", "none", "approved", performed_by, book_id);
+        try database.commit();
+    }
+
+    pub fn reject(database: db.Database, entry_id: i64, reason: []const u8, performed_by: []const u8) !void {
+        if (reason.len == 0) return error.InvalidInput;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
+            book_id = stmt.columnInt64(1);
+        }
+
+        {
+            var stmt = try database.prepare(
+                \\UPDATE ledger_entries SET approval_status = 'rejected',
+                \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                \\WHERE id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "entry", entry_id, "reject", "approval_status", "none", "rejected", performed_by, book_id);
         try database.commit();
     }
 };
@@ -3114,5 +3205,95 @@ test "editDraft on void entry returns AlreadyPosted" {
     try Entry.voidEntry(database, 1, "Error", "admin");
 
     const result = Entry.editDraft(database, 1, "JE-002", "2026-01-20", "2026-01-20", null, null, 1, "admin");
+    try std.testing.expectError(error.AlreadyPosted, result);
+}
+
+// ── Approval Workflow Tests (20B) ─────────────────────────────
+
+test "approve draft entry sets approval_status to approved" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.approve(database, 1, "manager");
+
+    var stmt = try database.prepare("SELECT approval_status, approved_by, approved_at FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("approved", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("manager", stmt.columnText(1).?);
+    try std.testing.expect(stmt.columnText(2) != null);
+}
+
+test "reject draft entry with reason sets approval_status to rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try Entry.reject(database, 1, "Missing documentation", "manager");
+
+    var stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("rejected", stmt.columnText(0).?);
+}
+
+test "post approved entry when book requires approval succeeds" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try book_mod.Book.setRequireApproval(database, 1, true, "admin");
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.approve(database, 1, "manager");
+    try Entry.post(database, 1, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}
+
+test "post unapproved entry when book requires approval fails with ApprovalRequired" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try book_mod.Book.setRequireApproval(database, 1, true, "admin");
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+
+    const result = Entry.post(database, 1, "admin");
+    try std.testing.expectError(error.ApprovalRequired, result);
+}
+
+test "post entry when book does NOT require approval succeeds regardless of approval_status" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}
+
+test "approve non-draft entry returns AlreadyPosted" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    const result = Entry.approve(database, 1, "manager");
     try std.testing.expectError(error.AlreadyPosted, result);
 }
