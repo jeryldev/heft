@@ -1093,6 +1093,21 @@ pub const Entry = struct {
         }
 
         {
+            var creator_stmt = try database.prepare(
+                \\SELECT performed_by FROM ledger_audit_log
+                \\WHERE entity_type = 'entry' AND entity_id = ? AND action = 'create'
+                \\ORDER BY id ASC LIMIT 1;
+            );
+            defer creator_stmt.finalize();
+            try creator_stmt.bindInt(1, entry_id);
+            if (try creator_stmt.step()) {
+                if (creator_stmt.columnText(0)) |creator| {
+                    if (std.mem.eql(u8, creator, performed_by)) return error.ApprovalRequired;
+                }
+            }
+        }
+
+        {
             var stmt = try database.prepare(
                 \\UPDATE ledger_entries SET approval_status = 'approved',
                 \\  approved_by = ?, approved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
@@ -3309,4 +3324,14 @@ test "approve non-draft entry returns AlreadyPosted" {
 
     const result = Entry.approve(database, 1, "manager");
     try std.testing.expectError(error.AlreadyPosted, result);
+}
+
+test "self-approval rejected — same user who created cannot approve" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const result = Entry.approve(database, 1, "admin");
+    try std.testing.expectError(error.ApprovalRequired, result);
+    try Entry.approve(database, 1, "manager");
 }
