@@ -10,6 +10,7 @@ pub const FX_RATE_SCALE: i64 = 10_000_000_000; // 10^10
 /// if the final result still exceeds i64 (amount too large for the FX rate).
 pub fn computeBaseAmount(amount: i64, fx_rate: i64) !i64 {
     if (amount == 0) return 0;
+    if (fx_rate <= 0) return error.InvalidFxRate;
     const wide_amount: i128 = @as(i128, amount);
     const wide_rate: i128 = @as(i128, fx_rate);
     const intermediate = wide_amount * wide_rate;
@@ -76,7 +77,7 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
 
         // Pad remaining digits with zeros
         while (frac_digits < scale_digits) : (frac_digits += 1) {
-            frac_part *= 10;
+            frac_part = std.math.mul(i64, frac_part, 10) catch return error.AmountOverflow;
         }
     }
 
@@ -94,6 +95,7 @@ pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
 /// Builds the fractional part manually with leading zeros (Zig 0.15 bufPrint
 /// doesn't support runtime-width zero-padding).
 pub fn formatDecimal(buf: []u8, value: i64, decimal_places: u8) ![]u8 {
+    if (decimal_places > 8) return error.InvalidDecimalPlaces;
     if (decimal_places == 0) {
         const int_val = @divTrunc(value, AMOUNT_SCALE);
         const result = std.fmt.bufPrint(buf, "{d}", .{int_val}) catch return error.InvalidAmount;
@@ -413,12 +415,9 @@ test "formatDecimal: i64 min value does not overflow" {
     try std.testing.expect(result[0] == '-');
 }
 
-test "computeBaseAmount: both operands negative" {
-    // (-100) * (-2.0) = 200 (positive result from two negatives)
-    // But fx_rate should always be positive (CHECK constraint)
-    // This tests the math, not the business rule
-    const result = try computeBaseAmount(-10_000_000_000, -20_000_000_000);
-    try std.testing.expectEqual(@as(i64, 20_000_000_000), result);
+test "computeBaseAmount: both operands negative rejects negative fx_rate" {
+    const result = computeBaseAmount(-10_000_000_000, -20_000_000_000);
+    try std.testing.expectError(error.InvalidFxRate, result);
 }
 
 test "computeBaseAmount: amount = 1 (smallest unit)" {
@@ -435,4 +434,49 @@ test "computeBaseAmount: FX truncation with unequal sides" {
     const line2 = try computeBaseAmount(66_67_000_000, FX_RATE_SCALE); // 66.67
     // 33.33 + 66.67 = 100.00 — should balance
     try std.testing.expectEqual(@as(i64, 100_00_000_000), line1 + line2);
+}
+
+// ── Safety guard tests ─────────────────────────────────────────
+
+test "computeBaseAmount: fx_rate zero returns InvalidFxRate" {
+    const result = computeBaseAmount(100_000_000, 0);
+    try std.testing.expectError(error.InvalidFxRate, result);
+}
+
+test "computeBaseAmount: fx_rate negative returns InvalidFxRate" {
+    const result = computeBaseAmount(100_000_000, -1);
+    try std.testing.expectError(error.InvalidFxRate, result);
+}
+
+test "formatDecimal: decimal_places 9 returns InvalidDecimalPlaces" {
+    var buf: [32]u8 = undefined;
+    const result = formatDecimal(&buf, 100_000_000, 9);
+    try std.testing.expectError(error.InvalidDecimalPlaces, result);
+}
+
+test "parseDecimal: leading dot rejected" {
+    const result = parseDecimal(".5", AMOUNT_SCALE);
+    try std.testing.expectError(error.InvalidAmount, result);
+}
+
+test "parseDecimal: trailing dot succeeds with no fractional part" {
+    const result = try parseDecimal("1.", AMOUNT_SCALE);
+    try std.testing.expectEqual(@as(i64, 1 * AMOUNT_SCALE), result);
+}
+
+test "parseDecimal: negative zero returns zero" {
+    const result = try parseDecimal("-0", AMOUNT_SCALE);
+    try std.testing.expectEqual(@as(i64, 0), result);
+}
+
+test "formatDecimal: negative value with zero decimal places" {
+    var buf: [32]u8 = undefined;
+    const result = try formatDecimal(&buf, -1_000_000_000_000, 0);
+    try std.testing.expectEqualStrings("-10000", result);
+}
+
+test "formatDecimal: buffer too small returns InvalidAmount" {
+    var buf: [2]u8 = undefined;
+    const result = formatDecimal(&buf, 1_000_050_000_000, 2);
+    try std.testing.expectError(error.InvalidAmount, result);
 }

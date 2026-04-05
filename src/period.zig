@@ -97,6 +97,9 @@ pub const Period = struct {
         if (year < 1) return error.InvalidInput;
         if (!isValidType(period_type)) return error.InvalidInput;
 
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -104,8 +107,8 @@ pub const Period = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const book_status = stmt.columnText(0).?;
-            if (std.mem.eql(u8, book_status, "archived")) return error.InvalidInput;
+            const book_status = @import("book.zig").BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (book_status == .archived) return error.BookArchived;
         }
 
         // Overlap detection for regular periods
@@ -123,9 +126,6 @@ pub const Period = struct {
             if (overlap_stmt.columnInt(0) > 0) return error.InvalidInput;
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
-
         var stmt = try database.prepare(create_sql);
         defer stmt.finalize();
 
@@ -137,6 +137,8 @@ pub const Period = struct {
         try stmt.bindText(6, period_type);
         try stmt.bindInt(7, book_id);
 
+        // Intentional: after FK and overlap validation above, the only realistic step failure
+        // is the UNIQUE(book_id, period_number, year) constraint, so catch-all maps to DuplicateNumber
         _ = stmt.step() catch return error.DuplicateNumber;
 
         const id = database.lastInsertRowId();
@@ -147,9 +149,13 @@ pub const Period = struct {
     }
 
     pub fn transition(database: db.Database, period_id: i64, target_status: PeriodStatus, performed_by: []const u8) !void {
-        // Fetch current status and book_id
         var current: PeriodStatus = undefined;
         var period_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        // Fetch current status and book_id
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_periods WHERE id = ?;");
             defer stmt.finalize();
@@ -162,9 +168,6 @@ pub const Period = struct {
 
         if (current == .locked) return error.PeriodLocked;
         if (!current.canTransitionTo(target_status)) return error.InvalidTransition;
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("UPDATE ledger_periods SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -181,12 +184,11 @@ pub const Period = struct {
 
     const days_in_month = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
-    fn isLeapYear(y: i32) bool {
-        const year: u32 = @intCast(y);
+    fn isLeapYear(year: u32) bool {
         return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0);
     }
 
-    fn lastDay(month: u8, year: i32) u8 {
+    fn lastDay(month: u8, year: u32) u8 {
         if (month == 2 and isLeapYear(year)) return 29;
         return days_in_month[month - 1];
     }
@@ -204,6 +206,9 @@ pub const Period = struct {
         if (start_month < 1 or start_month > 12) return error.InvalidInput;
         if (fiscal_year < 1) return error.InvalidInput;
 
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -211,12 +216,19 @@ pub const Period = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const book_status = stmt.columnText(0).?;
-            if (std.mem.eql(u8, book_status, "archived")) return error.InvalidInput;
+            const book_status = @import("book.zig").BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (book_status == .archived) return error.BookArchived;
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        // Check for existing periods in this fiscal year
+        {
+            var check_stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ? AND year = ?;");
+            defer check_stmt.finalize();
+            try check_stmt.bindInt(1, book_id);
+            try check_stmt.bindInt(2, @intCast(fiscal_year));
+            _ = try check_stmt.step();
+            if (check_stmt.columnInt(0) > 0) return error.DuplicateNumber;
+        }
 
         var insert_stmt = try database.prepare(create_sql);
         defer insert_stmt.finalize();
@@ -249,7 +261,7 @@ pub const Period = struct {
             const last_month_offset: u8 = month_offset + months_per - 1;
             const end_month = calendarMonth(sm, last_month_offset);
             const end_year = calendarYear(fiscal_year, sm, end_month);
-            const end_day = lastDay(end_month, @intCast(end_year));
+            const end_day = lastDay(end_month, end_year);
 
             const start_date = std.fmt.bufPrint(&start_buf, "{d:0>4}-{d:0>2}-01", .{ first_year, first_month }) catch unreachable;
             const end_date = std.fmt.bufPrint(&end_buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ end_year, end_month, end_day }) catch unreachable;
@@ -291,6 +303,30 @@ fn setupTestDb() !db.Database {
     try schema.createAll(database);
     _ = try book.Book.create(database, "Test", "PHP", 2, "admin");
     return database;
+}
+
+fn verifyBulkCreate(database: db.Database, book_id: i64, start_month: i32) !void {
+    try Period.bulkCreate(database, book_id, 2026, start_month, .monthly, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
+    }
+
+    {
+        var stmt = try database.prepare("SELECT start_date FROM ledger_periods WHERE book_id = ? ORDER BY start_date ASC LIMIT 1;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const start = stmt.columnText(0).?;
+        var expected_buf: [8]u8 = undefined;
+        const sm: u32 = @intCast(start_month);
+        const expected_month = std.fmt.bufPrint(&expected_buf, "{d:0>2}", .{sm}) catch unreachable;
+        try std.testing.expectEqualStrings(expected_month, start[5..7]);
+    }
 }
 
 // ── PeriodStatus state machine tests ────────────────────────────
@@ -433,7 +469,7 @@ test "create period rejects archived book" {
     try book.Book.archive(database, 1, "admin");
 
     const result = Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BookArchived, result);
 }
 
 test "bulkCreate rejects archived book" {
@@ -443,7 +479,7 @@ test "bulkCreate rejects archived book" {
     try book.Book.archive(database, 1, "admin");
 
     const result = Period.bulkCreate(database, 1, 2026, 1, .monthly, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BookArchived, result);
 }
 
 test "create period rejects duplicate period_number+year in same book" {
@@ -757,6 +793,68 @@ test "bulkCreate non-calendar FY with leap year Feb" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqualStrings("2024-02-29", stmt.columnText(0).?);
+}
+
+// ── Remaining start month coverage (M33) ───────────────────────
+
+test "bulkCreate: start month 2 (February fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 2);
+}
+
+test "bulkCreate: start month 3 (March fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 3);
+}
+
+test "bulkCreate: start month 5 (May fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 5);
+}
+
+test "bulkCreate: start month 6 (June fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 6);
+}
+
+test "bulkCreate: start month 8 (August fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 8);
+}
+
+test "bulkCreate: start month 9 (September fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 9);
+}
+
+test "bulkCreate: start month 11 (November fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 11);
+}
+
+test "bulkCreate: start month 12 (December fiscal year)" {
+    const database = try setupTestDb();
+    defer database.close();
+    try verifyBulkCreate(database, 1, 12);
+}
+
+test "bulkCreate: quarterly non-calendar with leap year" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try Period.bulkCreate(database, 1, 2028, 11, .quarterly, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
 }
 
 // ── Quarterly tests ─────────────────────────────────────────────

@@ -90,6 +90,11 @@ pub const Account = struct {
         if (number.len == 0 or number.len > max_number_len) return error.InvalidInput;
         if (name.len == 0) return error.InvalidInput;
 
+        const normal_balance = deriveNormalBalance(account_type, is_contra);
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -97,14 +102,8 @@ pub const Account = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const book_status = stmt.columnText(0).?;
-            if (std.mem.eql(u8, book_status, "archived")) return error.InvalidInput;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
-
-        const normal_balance = deriveNormalBalance(account_type, is_contra);
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         var stmt = try database.prepare(create_sql);
         defer stmt.finalize();
@@ -116,7 +115,8 @@ pub const Account = struct {
         try stmt.bindInt(5, if (is_contra) 1 else 0);
         try stmt.bindInt(6, book_id);
 
-        // After FK validation, only UNIQUE constraint can fail here
+        // Intentional: after FK validation above, the only realistic step failure
+        // is the UNIQUE(book_id, number) constraint, so catch-all maps to DuplicateNumber
         _ = stmt.step() catch return error.DuplicateNumber;
 
         const id = database.lastInsertRowId();
@@ -132,6 +132,10 @@ pub const Account = struct {
         var old_name_buf: [256]u8 = undefined;
         var old_name_len: usize = 0;
         var acct_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT name, book_id, status FROM ledger_accounts WHERE id = ?;");
             defer stmt.finalize();
@@ -145,9 +149,6 @@ pub const Account = struct {
             const status = AccountStatus.fromString(stmt.columnText(2).?) orelse return error.InvalidInput;
             if (status == .archived) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("UPDATE ledger_accounts SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -163,9 +164,13 @@ pub const Account = struct {
     }
 
     pub fn updateStatus(database: db.Database, account_id: i64, target: AccountStatus, performed_by: []const u8) !void {
-        // Fetch current status and book_id
         var current: AccountStatus = undefined;
         var acct_book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        // Fetch current status and book_id
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
             defer stmt.finalize();
@@ -177,9 +182,6 @@ pub const Account = struct {
         }
 
         if (!current.canTransitionTo(target)) return error.InvalidTransition;
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("UPDATE ledger_accounts SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -376,7 +378,7 @@ test "create account rejects archived book" {
     try book.Book.archive(database, 1, "admin");
 
     const result = Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BookArchived, result);
 }
 
 // ── updateStatus tests ──────────────────────────────────────────
@@ -489,6 +491,55 @@ test "updateName rejects nonexistent account" {
 
     const result = Account.updateName(database, 999, "New", "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "AccountType.fromString with invalid string returns null" {
+    try std.testing.expect(AccountType.fromString("invalid") == null);
+    try std.testing.expect(AccountType.fromString("") == null);
+    try std.testing.expect(AccountType.fromString("ASSET") == null);
+}
+
+test "AccountStatus.fromString with invalid string returns null" {
+    try std.testing.expect(AccountStatus.fromString("invalid") == null);
+    try std.testing.expect(AccountStatus.fromString("") == null);
+    try std.testing.expect(AccountStatus.fromString("ACTIVE") == null);
+}
+
+test "updateStatus active to archived" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.updateStatus(database, 1, .archived, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+test "updateStatus inactive to archived" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.updateStatus(database, 1, .inactive, "admin");
+    try Account.updateStatus(database, 1, .archived, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
+}
+
+test "updateStatus archived to inactive rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.updateStatus(database, 1, .archived, "admin");
+    const result = Account.updateStatus(database, 1, .inactive, "admin");
+    try std.testing.expectError(error.InvalidTransition, result);
 }
 
 test "updateName rejects archived account" {

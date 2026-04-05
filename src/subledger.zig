@@ -20,6 +20,9 @@ pub const SubledgerGroup = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, group_type: []const u8, group_number: i32, gl_account_id: i64, number_range_start: ?[]const u8, number_range_end: ?[]const u8, performed_by: []const u8) !i64 {
         if (!isValidType(group_type)) return error.InvalidInput;
 
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -27,7 +30,7 @@ pub const SubledgerGroup = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
         // Verify GL account exists
@@ -39,9 +42,6 @@ pub const SubledgerGroup = struct {
             _ = try stmt.step();
             if (stmt.columnInt(0) == 0) return error.NotFound;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         var stmt = try database.prepare(create_sql);
         defer stmt.finalize();
@@ -69,6 +69,10 @@ pub const SubledgerGroup = struct {
         var old_name_buf: [256]u8 = undefined;
         var old_name_len: usize = 0;
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT name, book_id FROM ledger_subledger_groups WHERE id = ?;");
             defer stmt.finalize();
@@ -81,8 +85,14 @@ pub const SubledgerGroup = struct {
             book_id = stmt.columnInt64(1);
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        // Verify book is active
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            _ = try bs_stmt.step();
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
 
         {
             var stmt = try database.prepare("UPDATE ledger_subledger_groups SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -99,6 +109,10 @@ pub const SubledgerGroup = struct {
 
     pub fn delete(database: db.Database, group_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_groups WHERE id = ?;");
             defer stmt.finalize();
@@ -106,6 +120,15 @@ pub const SubledgerGroup = struct {
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             book_id = stmt.columnInt64(0);
+        }
+
+        // Verify book is active
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            _ = try bs_stmt.step();
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
         // Reject if group has subledger accounts
@@ -116,9 +139,6 @@ pub const SubledgerGroup = struct {
             _ = try stmt.step();
             if (stmt.columnInt(0) > 0) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("DELETE FROM ledger_subledger_groups WHERE id = ?;");
@@ -159,6 +179,9 @@ pub const SubledgerAccount = struct {
     pub fn create(database: db.Database, book_id: i64, number: []const u8, name: []const u8, account_type: []const u8, group_id: i64, performed_by: []const u8) !i64 {
         if (!isValidType(account_type)) return error.InvalidInput;
 
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         // Verify book exists and is active
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -166,11 +189,18 @@ pub const SubledgerAccount = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        // Verify group exists and belongs to same book
+        {
+            var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_groups WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, group_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (stmt.columnInt64(0) != book_id) return error.CrossBookViolation;
+        }
 
         var stmt = try database.prepare(create_sql);
         defer stmt.finalize();
@@ -196,6 +226,10 @@ pub const SubledgerAccount = struct {
         var old_name_buf: [256]u8 = undefined;
         var old_name_len: usize = 0;
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT name, book_id FROM ledger_subledger_accounts WHERE id = ?;");
             defer stmt.finalize();
@@ -208,8 +242,14 @@ pub const SubledgerAccount = struct {
             book_id = stmt.columnInt64(1);
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        // Verify book is active
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            _ = try bs_stmt.step();
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
 
         {
             var stmt = try database.prepare("UPDATE ledger_subledger_accounts SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -226,6 +266,10 @@ pub const SubledgerAccount = struct {
 
     pub fn delete(database: db.Database, account_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_accounts WHERE id = ?;");
             defer stmt.finalize();
@@ -233,6 +277,15 @@ pub const SubledgerAccount = struct {
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             book_id = stmt.columnInt64(0);
+        }
+
+        // Verify book is active
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            _ = try bs_stmt.step();
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
         // Reject if entry lines reference this counterparty
@@ -243,9 +296,6 @@ pub const SubledgerAccount = struct {
             _ = try stmt.step();
             if (stmt.columnInt(0) > 0) return error.InvalidInput;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         {
             var stmt = try database.prepare("DELETE FROM ledger_subledger_accounts WHERE id = ?;");
@@ -350,7 +400,7 @@ test "create subledger group rejects archived book" {
     try book_mod.Book.archive(database, 1, "admin");
 
     const result = SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BookArchived, result);
 }
 
 test "isControlAccount returns true for linked account" {
@@ -925,4 +975,86 @@ test "SubledgerAccount.delete rejects nonexistent account" {
 
     const result = SubledgerAccount.delete(database, 999, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "SubledgerGroup.updateName on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = SubledgerGroup.updateName(database, gid, "New Name", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "SubledgerAccount.create with invalid group_id returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "SubledgerAccount.create with cross-book group returns CrossBookViolation" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Create a second book with its own account
+    _ = try book_mod.Book.create(database, "Book 2", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "1000", "Cash B2", .asset, false, "admin");
+
+    // Create group in book 1
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+
+    // Try to create subledger account in book 2 using group from book 1
+    const result = SubledgerAccount.create(database, 2, "C0001", "Juan", "customer", 1, "admin");
+    try std.testing.expectError(error.CrossBookViolation, result);
+}
+
+test "SubledgerAccount.updateName on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = SubledgerAccount.updateName(database, aid, "New Name", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "SubledgerAccount.delete on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+    const aid = try SubledgerAccount.create(database, 1, "C0001", "Juan", "customer", 1, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = SubledgerAccount.delete(database, aid, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "SubledgerGroup.delete on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const gid = try SubledgerGroup.create(database, 1, "Customers", "customer", 1, 2, null, null, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = SubledgerGroup.delete(database, gid, "admin");
+    try std.testing.expectError(error.BookArchived, result);
 }

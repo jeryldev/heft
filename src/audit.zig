@@ -161,3 +161,49 @@ test "audit log records correct book_id" {
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
 }
+
+test "logWithStmt writes three sequential entries correctly" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try database.beginTransaction();
+    var stmt = try database.prepare(insert_sql);
+    defer stmt.finalize();
+
+    try logWithStmt(&stmt, "entry_line", 1, "update", "debit_amount", "100", "200", "admin", 1);
+    try logWithStmt(&stmt, "entry_line", 1, "update", "credit_amount", "0", "50", "admin", 1);
+    try logWithStmt(&stmt, "entry_line", 1, "update", "fx_rate", "10000000000", "20000000000", "admin", 1);
+    try database.commit();
+
+    var count_stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log;");
+    defer count_stmt.finalize();
+    _ = try count_stmt.step();
+    try std.testing.expectEqual(@as(i32, 3), count_stmt.columnInt(0));
+}
+
+test "logWithStmt resets statement between calls" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try database.beginTransaction();
+    var stmt = try database.prepare(insert_sql);
+    defer stmt.finalize();
+
+    try logWithStmt(&stmt, "book", 1, "update", "name", "Old", "New", "admin", 1);
+    try logWithStmt(&stmt, "account", 2, "create", null, null, null, "user1", 1);
+    try database.commit();
+
+    // Verify both entries have correct distinct data
+    var q = try database.prepare("SELECT entity_type, entity_id, action FROM ledger_audit_log ORDER BY id;");
+    defer q.finalize();
+
+    _ = try q.step();
+    try std.testing.expectEqualStrings("book", q.columnText(0).?);
+    try std.testing.expectEqual(@as(i64, 1), q.columnInt64(1));
+    try std.testing.expectEqualStrings("update", q.columnText(2).?);
+
+    _ = try q.step();
+    try std.testing.expectEqualStrings("account", q.columnText(0).?);
+    try std.testing.expectEqual(@as(i64, 2), q.columnInt64(1));
+    try std.testing.expectEqualStrings("create", q.columnText(2).?);
+}

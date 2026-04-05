@@ -41,7 +41,7 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
             \\SELECT e.id, SUM(el.base_debit_amount), SUM(el.base_credit_amount)
             \\FROM ledger_entries e
             \\JOIN ledger_entry_lines el ON el.entry_id = e.id
-            \\WHERE e.book_id = ? AND e.status = 'posted'
+            \\WHERE e.book_id = ? AND e.status IN ('posted', 'reversed')
             \\GROUP BY e.id;
         );
         defer stmt.finalize();
@@ -86,13 +86,29 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         }
     }
 
-    // Check 3: Period count
+    // Check 3a: Period count
     {
         var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ?;");
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
         _ = try stmt.step();
-        result.periods_checked = @intCast(stmt.columnInt(0));
+        const pc = stmt.columnInt(0);
+        result.periods_checked = if (pc >= 0) @as(u32, @intCast(pc)) else 0;
+    }
+
+    // Check 3b: Period date overlaps (regular periods only)
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_periods p1
+            \\JOIN ledger_periods p2 ON p1.book_id = p2.book_id AND p1.id < p2.id
+            \\  AND p1.period_type = 'regular' AND p2.period_type = 'regular'
+            \\  AND p1.start_date <= p2.end_date AND p2.start_date <= p1.end_date
+            \\WHERE p1.book_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.warnings += 1;
     }
 
     // Check 4: FK integrity — entry lines reference valid accounts
@@ -110,7 +126,7 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         if (stmt.columnInt(0) > 0) result.errors += 1;
     }
 
-    // Check 5: Audit completeness — every posted entry has a 'post' audit record
+    // Check 5a: Every posted/void/reversed entry has a 'post' audit record
     {
         var stmt = try database.prepare(
             \\SELECT COUNT(*) FROM ledger_entries e
@@ -118,14 +134,94 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
             \\  AND NOT EXISTS (
             \\    SELECT 1 FROM ledger_audit_log al
             \\    WHERE al.entity_type = 'entry' AND al.entity_id = e.id
-            \\      AND al.action IN ('post', 'void', 'reverse')
+            \\      AND al.action = 'post'
             \\  );
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
         _ = try stmt.step();
-        const missing_audits = stmt.columnInt(0);
-        if (missing_audits > 0) result.warnings += @intCast(missing_audits);
+        const missing = stmt.columnInt(0);
+        if (missing > 0) result.warnings += @as(u32, @intCast(missing));
+    }
+
+    // Check 5b: Every void entry has a 'void' audit record
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entries e
+            \\WHERE e.book_id = ? AND e.status = 'void'
+            \\  AND NOT EXISTS (
+            \\    SELECT 1 FROM ledger_audit_log al
+            \\    WHERE al.entity_type = 'entry' AND al.entity_id = e.id
+            \\      AND al.action = 'void'
+            \\  );
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const missing = stmt.columnInt(0);
+        if (missing > 0) result.warnings += @as(u32, @intCast(missing));
+    }
+
+    // Check 5c: Every reversed entry has a 'reverse' audit record
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entries e
+            \\WHERE e.book_id = ? AND e.status = 'reversed'
+            \\  AND NOT EXISTS (
+            \\    SELECT 1 FROM ledger_audit_log al
+            \\    WHERE al.entity_type = 'entry' AND al.entity_id = e.id
+            \\      AND al.action = 'reverse'
+            \\  );
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const missing = stmt.columnInt(0);
+        if (missing > 0) result.warnings += @as(u32, @intCast(missing));
+    }
+
+    // Check 6: Orphaned cache entries (account deleted via raw SQL)
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_account_balances ab
+            \\WHERE ab.book_id = ?
+            \\  AND ab.account_id NOT IN (SELECT id FROM ledger_accounts WHERE book_id = ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.errors += 1;
+    }
+
+    // Check 7: Orphaned entry lines (entry deleted via raw SQL)
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\WHERE el.entry_id NOT IN (SELECT id FROM ledger_entries WHERE book_id = ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.errors += 1;
+    }
+
+    // Check 8: Duplicate line numbers within an entry
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM (
+            \\  SELECT el.entry_id, el.line_number, COUNT(*) as cnt
+            \\  FROM ledger_entry_lines el
+            \\  JOIN ledger_entries e ON e.id = el.entry_id
+            \\  WHERE e.book_id = ? AND e.status = 'posted'
+            \\  GROUP BY el.entry_id, el.line_number
+            \\  HAVING cnt > 1
+            \\);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.warnings += 1;
     }
 
     return result;
@@ -278,4 +374,204 @@ test "verify: voided entry not counted in balance check" {
     const result = try verify(database, 1);
     try std.testing.expect(result.passed());
     try std.testing.expectEqual(@as(u32, 0), result.entries_checked);
+}
+
+test "verify: reversal checks both original and reversal entries" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    _ = try entry_mod.Entry.reverse(database, 1, "Correction", "2026-01-15", null, "admin");
+
+    const result = try verify(database, 1);
+    try std.testing.expectEqual(@as(u32, 2), result.entries_checked);
+}
+
+test "verify: corrupted reversal entry detected by check 1" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    const reversal_id = try entry_mod.Entry.reverse(database, 1, "Correction", "2026-01-15", null, "admin");
+
+    const pre_result = try verify(database, 1);
+    const pre_errors = pre_result.errors;
+
+    {
+        var stmt = try database.prepare("UPDATE ledger_entry_lines SET base_debit_amount = 999 WHERE entry_id = ? AND base_debit_amount > 0;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, reversal_id);
+        _ = try stmt.step();
+    }
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.errors > pre_errors);
+}
+
+test "verify: cache mismatch from deleted account via raw SQL" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+
+    try database.exec("PRAGMA foreign_keys = OFF;");
+    try database.exec("UPDATE ledger_entry_lines SET account_id = 888 WHERE account_id = 1;");
+    try database.exec("PRAGMA foreign_keys = ON;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(!result.passed());
+    try std.testing.expect(result.errors > 0);
+}
+
+test "verify: cache corruption from raw balance update" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    try postEntry(database, "JE-002", 1, 2_000_000_000_00, 4, 2_000_000_000_00);
+
+    try database.exec("UPDATE ledger_account_balances SET credit_sum = 12345 WHERE account_id = 3;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(!result.passed());
+    try std.testing.expect(result.errors > 0);
+    try std.testing.expect(result.accounts_checked >= 2);
+}
+
+test "verify: multiple periods counted correctly" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    _ = try period_mod.Period.create(database, 1, "Mar 2026", 3, 2026, "2026-03-01", "2026-03-31", "regular", "admin");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.passed());
+    try std.testing.expectEqual(@as(u32, 3), result.periods_checked);
+}
+
+test "verify: void entry missing all audit records triggers warning" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    try entry_mod.Entry.voidEntry(database, 1, "Error", "admin");
+
+    try database.exec("DROP TRIGGER IF EXISTS protect_audit_log_delete;");
+    try database.exec("DELETE FROM ledger_audit_log WHERE entity_type = 'entry' AND entity_id = 1;");
+    try database.exec("CREATE TRIGGER protect_audit_log_delete BEFORE DELETE ON ledger_audit_log BEGIN SELECT RAISE(ABORT, 'audit log is immutable: DELETE not allowed'); END;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.warnings > 0);
+}
+
+test "verify: reversed entry missing all audit records triggers warning" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    _ = try entry_mod.Entry.reverse(database, 1, "Correction", "2026-01-15", null, "admin");
+
+    try database.exec("DROP TRIGGER IF EXISTS protect_audit_log_delete;");
+    try database.exec("DELETE FROM ledger_audit_log WHERE entity_type = 'entry' AND entity_id = 1;");
+    try database.exec("CREATE TRIGGER protect_audit_log_delete BEFORE DELETE ON ledger_audit_log BEGIN SELECT RAISE(ABORT, 'audit log is immutable: DELETE not allowed'); END;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.warnings > 0);
+}
+
+test "verify: FK integrity detects account from wrong book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try book_mod.Book.create(database, "Other", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "9000", "Foreign", .asset, false, "admin");
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+
+    try database.exec("PRAGMA foreign_keys = OFF;");
+    try database.exec("UPDATE ledger_entry_lines SET account_id = 6 WHERE id = 1;");
+    try database.exec("PRAGMA foreign_keys = ON;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(!result.passed());
+    try std.testing.expect(result.errors > 0);
+}
+
+test "verify: clean book with posts and void passes all checks" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    try postEntry(database, "JE-002", 5, 2_000_000_000_00, 4, 2_000_000_000_00);
+
+    try entry_mod.Entry.voidEntry(database, 2, "Duplicate", "admin");
+
+    const result = try verify(database, 1);
+    try std.testing.expectEqual(@as(u32, 0), result.errors);
+    try std.testing.expectEqual(@as(u32, 0), result.warnings);
+    try std.testing.expectEqual(@as(u32, 1), result.entries_checked);
+}
+
+test "verify: stale cache flag does not cause verify failure" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+
+    try database.exec("UPDATE ledger_account_balances SET is_stale = 1 WHERE book_id = 1;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.passed());
+    try std.testing.expectEqual(@as(u32, 0), result.errors);
+}
+
+test "verify: duplicate line numbers detected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+
+    // Remove UNIQUE(entry_id, line_number) constraint by recreating the table
+    // to simulate data corruption that Check 8 should detect
+    try database.exec("PRAGMA foreign_keys = OFF;");
+    try database.exec("ALTER TABLE ledger_entry_lines RENAME TO ledger_entry_lines_old;");
+    try database.exec(
+        \\CREATE TABLE ledger_entry_lines (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  line_number INTEGER NOT NULL,
+        \\  debit_amount INTEGER NOT NULL DEFAULT 0,
+        \\  credit_amount INTEGER NOT NULL DEFAULT 0,
+        \\  base_debit_amount INTEGER NOT NULL DEFAULT 0,
+        \\  base_credit_amount INTEGER NOT NULL DEFAULT 0,
+        \\  fx_rate INTEGER NOT NULL DEFAULT 10000000000,
+        \\  transaction_currency TEXT NOT NULL,
+        \\  description TEXT,
+        \\  quantity INTEGER,
+        \\  unit_type TEXT,
+        \\  counterparty_id INTEGER,
+        \\  account_id INTEGER NOT NULL,
+        \\  entry_id INTEGER NOT NULL,
+        \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        \\);
+    );
+    try database.exec(
+        \\INSERT INTO ledger_entry_lines
+        \\  SELECT * FROM ledger_entry_lines_old;
+    );
+    try database.exec("DROP TABLE ledger_entry_lines_old;");
+
+    // Now insert a duplicate line_number for the same entry
+    try database.exec(
+        \\INSERT INTO ledger_entry_lines
+        \\  (line_number, debit_amount, credit_amount, transaction_currency,
+        \\   fx_rate, account_id, entry_id, base_debit_amount, base_credit_amount)
+        \\VALUES (1, 100000000, 0, 'PHP', 10000000000, 1, 1, 100000000, 0);
+    );
+    try database.exec("PRAGMA foreign_keys = ON;");
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.warnings > 0);
 }

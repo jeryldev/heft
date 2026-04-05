@@ -29,5 +29,5 @@ comptime {
     _ = verify_mod;
     _ = export_mod;
     _ = query_mod;
-    _ = @import("error.zig");
+    _ = LedgerError;
 }
