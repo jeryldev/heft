@@ -151,6 +151,17 @@ pub const Account = struct {
         }
 
         {
+            const book_mod = @import("book.zig");
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, acct_book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            const bstatus = book_mod.BookStatus.fromString(bs_stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (bstatus == .archived) return error.BookArchived;
+        }
+
+        {
             var stmt = try database.prepare("UPDATE ledger_accounts SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindText(1, new_name);
@@ -179,6 +190,17 @@ pub const Account = struct {
             if (!has_row) return error.NotFound;
             current = AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             acct_book_id = stmt.columnInt64(1);
+        }
+
+        {
+            const book_mod = @import("book.zig");
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, acct_book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            const bstatus = book_mod.BookStatus.fromString(bs_stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (bstatus == .archived) return error.BookArchived;
         }
 
         if (!current.canTransitionTo(target)) return error.InvalidTransition;

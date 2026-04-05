@@ -205,6 +205,15 @@ pub const LineDimension = struct {
         }
 
         {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
+        {
             var stmt = try database.prepare(
                 \\SELECT d.book_id FROM ledger_dimension_values dv
                 \\JOIN ledger_dimensions d ON d.id = dv.dimension_id
@@ -218,8 +227,22 @@ pub const LineDimension = struct {
         }
 
         {
+            var chk_stmt = try database.prepare(
+                \\SELECT COUNT(*) FROM ledger_line_dimensions WHERE line_id = ? AND dimension_value_id = ?;
+            );
+            defer chk_stmt.finalize();
+            try chk_stmt.bindInt(1, line_id);
+            try chk_stmt.bindInt(2, dimension_value_id);
+            _ = try chk_stmt.step();
+            if (chk_stmt.columnInt(0) > 0) {
+                if (owns_txn) try database.commit();
+                return;
+            }
+        }
+
+        {
             var stmt = try database.prepare(
-                \\INSERT OR IGNORE INTO ledger_line_dimensions (line_id, dimension_value_id)
+                \\INSERT INTO ledger_line_dimensions (line_id, dimension_value_id)
                 \\VALUES (?, ?);
             );
             defer stmt.finalize();
@@ -250,6 +273,26 @@ pub const LineDimension = struct {
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             book_id = stmt.columnInt64(0);
+        }
+
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
+        {
+            var chk_stmt = try database.prepare(
+                \\SELECT COUNT(*) FROM ledger_line_dimensions WHERE line_id = ? AND dimension_value_id = ?;
+            );
+            defer chk_stmt.finalize();
+            try chk_stmt.bindInt(1, line_id);
+            try chk_stmt.bindInt(2, dimension_value_id);
+            _ = try chk_stmt.step();
+            if (chk_stmt.columnInt(0) == 0) return error.NotFound;
         }
 
         {

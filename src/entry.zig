@@ -453,7 +453,8 @@ pub const Entry = struct {
                 const debit = read_stmt.columnInt64(2);
                 const credit = read_stmt.columnInt64(3);
                 const fx_rate = read_stmt.columnInt64(4);
-                const has_counterparty = read_stmt.columnText(5) != null;
+                const cp_id_raw = read_stmt.columnInt64(5);
+                const has_counterparty = cp_id_raw != 0;
                 const is_control = read_stmt.columnInt(6) > 0;
 
                 // Control account enforcement
@@ -462,7 +463,7 @@ pub const Entry = struct {
 
                 // Counterparty status enforcement
                 if (has_counterparty) {
-                    const cp_id = read_stmt.columnInt64(5);
+                    const cp_id = cp_id_raw;
                     cp_status_stmt.reset();
                     cp_status_stmt.clearBindings();
                     try cp_status_stmt.bindInt(1, cp_id);
@@ -1078,21 +1079,14 @@ pub const Entry = struct {
         var old_approval_buf: [16]u8 = undefined;
         var old_approval_len: usize = 0;
         {
-            var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, book_id, approval_status FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
             book_id = stmt.columnInt64(1);
-        }
-
-        {
-            var as_stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = ?;");
-            defer as_stmt.finalize();
-            try as_stmt.bindInt(1, entry_id);
-            _ = try as_stmt.step();
-            if (as_stmt.columnText(0)) |s| {
+            if (stmt.columnText(2)) |s| {
                 old_approval_len = @min(s.len, old_approval_buf.len);
                 @memcpy(old_approval_buf[0..old_approval_len], s[0..old_approval_len]);
             }
@@ -1125,21 +1119,14 @@ pub const Entry = struct {
         var old_approval_buf: [16]u8 = undefined;
         var old_approval_len: usize = 0;
         {
-            var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, book_id, approval_status FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
             book_id = stmt.columnInt64(1);
-        }
-
-        {
-            var as_stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = ?;");
-            defer as_stmt.finalize();
-            try as_stmt.bindInt(1, entry_id);
-            _ = try as_stmt.step();
-            if (as_stmt.columnText(0)) |s| {
+            if (stmt.columnText(2)) |s| {
                 old_approval_len = @min(s.len, old_approval_buf.len);
                 @memcpy(old_approval_buf[0..old_approval_len], s[0..old_approval_len]);
             }

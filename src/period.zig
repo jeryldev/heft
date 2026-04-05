@@ -96,6 +96,8 @@ pub const Period = struct {
         if (period_number < 1 or period_number > 16) return error.InvalidInput;
         if (year < 1) return error.InvalidInput;
         if (!isValidType(period_type)) return error.InvalidInput;
+        if (start_date.len != 10 or end_date.len != 10) return error.InvalidInput;
+        if (std.mem.order(u8, start_date, end_date) == .gt) return error.InvalidInput;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();

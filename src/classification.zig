@@ -229,6 +229,15 @@ pub const ClassificationNode = struct {
             if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
+        if (parent_id) |pid| {
+            var p_stmt = try database.prepare("SELECT classification_id FROM ledger_classification_nodes WHERE id = ?;");
+            defer p_stmt.finalize();
+            try p_stmt.bindInt(1, pid);
+            const has_row = try p_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (p_stmt.columnInt64(0) != classification_id) return error.InvalidInput;
+        }
+
         const depth = try computeDepth(database, parent_id);
 
         var stmt = try database.prepare("INSERT INTO ledger_classification_nodes (node_type, label, parent_id, position, depth, classification_id) VALUES ('group', ?, ?, ?, ?, ?);");

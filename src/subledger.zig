@@ -33,14 +33,14 @@ pub const SubledgerGroup = struct {
             if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
-        // Verify GL account exists
         {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_accounts WHERE id = ? AND book_id = ?;");
+            var stmt = try database.prepare("SELECT status FROM ledger_accounts WHERE id = ? AND book_id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, gl_account_id);
             try stmt.bindInt(2, book_id);
-            _ = try stmt.step();
-            if (stmt.columnInt(0) == 0) return error.NotFound;
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (!std.mem.eql(u8, stmt.columnText(0).?, "active")) return error.AccountInactive;
         }
 
         var stmt = try database.prepare(create_sql);
@@ -358,6 +358,15 @@ pub const SubledgerAccount = struct {
             if (!has_row) return error.NotFound;
             current = SubledgerAccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             acct_book_id = stmt.columnInt64(1);
+        }
+
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, acct_book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
         if (!current.canTransitionTo(target)) return error.InvalidTransition;

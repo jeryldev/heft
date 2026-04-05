@@ -162,8 +162,8 @@ pub const Book = struct {
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const acct_status = stmt.columnText(0).?;
-            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            const acct_status = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
             const acct_type = stmt.columnText(2).?;
             const is_contra = stmt.columnInt(3);
@@ -206,8 +206,8 @@ pub const Book = struct {
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const acct_status = stmt.columnText(0).?;
-            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            const acct_status = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
             const acct_type = stmt.columnText(2).?;
             const is_contra = stmt.columnInt(3);
@@ -250,8 +250,8 @@ pub const Book = struct {
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const acct_status = stmt.columnText(0).?;
-            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            const acct_status = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
             const acct_type = stmt.columnText(2).?;
             const is_contra = stmt.columnInt(3);
@@ -294,8 +294,8 @@ pub const Book = struct {
             try stmt.bindInt(1, account_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            const acct_status = stmt.columnText(0).?;
-            if (!std.mem.eql(u8, acct_status, "active")) return error.AccountInactive;
+            const acct_status = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
             const acct_type = stmt.columnText(2).?;
             if (!std.mem.eql(u8, acct_type, "asset") and !std.mem.eql(u8, acct_type, "liability")) return error.InvalidInput;
@@ -368,7 +368,9 @@ pub const Book = struct {
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
-        // Verify book exists and is active
+        var old_status_buf: [16]u8 = undefined;
+        var old_status_len: usize = 0;
+
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
@@ -377,9 +379,11 @@ pub const Book = struct {
             if (!has_row) return error.NotFound;
             const current = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             if (current == .archived) return error.InvalidTransition;
+            const cs = current.toString();
+            old_status_len = cs.len;
+            @memcpy(old_status_buf[0..old_status_len], cs);
         }
 
-        // Verify no open or soft_closed periods exist
         {
             var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ? AND status IN ('open', 'soft_closed');");
             defer stmt.finalize();
@@ -395,7 +399,7 @@ pub const Book = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "book", book_id, "update", "status", "active", "archived", performed_by, book_id);
+        try audit.log(database, "book", book_id, "update", "status", old_status_buf[0..old_status_len], "archived", performed_by, book_id);
 
         if (owns_txn) try database.commit();
     }
@@ -404,23 +408,16 @@ pub const Book = struct {
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
+        var old_val: i32 = 0;
         {
-            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, require_approval FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             if (status == .archived) return error.BookArchived;
-        }
-
-        var old_val: i32 = 0;
-        {
-            var rv_stmt = try database.prepare("SELECT require_approval FROM ledger_books WHERE id = ?;");
-            defer rv_stmt.finalize();
-            try rv_stmt.bindInt(1, book_id);
-            _ = try rv_stmt.step();
-            old_val = rv_stmt.columnInt(0);
+            old_val = stmt.columnInt(1);
         }
 
         {
