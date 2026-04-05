@@ -2179,3 +2179,68 @@ test "exportBookMetadata: buffer too small returns error" {
     const result = exportBookMetadata(database, 1, &small_buf, .csv);
     try std.testing.expectError(error.InvalidInput, result);
 }
+
+// ── csvField unit tests ──────────────────────────────────────────
+
+test "csvField: plain field no quoting" {
+    var buf: [100]u8 = undefined;
+    const len = try csvField(&buf, "hello");
+    try std.testing.expectEqualStrings("hello", buf[0..len]);
+}
+
+test "csvField: field with comma is quoted" {
+    var buf: [100]u8 = undefined;
+    const len = try csvField(&buf, "hello,world");
+    try std.testing.expectEqualStrings("\"hello,world\"", buf[0..len]);
+}
+
+test "csvField: field with double-quote is escaped" {
+    var buf: [100]u8 = undefined;
+    const len = try csvField(&buf, "say \"hi\"");
+    try std.testing.expectEqualStrings("\"say \"\"hi\"\"\"", buf[0..len]);
+}
+
+test "csvField: field with newline is quoted" {
+    var buf: [100]u8 = undefined;
+    const len = try csvField(&buf, "line1\nline2");
+    try std.testing.expectEqualStrings("\"line1\nline2\"", buf[0..len]);
+}
+
+test "csvField: empty field" {
+    var buf: [100]u8 = undefined;
+    const len = try csvField(&buf, "");
+    try std.testing.expectEqual(@as(usize, 0), len);
+}
+
+// ── jsonString unit tests ────────────────────────────────────────
+
+test "jsonString: plain string" {
+    var buf: [100]u8 = undefined;
+    const len = try jsonString(&buf, "hello");
+    try std.testing.expectEqualStrings("hello", buf[0..len]);
+}
+
+test "jsonString: escapes double quote" {
+    var buf: [100]u8 = undefined;
+    const len = try jsonString(&buf, "say \"hi\"");
+    try std.testing.expectEqualStrings("say \\\"hi\\\"", buf[0..len]);
+}
+
+test "jsonString: escapes backslash" {
+    var buf: [100]u8 = undefined;
+    const len = try jsonString(&buf, "path\\to");
+    try std.testing.expectEqualStrings("path\\\\to", buf[0..len]);
+}
+
+test "jsonString: escapes newline and tab" {
+    var buf: [100]u8 = undefined;
+    const len = try jsonString(&buf, "a\nb\tc");
+    try std.testing.expectEqualStrings("a\\nb\\tc", buf[0..len]);
+}
+
+test "jsonString: escapes control character" {
+    var buf: [100]u8 = undefined;
+    const input = [_]u8{ 'a', 0x01, 'b' };
+    const len = try jsonString(&buf, &input);
+    try std.testing.expectEqualStrings("a\\u0001b", buf[0..len]);
+}

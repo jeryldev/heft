@@ -3486,3 +3486,99 @@ test "getSubledgerAccount: NotFound" {
     var buf: [4096]u8 = undefined;
     try std.testing.expectError(error.NotFound, getSubledgerAccount(database, 999, &buf, .json));
 }
+
+// ── Missing filter path tests ────────────────────────────────────
+
+test "listAccounts: filter by status" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "2000", "AP", .liability, false, "admin");
+    try account_mod.Account.updateStatus(database, 2, .archived, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const json = try listAccounts(database, 1, null, "active", null, .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "Cash") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "AP") == null);
+}
+
+test "listPeriods: filter by status" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try period_mod.Period.create(database, 1, "Feb", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    try period_mod.Period.transition(database, 2, .soft_closed, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const json = try listPeriods(database, 1, null, "open", .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Jan\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Feb\"") == null);
+}
+
+test "listEntries: doc_search partial match" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Capital", .equity, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    _ = try entry_mod.Entry.createDraft(database, 1, "INV-2026-001", "2026-01-10", "2026-01-10", null, 1, null, "admin");
+    _ = try entry_mod.Entry.createDraft(database, 1, "PAY-2026-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.createDraft(database, 1, "INV-2026-002", "2026-01-20", "2026-01-20", null, 1, null, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try listEntries(database, 1, null, null, null, "INV", .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "INV-2026-001") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "INV-2026-002") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "PAY-2026-001") == null);
+}
+
+test "listEntries: filter by status posted only" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Capital", .equity, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const eid1 = try entry_mod.Entry.createDraft(database, 1, "JE-POST", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, eid1, "admin");
+
+    _ = try entry_mod.Entry.createDraft(database, 1, "JE-DRAFT", "2026-01-20", "2026-01-20", null, 1, null, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try listEntries(database, 1, "posted", null, null, null, .asc, 100, 0, &buf, .json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "JE-POST") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "JE-DRAFT") == null);
+}
+
+test "getAccount: CSV format with header and data" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const csv = try getAccount(database, 1, &buf, .csv);
+
+    try std.testing.expect(std.mem.indexOf(u8, csv, "id,number,name,account_type,normal_balance,is_contra,status\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "1,1000,Cash,asset,debit,0,active\n") != null);
+}
