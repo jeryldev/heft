@@ -4,6 +4,26 @@ const db = @import("db.zig");
 pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const i64) !u32 {
     var count: u32 = 0;
 
+    var compute_stmt = try database.prepare(
+        \\SELECT COALESCE(SUM(el.base_debit_amount), 0),
+        \\       COALESCE(SUM(el.base_credit_amount), 0),
+        \\       COUNT(*)
+        \\FROM ledger_entry_lines el
+        \\JOIN ledger_entries e ON e.id = el.entry_id
+        \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
+        \\  AND el.account_id = ?;
+    );
+    defer compute_stmt.finalize();
+
+    var update_stmt = try database.prepare(
+        \\UPDATE ledger_account_balances
+        \\SET debit_sum = ?, credit_sum = ?, balance = ? - ?,
+        \\    entry_count = ?, is_stale = 0,
+        \\    last_recalculated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        \\WHERE account_id = ? AND period_id = ?;
+    );
+    defer update_stmt.finalize();
+
     for (period_ids) |period_id| {
         var stale_stmt = try database.prepare(
             \\SELECT account_id FROM ledger_account_balances
@@ -16,16 +36,8 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
         while (try stale_stmt.step()) {
             const account_id = stale_stmt.columnInt64(0);
 
-            var compute_stmt = try database.prepare(
-                \\SELECT COALESCE(SUM(el.base_debit_amount), 0),
-                \\       COALESCE(SUM(el.base_credit_amount), 0),
-                \\       COUNT(*)
-                \\FROM ledger_entry_lines el
-                \\JOIN ledger_entries e ON e.id = el.entry_id
-                \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
-                \\  AND el.account_id = ?;
-            );
-            defer compute_stmt.finalize();
+            compute_stmt.reset();
+            compute_stmt.clearBindings();
             try compute_stmt.bindInt(1, book_id);
             try compute_stmt.bindInt(2, period_id);
             try compute_stmt.bindInt(3, account_id);
@@ -35,14 +47,8 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
             const real_credit = compute_stmt.columnInt64(1);
             const entry_count = compute_stmt.columnInt(2);
 
-            var update_stmt = try database.prepare(
-                \\UPDATE ledger_account_balances
-                \\SET debit_sum = ?, credit_sum = ?, balance = ? - ?,
-                \\    entry_count = ?, is_stale = 0,
-                \\    last_recalculated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE account_id = ? AND period_id = ?;
-            );
-            defer update_stmt.finalize();
+            update_stmt.reset();
+            update_stmt.clearBindings();
             try update_stmt.bindInt(1, real_debit);
             try update_stmt.bindInt(2, real_credit);
             try update_stmt.bindInt(3, real_debit);

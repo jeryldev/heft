@@ -97,8 +97,8 @@ pub const Period = struct {
         if (year < 1) return error.InvalidInput;
         if (!isValidType(period_type)) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -144,7 +144,7 @@ pub const Period = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "period", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -152,8 +152,8 @@ pub const Period = struct {
         var current: PeriodStatus = undefined;
         var period_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Fetch current status and book_id
         {
@@ -179,7 +179,7 @@ pub const Period = struct {
 
         try audit.log(database, "period", period_id, "transition", "status", current.toString(), target_status.toString(), performed_by, period_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     const days_in_month = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
@@ -206,8 +206,8 @@ pub const Period = struct {
         if (start_month < 1 or start_month > 12) return error.InvalidInput;
         if (fiscal_year < 1) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -288,7 +288,7 @@ pub const Period = struct {
             audit_stmt.clearBindings();
         }
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 

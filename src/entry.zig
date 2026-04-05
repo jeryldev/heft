@@ -56,8 +56,8 @@ pub const Entry = struct {
     pub fn createDraft(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, performed_by: []const u8) !i64 {
         if (document_number.len == 0) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -100,7 +100,7 @@ pub const Entry = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "entry", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -108,8 +108,8 @@ pub const Entry = struct {
         // Verify entry exists and is draft
         var entry_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
@@ -152,7 +152,7 @@ pub const Entry = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "entry_line", id, "create", null, null, null, performed_by, entry_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -161,8 +161,8 @@ pub const Entry = struct {
         var entry_id: i64 = 0;
         var entry_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -190,7 +190,7 @@ pub const Entry = struct {
 
         try audit.log(database, "entry_line", line_id, "delete", null, null, null, performed_by, entry_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     const amt_buf_len = 24;
@@ -209,8 +209,8 @@ pub const Entry = struct {
         var old_desc_len: usize = 0;
         var old_has_desc = false;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -323,14 +323,14 @@ pub const Entry = struct {
             }
         }
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn deleteDraft(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
         var entry_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
@@ -361,7 +361,7 @@ pub const Entry = struct {
 
         try audit.log(database, "entry", entry_id, "delete", null, null, null, performed_by, entry_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn post(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
@@ -369,8 +369,8 @@ pub const Entry = struct {
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id FROM ledger_entries WHERE id = ?;");
@@ -444,6 +444,9 @@ pub const Entry = struct {
             var cache_stmt = try database.prepare(balance_sql);
             defer cache_stmt.finalize();
 
+            var cp_status_stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
+            defer cp_status_stmt.finalize();
+
             var total_base_debits: i64 = 0;
             var total_base_credits: i64 = 0;
 
@@ -463,11 +466,11 @@ pub const Entry = struct {
                 // Counterparty status enforcement
                 if (has_counterparty) {
                     const cp_id = read_stmt.columnInt64(5);
-                    var cp_stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
-                    defer cp_stmt.finalize();
-                    try cp_stmt.bindInt(1, cp_id);
-                    _ = try cp_stmt.step();
-                    const cp_status = cp_stmt.columnText(0).?;
+                    cp_status_stmt.reset();
+                    cp_status_stmt.clearBindings();
+                    try cp_status_stmt.bindInt(1, cp_id);
+                    _ = try cp_status_stmt.step();
+                    const cp_status = cp_status_stmt.columnText(0).?;
                     if (!std.mem.eql(u8, cp_status, "active")) return error.AccountInactive;
                 }
 
@@ -594,7 +597,7 @@ pub const Entry = struct {
         // Step 8: Audit log
         try audit.log(database, "entry", entry_id, "post", "status", "draft", "posted", performed_by, entry_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn voidEntry(database: db.Database, entry_id: i64, reason: []const u8, performed_by: []const u8) !void {
@@ -603,8 +606,8 @@ pub const Entry = struct {
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id FROM ledger_entries WHERE id = ?;");
@@ -686,7 +689,7 @@ pub const Entry = struct {
             try audit.logWithStmt(&audit_stmt, "entry", entry_id, "void", "void_reason", null, reason, performed_by, entry_book_id);
         }
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn reverse(database: db.Database, entry_id: i64, reason: []const u8, reversal_date: []const u8, target_period_id: ?i64, performed_by: []const u8) !i64 {
@@ -697,8 +700,8 @@ pub const Entry = struct {
         var doc_number_buf: [128]u8 = undefined;
         var doc_number_len: usize = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status, period_id, book_id, document_number FROM ledger_entries WHERE id = ?;");
@@ -848,7 +851,7 @@ pub const Entry = struct {
             try audit.logWithStmt(&audit_stmt, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
         }
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return reversal_id;
     }
 
@@ -870,8 +873,8 @@ pub const Entry = struct {
         var old_has_meta = false;
         var old_period_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -981,7 +984,7 @@ pub const Entry = struct {
             }
         }
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn editPosted(database: db.Database, entry_id: i64, description: ?[]const u8, metadata: ?[]const u8, performed_by: []const u8) !void {
@@ -994,8 +997,8 @@ pub const Entry = struct {
         var old_has_meta = false;
         var period_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare(
@@ -1067,12 +1070,12 @@ pub const Entry = struct {
             }
         }
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn approve(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -1099,14 +1102,14 @@ pub const Entry = struct {
         }
 
         try audit.log(database, "entry", entry_id, "approve", "approval_status", "none", "approved", performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn reject(database: db.Database, entry_id: i64, reason: []const u8, performed_by: []const u8) !void {
         if (reason.len == 0) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
         {
@@ -1131,7 +1134,7 @@ pub const Entry = struct {
         }
 
         try audit.log(database, "entry", entry_id, "reject", "approval_status", "none", "rejected", performed_by, book_id);
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 

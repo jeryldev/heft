@@ -17,8 +17,8 @@ const db = @import("db.zig");
 /// Create all ledger tables, indexes, and views.
 /// Safe to call multiple times — uses IF NOT EXISTS.
 pub fn createAll(database: db.Database) !void {
-    try database.beginTransaction();
-    errdefer database.rollback();
+    const owns_txn = try database.beginTransactionIfNeeded();
+    errdefer if (owns_txn) database.rollback();
 
     for (tables) |ddl| try database.exec(ddl);
     for (indexes) |idx| try database.exec(idx);
@@ -26,7 +26,7 @@ pub fn createAll(database: db.Database) !void {
     for (triggers) |trg| try database.exec(trg);
     try database.exec("PRAGMA user_version = 4;");
 
-    try database.commit();
+    if (owns_txn) try database.commit();
 }
 
 // ── Tables (16) ─────────────────────────────────────────────────

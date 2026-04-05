@@ -6,6 +6,9 @@ const audit = @import("audit.zig");
 const money = @import("money.zig");
 
 pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8) !void {
+    const owns_txn = try database.beginTransactionIfNeeded();
+    errdefer if (owns_txn) database.rollback();
+
     var re_account_id: i64 = 0;
     var is_account_id: i64 = 0;
     var book_currency_buf: [4]u8 = undefined;
@@ -107,6 +110,7 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
             try period_mod.Period.transition(database, period_id, .soft_closed, performed_by);
         }
         try period_mod.Period.transition(database, period_id, .closed, performed_by);
+        if (owns_txn) try database.commit();
         return;
     }
 
@@ -122,6 +126,8 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         try period_mod.Period.transition(database, period_id, .soft_closed, performed_by);
     }
     try period_mod.Period.transition(database, period_id, .closed, performed_by);
+
+    if (owns_txn) try database.commit();
 }
 
 fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, doc_buf: *[32]u8, performed_by: []const u8) !void {
@@ -284,16 +290,15 @@ fn queryBalance(database: db.Database, account_id: i64, period_id: i64) !struct 
     return .{ .debit_sum = stmt.columnInt64(0), .credit_sum = stmt.columnInt64(1) };
 }
 
-fn queryPeriodStatus(database: db.Database, period_id: i64) ![]const u8 {
+fn queryPeriodStatus(database: db.Database, period_id: i64, out_buf: []u8) ![]u8 {
     var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
     defer stmt.finalize();
     try stmt.bindInt(1, period_id);
     _ = try stmt.step();
-    const s = stmt.columnText(0).?;
-    var buf: [16]u8 = undefined;
-    const len = @min(s.len, buf.len);
-    @memcpy(buf[0..len], s[0..len]);
-    return buf[0..len];
+    const status = stmt.columnText(0).?;
+    const len = @min(status.len, out_buf.len);
+    @memcpy(out_buf[0..len], status[0..len]);
+    return out_buf[0..len];
 }
 
 test "closePeriod: direct close with profit" {

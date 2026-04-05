@@ -20,8 +20,8 @@ pub const SubledgerGroup = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, group_type: []const u8, group_number: i32, gl_account_id: i64, number_range_start: ?[]const u8, number_range_end: ?[]const u8, performed_by: []const u8) !i64 {
         if (!isValidType(group_type)) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -59,7 +59,7 @@ pub const SubledgerGroup = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "subledger_group", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -70,8 +70,8 @@ pub const SubledgerGroup = struct {
         var old_name_len: usize = 0;
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT name, book_id FROM ledger_subledger_groups WHERE id = ?;");
@@ -90,7 +90,8 @@ pub const SubledgerGroup = struct {
             var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer bs_stmt.finalize();
             try bs_stmt.bindInt(1, book_id);
-            _ = try bs_stmt.step();
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
             if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
@@ -104,14 +105,14 @@ pub const SubledgerGroup = struct {
 
         try audit.log(database, "subledger_group", group_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn delete(database: db.Database, group_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_groups WHERE id = ?;");
@@ -127,7 +128,8 @@ pub const SubledgerGroup = struct {
             var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer bs_stmt.finalize();
             try bs_stmt.bindInt(1, book_id);
-            _ = try bs_stmt.step();
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
             if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
@@ -149,7 +151,7 @@ pub const SubledgerGroup = struct {
 
         try audit.log(database, "subledger_group", group_id, "delete", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn isControlAccount(database: db.Database, account_id: i64) !bool {
@@ -209,8 +211,8 @@ pub const SubledgerAccount = struct {
     pub fn create(database: db.Database, book_id: i64, number: []const u8, name: []const u8, account_type: []const u8, group_id: i64, performed_by: []const u8) !i64 {
         if (!isValidType(account_type)) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -246,7 +248,7 @@ pub const SubledgerAccount = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "subledger_account", id, "create", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
@@ -257,8 +259,8 @@ pub const SubledgerAccount = struct {
         var old_name_len: usize = 0;
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT name, book_id FROM ledger_subledger_accounts WHERE id = ?;");
@@ -277,7 +279,8 @@ pub const SubledgerAccount = struct {
             var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer bs_stmt.finalize();
             try bs_stmt.bindInt(1, book_id);
-            _ = try bs_stmt.step();
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
             if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
@@ -291,14 +294,14 @@ pub const SubledgerAccount = struct {
 
         try audit.log(database, "subledger_account", account_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn delete(database: db.Database, account_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_accounts WHERE id = ?;");
@@ -314,7 +317,8 @@ pub const SubledgerAccount = struct {
             var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer bs_stmt.finalize();
             try bs_stmt.bindInt(1, book_id);
-            _ = try bs_stmt.step();
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
             if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
@@ -336,15 +340,15 @@ pub const SubledgerAccount = struct {
 
         try audit.log(database, "subledger_account", account_id, "delete", null, null, null, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn updateStatus(database: db.Database, account_id: i64, target: SubledgerAccountStatus, performed_by: []const u8) !void {
         var current: SubledgerAccountStatus = undefined;
         var acct_book_id: i64 = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_subledger_accounts WHERE id = ?;");
@@ -368,7 +372,7 @@ pub const SubledgerAccount = struct {
 
         try audit.log(database, "subledger_account", account_id, "update", "status", current.toString(), target.toString(), performed_by, acct_book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 

@@ -72,8 +72,18 @@ pub const Database = struct {
         };
     }
 
+    pub fn isInTransaction(self: Database) bool {
+        return c.sqlite3_get_autocommit(self.handle) == 0;
+    }
+
     pub fn beginTransaction(self: Database) !void {
         try self.exec("BEGIN IMMEDIATE;");
+    }
+
+    pub fn beginTransactionIfNeeded(self: Database) !bool {
+        if (self.isInTransaction()) return false;
+        try self.exec("BEGIN IMMEDIATE;");
+        return true;
     }
 
     pub fn commit(self: Database) !void {
@@ -548,13 +558,46 @@ test "statement reset and reuse with bindInt and columnInt64" {
 }
 
 test "nested begin fails with SQLITE_ERROR" {
-    const db = try Database.open(":memory:");
-    defer db.close();
+    const database = try Database.open(":memory:");
+    defer database.close();
 
-    try db.beginTransaction();
-    const result = db.beginTransaction();
+    try database.beginTransaction();
+    const result = database.beginTransaction();
     try std.testing.expectError(error.SqliteExecFailed, result);
-    db.rollback();
+    database.rollback();
+}
+
+test "isInTransaction returns false outside transaction" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    try std.testing.expect(!database.isInTransaction());
+}
+
+test "isInTransaction returns true inside transaction" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    try database.beginTransaction();
+    try std.testing.expect(database.isInTransaction());
+    database.rollback();
+}
+
+test "beginTransactionIfNeeded starts transaction when none active" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    const owns = try database.beginTransactionIfNeeded();
+    try std.testing.expect(owns);
+    try std.testing.expect(database.isInTransaction());
+    database.rollback();
+}
+
+test "beginTransactionIfNeeded is no-op when already in transaction" {
+    const database = try Database.open(":memory:");
+    defer database.close();
+    try database.beginTransaction();
+    const owns = try database.beginTransactionIfNeeded();
+    try std.testing.expect(!owns);
+    try std.testing.expect(database.isInTransaction());
+    database.rollback();
 }
 
 test "rollback outside transaction is safe" {

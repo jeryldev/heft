@@ -36,8 +36,8 @@ pub const Book = struct {
         if (base_currency.len != 3) return error.InvalidInput;
         if (decimal_places < 0 or decimal_places > 8) return error.InvalidInput;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         var stmt = try database.prepare(create_sql);
         defer stmt.finalize();
@@ -50,13 +50,13 @@ pub const Book = struct {
         const id = database.lastInsertRowId();
         try audit.log(database, "book", id, "create", null, null, null, performed_by, id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
         return id;
     }
 
     pub fn setRoundingAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is not archived
         {
@@ -96,12 +96,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "rounding_account_id", null, id_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn setFxGainLossAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -139,12 +139,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "fx_gain_loss_account_id", null, id_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn setRetainedEarningsAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -183,12 +183,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "retained_earnings_account_id", null, id_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn setIncomeSummaryAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -227,12 +227,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "income_summary_account_id", null, id_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn setOpeningBalanceAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -271,12 +271,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "opening_balance_account_id", null, id_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn setSuspenseAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -314,7 +314,7 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "suspense_account_id", null, id_str, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn validateOpeningBalanceMigration(database: db.Database, book_id: i64) !void {
@@ -335,8 +335,8 @@ pub const Book = struct {
         var old_name_buf: [256]u8 = undefined;
         var old_name_len: usize = 0;
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT name, status FROM ledger_books WHERE id = ?;");
@@ -361,12 +361,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "name", old_name_buf[0..old_name_len], new_name, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn archive(database: db.Database, book_id: i64, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         // Verify book exists and is active
         {
@@ -397,12 +397,12 @@ pub const Book = struct {
 
         try audit.log(database, "book", book_id, "update", "status", "active", "archived", performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 
     pub fn setRequireApproval(database: db.Database, book_id: i64, require: bool, performed_by: []const u8) !void {
-        try database.beginTransaction();
-        errdefer database.rollback();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
@@ -426,7 +426,7 @@ pub const Book = struct {
         const new_val = if (require) "1" else "0";
         try audit.log(database, "book", book_id, "update", "require_approval", old_val, new_val, performed_by, book_id);
 
-        try database.commit();
+        if (owns_txn) try database.commit();
     }
 };
 
