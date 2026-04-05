@@ -446,7 +446,7 @@ pub fn exportChartOfAccounts(database: db_mod.Database, book_id: i64, buf: []u8,
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try jsonString(buf[pos..], normal_bal);
-                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{d},\"status\":\"", .{is_contra}) catch return error.InvalidInput;
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.InvalidInput;
                 pos += j5.len;
                 pos += try jsonString(buf[pos..], status);
                 const j6 = "\"}";
@@ -567,13 +567,13 @@ pub fn exportJournalEntries(database: db_mod.Database, book_id: i64, start_date:
 
                 if (!same_entry) {
                     if (entry_open) {
-                        const close_entry = "]},";
+                        const close_entry = "]}";
                         if (pos + close_entry.len > buf.len) return error.InvalidInput;
                         @memcpy(buf[pos .. pos + close_entry.len], close_entry);
                         pos += close_entry.len;
                     }
 
-                    const h1 = "{\"document_number\":\"";
+                    const h1 = if (entry_open) ",{\"document_number\":\"" else "{\"document_number\":\"";
                     if (pos + h1.len > buf.len) return error.InvalidInput;
                     @memcpy(buf[pos .. pos + h1.len], h1);
                     pos += h1.len;

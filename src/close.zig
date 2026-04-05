@@ -78,7 +78,7 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
 
     _ = try cache.recalculateStale(database, book_id, &.{period_id});
 
-    const MaxAccounts = 500; // Maximum R/E accounts per period for closing. Silent truncation if exceeded.
+    const MaxAccounts = 500;
     var account_ids: [MaxAccounts]i64 = undefined;
     var debit_sums: [MaxAccounts]i64 = undefined;
     var credit_sums: [MaxAccounts]i64 = undefined;
@@ -97,7 +97,7 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         try stmt.bindInt(1, book_id);
         try stmt.bindInt(2, period_id);
         while (try stmt.step()) {
-            if (acct_count >= MaxAccounts) break;
+            if (acct_count >= MaxAccounts) return error.TooManyAccounts;
             account_ids[acct_count] = stmt.columnInt64(0);
             const acct_type = stmt.columnText(1).?;
             is_revenue[acct_count] = std.mem.eql(u8, acct_type, "revenue");

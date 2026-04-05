@@ -283,7 +283,7 @@ pub fn getAccount(database: db_mod.Database, account_id: i64, buf: []u8, format:
             @memcpy(buf[pos .. pos + j4.len], j4);
             pos += j4.len;
             pos += try export_mod.jsonString(buf[pos..], normal_bal);
-            const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{d},\"status\":\"", .{is_contra}) catch return error.InvalidInput;
+            const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.InvalidInput;
             pos += j5.len;
             pos += try export_mod.jsonString(buf[pos..], status);
             const j6 = "\"}";
@@ -462,7 +462,7 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], normal_bal);
-                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{d},\"status\":\"", .{is_contra}) catch return error.InvalidInput;
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.InvalidInput;
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], status);
                 const j6 = "\"}";
@@ -1988,7 +1988,10 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
         _ = try stmt.step();
         const prior_debits = stmt.columnInt64(0);
         const prior_credits = stmt.columnInt64(1);
-        opening_balance = if (is_debit_normal) prior_debits - prior_credits else prior_credits - prior_debits;
+        opening_balance = if (is_debit_normal)
+            std.math.sub(i64, prior_debits, prior_credits) catch return error.AmountOverflow
+        else
+            std.math.sub(i64, prior_credits, prior_debits) catch return error.AmountOverflow;
     }
 
     const order_sql: [*:0]const u8 = if (order == .asc)
@@ -2042,11 +2045,11 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
             while (try stmt.step()) {
                 const debit = stmt.columnInt64(5);
                 const credit = stmt.columnInt64(6);
-                if (is_debit_normal) {
-                    running += debit - credit;
-                } else {
-                    running += credit - debit;
-                }
+                const diff = if (is_debit_normal)
+                    std.math.sub(i64, debit, credit) catch return error.AmountOverflow
+                else
+                    std.math.sub(i64, credit, debit) catch return error.AmountOverflow;
+                running = std.math.add(i64, running, diff) catch return error.AmountOverflow;
 
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(0) orelse "");
                 if (pos >= buf.len) return error.InvalidInput;
@@ -2085,11 +2088,11 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
                 first = false;
                 const debit = stmt.columnInt64(5);
                 const credit = stmt.columnInt64(6);
-                if (is_debit_normal) {
-                    running += debit - credit;
-                } else {
-                    running += credit - debit;
-                }
+                const diff = if (is_debit_normal)
+                    std.math.sub(i64, debit, credit) catch return error.AmountOverflow
+                else
+                    std.math.sub(i64, credit, debit) catch return error.AmountOverflow;
+                running = std.math.add(i64, running, diff) catch return error.AmountOverflow;
 
                 const j1 = "{\"posting_date\":\"";
                 if (pos + j1.len > buf.len) return error.InvalidInput;
@@ -2360,9 +2363,9 @@ pub fn subledgerReconciliation(database: db_mod.Database, book_id: i64, group_id
         gl_credits = stmt.columnInt64(1);
     }
 
-    const sl_balance = sl_debits - sl_credits;
-    const gl_balance = gl_debits - gl_credits;
-    const difference = gl_balance - sl_balance;
+    const sl_balance = std.math.sub(i64, sl_debits, sl_credits) catch return error.AmountOverflow;
+    const gl_balance = std.math.sub(i64, gl_debits, gl_credits) catch return error.AmountOverflow;
+    const difference = std.math.sub(i64, gl_balance, sl_balance) catch return error.AmountOverflow;
     const is_reconciled = difference == 0;
 
     var pos: usize = 0;

@@ -631,6 +631,7 @@ fn mapError(err: anyerror) i32 {
         error.OpeningBalanceAccountRequired => 28,
         error.IncomeSummaryAccountRequired => 29,
         error.ApprovalRequired => 30,
+        error.TooManyAccounts => 31,
         error.SqliteOpenFailed => 90,
         error.SqliteExecFailed => 91,
         error.SqlitePrepareFailed => 92,

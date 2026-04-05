@@ -235,14 +235,14 @@ fn buildReportResult(database: db.Database, sql: [*:0]const u8, binds: anytype) 
         const credit_sum = stmt.columnInt64(6);
 
         if (std.mem.eql(u8, normal, "debit")) {
-            row.debit_balance = debit_sum - credit_sum;
+            row.debit_balance = std.math.sub(i64, debit_sum, credit_sum) catch return error.AmountOverflow;
             row.credit_balance = 0;
             if (row.debit_balance < 0) {
                 row.credit_balance = std.math.negate(row.debit_balance) catch return error.AmountOverflow;
                 row.debit_balance = 0;
             }
         } else {
-            row.credit_balance = credit_sum - debit_sum;
+            row.credit_balance = std.math.sub(i64, credit_sum, debit_sum) catch return error.AmountOverflow;
             row.debit_balance = 0;
             if (row.credit_balance < 0) {
                 row.debit_balance = std.math.negate(row.credit_balance) catch return error.AmountOverflow;
@@ -323,8 +323,8 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
         const prior_debits = stmt.columnInt64(0);
         const prior_credits = stmt.columnInt64(1);
         opening = switch (mode) {
-            .debit_normal => prior_debits - prior_credits,
-            .credit_normal => prior_credits - prior_debits,
+            .debit_normal => std.math.sub(i64, prior_debits, prior_credits) catch return error.AmountOverflow,
+            .credit_normal => std.math.sub(i64, prior_credits, prior_debits) catch return error.AmountOverflow,
             .none => 0,
         };
     }
@@ -335,9 +335,9 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
     result.opening_balance = opening;
     if (opening != 0) {
         for (result.rows) |*row| {
-            row.running_balance += opening;
+            row.running_balance = std.math.add(i64, row.running_balance, opening) catch return error.AmountOverflow;
         }
-        result.closing_balance += opening;
+        result.closing_balance = std.math.add(i64, result.closing_balance, opening) catch return error.AmountOverflow;
     }
 
     return result;
@@ -442,14 +442,14 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
         const credit_sum = stmt.columnInt64(6);
 
         if (std.mem.eql(u8, normal, "debit")) {
-            row.debit_balance = debit_sum - credit_sum;
+            row.debit_balance = std.math.sub(i64, debit_sum, credit_sum) catch return error.AmountOverflow;
             row.credit_balance = 0;
             if (row.debit_balance < 0) {
                 row.credit_balance = std.math.negate(row.debit_balance) catch return error.AmountOverflow;
                 row.debit_balance = 0;
             }
         } else {
-            row.credit_balance = credit_sum - debit_sum;
+            row.credit_balance = std.math.sub(i64, credit_sum, debit_sum) catch return error.AmountOverflow;
             row.debit_balance = 0;
             if (row.credit_balance < 0) {
                 row.debit_balance = std.math.negate(row.credit_balance) catch return error.AmountOverflow;
@@ -634,8 +634,8 @@ fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeR
             try used_prior.put(allocator, crow.account_id, {});
         }
 
-        comp_row.variance_debit = comp_row.current_debit - comp_row.prior_debit;
-        comp_row.variance_credit = comp_row.current_credit - comp_row.prior_credit;
+        comp_row.variance_debit = std.math.sub(i64, comp_row.current_debit, comp_row.prior_debit) catch return error.AmountOverflow;
+        comp_row.variance_credit = std.math.sub(i64, comp_row.current_credit, comp_row.prior_credit) catch return error.AmountOverflow;
 
         try rows.append(allocator, comp_row);
     }
@@ -652,8 +652,8 @@ fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeR
             @memcpy(comp_row.account_type[0..prow.account_type_len], prow.account_type[0..prow.account_type_len]);
             comp_row.prior_debit = prow.debit_balance;
             comp_row.prior_credit = prow.credit_balance;
-            comp_row.variance_debit = -prow.debit_balance;
-            comp_row.variance_credit = -prow.credit_balance;
+            comp_row.variance_debit = std.math.negate(prow.debit_balance) catch return error.AmountOverflow;
+            comp_row.variance_credit = std.math.negate(prow.credit_balance) catch return error.AmountOverflow;
             try rows.append(allocator, comp_row);
         }
     }
@@ -765,11 +765,11 @@ pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8
         const is_contra = stmt.columnInt(7);
 
         if (is_contra == 1) {
-            row.opening_balance = open_debit - open_credit;
-            row.period_activity = act_debit - act_credit;
+            row.opening_balance = std.math.sub(i64, open_debit, open_credit) catch return error.AmountOverflow;
+            row.period_activity = std.math.sub(i64, act_debit, act_credit) catch return error.AmountOverflow;
         } else {
-            row.opening_balance = open_credit - open_debit;
-            row.period_activity = act_credit - act_debit;
+            row.opening_balance = std.math.sub(i64, open_credit, open_debit) catch return error.AmountOverflow;
+            row.period_activity = std.math.sub(i64, act_credit, act_debit) catch return error.AmountOverflow;
         }
         row.closing_balance = std.math.add(i64, row.opening_balance, row.period_activity) catch return error.AmountOverflow;
 

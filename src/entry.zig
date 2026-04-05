@@ -157,8 +157,6 @@ pub const Entry = struct {
     }
 
     pub fn removeLine(database: db.Database, line_id: i64, performed_by: []const u8) !void {
-        // Fetch line's entry_id and verify entry is draft
-        var entry_id: i64 = 0;
         var entry_book_id: i64 = 0;
 
         const owns_txn = try database.beginTransactionIfNeeded();
@@ -175,7 +173,6 @@ pub const Entry = struct {
             try stmt.bindInt(1, line_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            entry_id = stmt.columnInt64(0);
             const status = stmt.columnText(1).?;
             if (!std.mem.eql(u8, status, "draft")) return error.AlreadyPosted;
             entry_book_id = stmt.columnInt64(2);

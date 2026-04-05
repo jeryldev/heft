@@ -59,7 +59,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
     }
     const end_date = end_date_buf[0..end_date_len];
 
-    const MaxAdjustments = 500; // Maximum FX adjustments per revaluation. Silent truncation if exceeded.
+    const MaxAdjustments = 500;
     var adj_account_ids: [MaxAdjustments]i64 = undefined;
     var adj_amounts: [MaxAdjustments]i64 = undefined;
     var adj_count: usize = 0;
@@ -86,7 +86,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
         try rate_stmt.bindText(3, rate.currency);
 
         while (try rate_stmt.step()) {
-            if (adj_count >= MaxAdjustments) break;
+            if (adj_count >= MaxAdjustments) return error.TooManyAccounts;
             const account_id = rate_stmt.columnInt64(0);
             const net_txn_amount = rate_stmt.columnInt64(1);
             const existing_base = rate_stmt.columnInt64(2);
