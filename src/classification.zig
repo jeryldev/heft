@@ -3,7 +3,7 @@ const db = @import("db.zig");
 const audit = @import("audit.zig");
 
 pub const Classification = struct {
-    const valid_types = [_][]const u8{ "balance_sheet", "income_statement", "trial_balance" };
+    const valid_types = [_][]const u8{ "balance_sheet", "income_statement", "trial_balance", "cash_flow" };
 
     fn isValidType(t: []const u8) bool {
         for (valid_types) |vt| {
@@ -198,6 +198,7 @@ pub const ClassificationNode = struct {
         const acct_type = stmt.columnText(1).?;
 
         if (std.mem.eql(u8, report_type, "trial_balance")) return;
+        if (std.mem.eql(u8, report_type, "cash_flow")) return;
 
         if (std.mem.eql(u8, report_type, "balance_sheet")) {
             for (bs_types) |t| {
@@ -741,6 +742,178 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
     return result;
 }
 
+pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_date: []const u8, end_date: []const u8) !*ClassifiedResult {
+    var book_id: i64 = 0;
+    {
+        var stmt = try database.prepare("SELECT book_id, report_type FROM ledger_classifications WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        book_id = stmt.columnInt64(0);
+        const report_type = stmt.columnText(1).?;
+        if (!std.mem.eql(u8, report_type, "cash_flow")) return error.InvalidInput;
+    }
+
+    const result = try std.heap.c_allocator.create(ClassifiedResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    var balance_map = std.AutoHashMapUnmanaged(i64, [2]i64){};
+    {
+        var stmt = try database.prepare(
+            \\SELECT a.id, a.normal_balance, SUM(ab.debit_sum), SUM(ab.credit_sum)
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ?
+            \\GROUP BY a.id;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, start_date);
+        try stmt.bindText(3, end_date);
+
+        while (try stmt.step()) {
+            const acct_id = stmt.columnInt64(0);
+            const normal = stmt.columnText(1).?;
+            const debit_sum = stmt.columnInt64(2);
+            const credit_sum = stmt.columnInt64(3);
+
+            var debit_bal: i64 = 0;
+            var credit_bal: i64 = 0;
+            if (std.mem.eql(u8, normal, "debit")) {
+                debit_bal = debit_sum - credit_sum;
+                if (debit_bal < 0) {
+                    credit_bal = -debit_bal;
+                    debit_bal = 0;
+                }
+            } else {
+                credit_bal = credit_sum - debit_sum;
+                if (credit_bal < 0) {
+                    debit_bal = -credit_bal;
+                    credit_bal = 0;
+                }
+            }
+            try balance_map.put(allocator, acct_id, .{ debit_bal, credit_bal });
+        }
+    }
+
+    const NodeInfo = struct { parent_id: ?i64, acct_id: i64, is_account: bool };
+    var node_infos = std.AutoHashMapUnmanaged(i64, NodeInfo){};
+    var node_balances = std.AutoHashMapUnmanaged(i64, [2]i64){};
+    var account_nodes = std.ArrayListUnmanaged(i64){};
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, node_type, account_id, parent_id
+            \\FROM ledger_classification_nodes
+            \\WHERE classification_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+
+        while (try stmt.step()) {
+            const node_id = stmt.columnInt64(0);
+            const node_type = stmt.columnText(1).?;
+            const is_account = std.mem.eql(u8, node_type, "account");
+            const acct_id = stmt.columnInt64(2);
+            const parent_text = stmt.columnText(3);
+            const parent_id: ?i64 = if (parent_text != null) stmt.columnInt64(3) else null;
+
+            try node_infos.put(allocator, node_id, .{ .parent_id = parent_id, .acct_id = acct_id, .is_account = is_account });
+            try node_balances.put(allocator, node_id, .{ 0, 0 });
+
+            if (is_account) try account_nodes.append(allocator, node_id);
+        }
+    }
+
+    for (account_nodes.items) |node_id| {
+        const info = node_infos.get(node_id).?;
+        var debit_bal: i64 = 0;
+        var credit_bal: i64 = 0;
+        if (balance_map.get(info.acct_id)) |bal| {
+            debit_bal = bal[0];
+            credit_bal = bal[1];
+        }
+
+        try node_balances.put(allocator, node_id, .{ debit_bal, credit_bal });
+
+        var current_parent = info.parent_id;
+        while (current_parent) |pid| {
+            const existing = node_balances.get(pid).?;
+            try node_balances.put(allocator, pid, .{ existing[0] + debit_bal, existing[1] + credit_bal });
+            current_parent = node_infos.get(pid).?.parent_id;
+        }
+    }
+
+    var rows = std.ArrayListUnmanaged(ClassifiedRow){};
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, node_type, label, account_id, depth, position
+            \\FROM ledger_classification_nodes
+            \\WHERE classification_id = ?
+            \\ORDER BY depth ASC, position ASC;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+
+        while (try stmt.step()) {
+            var row: ClassifiedRow = undefined;
+            row.node_id = stmt.columnInt64(0);
+            row.node_type_len = copyText(&row.node_type, stmt.columnText(1));
+            row.label_len = copyText(&row.label, stmt.columnText(2));
+            row.account_id = stmt.columnInt64(3);
+            row.depth = stmt.columnInt(4);
+            row.position = stmt.columnInt(5);
+
+            const bal = node_balances.get(row.node_id) orelse .{ 0, 0 };
+            row.debit_balance = bal[0];
+            row.credit_balance = bal[1];
+
+            try rows.append(allocator, row);
+        }
+    }
+
+    var classified_total_debits: i64 = 0;
+    var classified_total_credits: i64 = 0;
+    var all_total_debits: i64 = 0;
+    var all_total_credits: i64 = 0;
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT id FROM ledger_classification_nodes
+            \\WHERE classification_id = ? AND parent_id IS NULL;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+        while (try stmt.step()) {
+            const nid = stmt.columnInt64(0);
+            if (node_balances.get(nid)) |bal| {
+                classified_total_debits += bal[0];
+                classified_total_credits += bal[1];
+            }
+        }
+    }
+
+    {
+        var it = balance_map.iterator();
+        while (it.next()) |entry| {
+            all_total_debits += entry.value_ptr[0];
+            all_total_credits += entry.value_ptr[1];
+        }
+    }
+
+    result.rows = try rows.toOwnedSlice(allocator);
+    result.total_debits = classified_total_debits;
+    result.total_credits = classified_total_credits;
+    result.unclassified_debits = all_total_debits - classified_total_debits;
+    result.unclassified_credits = all_total_credits - classified_total_credits;
+    return result;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
@@ -795,7 +968,7 @@ test "create classification rejects invalid report_type" {
     const database = try setupTestDb();
     defer database.close();
 
-    const result = Classification.create(database, 1, "Bad", "cash_flow", "admin");
+    const result = Classification.create(database, 1, "Bad", "journal_register", "admin");
     try std.testing.expectError(error.InvalidInput, result);
 }
 
@@ -1763,4 +1936,129 @@ test "checkCycle: deep tree at 19 levels works, 21 levels rejected" {
     // Now move standalone under the deepest node — checkCycle must walk 21+ ancestors
     const result = ClassificationNode.move(database, standalone, extra_parent, 0, "admin");
     try std.testing.expectError(error.CircularReference, result);
+}
+
+// ── Cash flow statement tests ──────────────────────────────────
+
+test "cash_flow classification accepts all account types" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "SCF", "cash_flow", "admin");
+    const operating = try ClassificationNode.addGroup(database, cls_id, "Operating", null, 0, "admin");
+
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, operating, 0, "admin"); // asset
+    _ = try ClassificationNode.addAccount(database, cls_id, 5, operating, 1, "admin"); // liability
+    _ = try ClassificationNode.addAccount(database, cls_id, 6, operating, 2, "admin"); // equity
+    _ = try ClassificationNode.addAccount(database, cls_id, 7, operating, 3, "admin"); // revenue
+    _ = try ClassificationNode.addAccount(database, cls_id, 8, operating, 4, "admin"); // expense
+}
+
+test "cashFlowStatement returns period activity balances" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "SCF", "cash_flow", "admin");
+    const operating = try ClassificationNode.addGroup(database, cls_id, "Operating", null, 0, "admin");
+    const investing = try ClassificationNode.addGroup(database, cls_id, "Investing", null, 1, "admin");
+
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, operating, 0, "admin"); // Cash (asset, id=1)
+    _ = try ClassificationNode.addAccount(database, cls_id, 3, investing, 0, "admin"); // Equipment (asset, id=3)
+
+    const e1 = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-10", "2026-01-10", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e1, 1, 50_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e1, 2, 0, 50_000_000_000_00, "PHP", money.FX_RATE_SCALE, 6, null, null, "admin");
+    try entry_mod.Entry.post(database, e1, "admin");
+
+    const r = try cashFlowStatement(database, cls_id, "2026-01-01", "2026-01-31");
+    defer r.deinit();
+
+    try std.testing.expect(r.rows.len == 4);
+    // Operating group should have rolled-up Cash balance
+    try std.testing.expect(r.rows[0].debit_balance == 50_000_000_000_00);
+    try std.testing.expect(r.rows[0].credit_balance == 0);
+}
+
+test "cashFlowStatement rejects non-cash_flow classification" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const result = cashFlowStatement(database, cls_id, "2026-01-01", "2026-01-31");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "cashFlowStatement rejects nonexistent classification" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = cashFlowStatement(database, 999, "2026-01-01", "2026-01-31");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "cashFlowStatement with O/I/F groups rolls up correctly" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "SCF", "cash_flow", "admin");
+    const operating = try ClassificationNode.addGroup(database, cls_id, "Operating", null, 0, "admin");
+    const investing = try ClassificationNode.addGroup(database, cls_id, "Investing", null, 1, "admin");
+    const financing = try ClassificationNode.addGroup(database, cls_id, "Financing", null, 2, "admin");
+
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, operating, 0, "admin"); // Cash
+    _ = try ClassificationNode.addAccount(database, cls_id, 3, investing, 0, "admin"); // Equipment
+    _ = try ClassificationNode.addAccount(database, cls_id, 6, financing, 0, "admin"); // Capital
+
+    const e1 = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-05", "2026-01-05", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e1, 1, 100_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e1, 2, 0, 100_000_000_000_00, "PHP", money.FX_RATE_SCALE, 6, null, null, "admin");
+    try entry_mod.Entry.post(database, e1, "admin");
+
+    const e2 = try entry_mod.Entry.createDraft(database, 1, "JE-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e2, 1, 30_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e2, 2, 0, 30_000_000_000_00, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try entry_mod.Entry.post(database, e2, "admin");
+
+    const r = try cashFlowStatement(database, cls_id, "2026-01-01", "2026-01-31");
+    defer r.deinit();
+
+    try std.testing.expect(r.rows.len == 6);
+
+    // Operating group (row 0): Cash net = 100k debit - 30k credit = 70k debit
+    try std.testing.expect(r.rows[0].debit_balance == 70_000_000_000_00);
+    try std.testing.expect(r.rows[0].credit_balance == 0);
+    // Investing group (row 1): Equipment = 30k debit
+    try std.testing.expect(r.rows[1].debit_balance == 30_000_000_000_00);
+    try std.testing.expect(r.rows[1].credit_balance == 0);
+    // Financing group (row 2): Capital = 100k credit
+    try std.testing.expect(r.rows[2].credit_balance == 100_000_000_000_00);
+    try std.testing.expect(r.rows[2].debit_balance == 0);
+}
+
+test "cashFlowStatement filters by date range" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const cls_id = try Classification.create(database, 1, "SCF", "cash_flow", "admin");
+    const operating = try ClassificationNode.addGroup(database, cls_id, "Operating", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, operating, 0, "admin"); // Cash
+
+    const e1 = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-10", "2026-01-10", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e1, 1, 50_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e1, 2, 0, 50_000_000_000_00, "PHP", money.FX_RATE_SCALE, 6, null, null, "admin");
+    try entry_mod.Entry.post(database, e1, "admin");
+
+    const e2 = try entry_mod.Entry.createDraft(database, 1, "JE-002", "2026-02-10", "2026-02-10", null, 2, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e2, 1, 20_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e2, 2, 0, 20_000_000_000_00, "PHP", money.FX_RATE_SCALE, 6, null, null, "admin");
+    try entry_mod.Entry.post(database, e2, "admin");
+
+    // Only Feb activity
+    const r = try cashFlowStatement(database, cls_id, "2026-02-01", "2026-02-28");
+    defer r.deinit();
+
+    // Operating group should only show Feb's 20k
+    try std.testing.expect(r.rows[0].debit_balance == 20_000_000_000_00);
 }

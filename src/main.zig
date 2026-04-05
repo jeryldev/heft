@@ -402,6 +402,19 @@ pub export fn ledger_free_comparative_result(result: ?*heft.report.ComparativeRe
     r.deinit();
 }
 
+pub export fn ledger_equity_changes(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, fy_start_date: [*:0]const u8) ?*heft.report.EquityResult {
+    const h = handle orelse return null;
+    return heft.report.equityChanges(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), std.mem.span(fy_start_date)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_free_equity_result(result: ?*heft.report.EquityResult) void {
+    const r = result orelse return;
+    r.deinit();
+}
+
 pub export fn ledger_result_row_count(result: ?*heft.report.ReportResult) i32 {
     const r = result orelse return 0;
     return safeIntCast(r.rows.len);
@@ -472,6 +485,14 @@ pub export fn ledger_move_node(handle: ?*LedgerDB, node_id: i64, new_parent_id: 
 pub export fn ledger_classified_report(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
     const h = handle orelse return null;
     return heft.classification.classifiedReport(h.sqlite, classification_id, std.mem.span(as_of_date)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_cash_flow_statement(handle: ?*LedgerDB, classification_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
+    const h = handle orelse return null;
+    return heft.classification.cashFlowStatement(h.sqlite, classification_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| {
         setError(mapError(err));
         return null;
     };
@@ -1580,6 +1601,7 @@ test "C ABI: null handle returns null/error for all exports" {
     try std.testing.expect(!ledger_move_node(null, 1, 0, 0, "admin"));
     try std.testing.expect(!ledger_delete_classification(null, 1, "admin"));
     try std.testing.expect(ledger_classified_report(null, 1, "2026-01-31") == null);
+    try std.testing.expect(ledger_cash_flow_statement(null, 1, "2026-01-01", "2026-01-31") == null);
     try std.testing.expect(ledger_trial_balance_comparative(null, 1, "2026-01-31", "2025-12-31") == null);
     try std.testing.expect(ledger_income_statement_comparative(null, 1, "2026-01-01", "2026-01-31", "2025-01-01", "2025-12-31") == null);
     try std.testing.expect(ledger_balance_sheet_comparative(null, 1, "2026-01-31", "2025-12-31", "2026-01-01") == null);
@@ -1619,6 +1641,42 @@ test "C ABI: classified report through C boundary" {
         const result = ledger_classified_report(h, cls_id, "2026-01-31");
         try std.testing.expect(result != null);
         if (result) |r| ledger_free_classified_result(r);
+    }
+}
+
+test "C ABI: cash flow statement through C boundary" {
+    defer cleanupTestFile("test-cabi-cfs.ledger");
+    const handle = ledger_open("test-cabi-cfs.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-10", "2026-01-10", null, 1, null, "admin");
+        _ = ledger_add_line(h, entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        const cls_id = ledger_create_classification(h, book_id, "SCF", "cash_flow", "admin");
+        try std.testing.expect(cls_id > 0);
+
+        const operating = ledger_add_group_node(h, cls_id, "Operating", 0, 0, "admin");
+        try std.testing.expect(operating > 0);
+
+        _ = ledger_add_account_node(h, cls_id, 1, operating, 0, "admin");
+
+        const result = ledger_cash_flow_statement(h, cls_id, "2026-01-01", "2026-01-31");
+        try std.testing.expect(result != null);
+        if (result) |r| {
+            try std.testing.expect(r.rows.len == 2);
+            try std.testing.expect(r.rows[0].debit_balance == 10_000_000_000_00);
+            ledger_free_classified_result(r);
+        }
     }
 }
 
@@ -2073,4 +2131,14 @@ test "C ABI: null handle returns false for ledger_close_period" {
 
 test "C ABI: null handle returns -1 for ledger_revalue_forex_balances" {
     try std.testing.expectEqual(@as(i64, -1), ledger_revalue_forex_balances(null, 1, 1, "[{\"currency\":\"USD\",\"rate\":57000000000}]", "admin"));
+}
+
+// ── Sprint 16B: Equity changes C ABI tests ──
+
+test "C ABI: null handle returns null for ledger_equity_changes" {
+    try std.testing.expect(ledger_equity_changes(null, 1, "2026-01-01", "2026-01-31", "2026-01-01") == null);
+}
+
+test "C ABI: free null equity result is safe" {
+    ledger_free_equity_result(null);
 }
