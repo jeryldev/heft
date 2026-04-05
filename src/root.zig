@@ -14,6 +14,7 @@ pub const export_mod = @import("export.zig");
 pub const query_mod = @import("query.zig");
 pub const cache = @import("cache.zig");
 pub const close = @import("close.zig");
+pub const revaluation = @import("revaluation.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
 comptime {
@@ -33,5 +34,6 @@ comptime {
     _ = query_mod;
     _ = cache;
     _ = close;
+    _ = revaluation;
     _ = LedgerError;
 }

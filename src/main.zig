@@ -528,6 +528,27 @@ pub export fn ledger_close_period(handle: ?*LedgerDB, book_id: i64, period_id: i
     return true;
 }
 
+pub export fn ledger_revalue_forex_balances(handle: ?*LedgerDB, book_id: i64, period_id: i64, rates_json: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const json = std.mem.span(rates_json);
+
+    var rates_buf: [50]heft.revaluation.CurrencyRate = undefined;
+    const rate_count = heft.revaluation.parseRatesJson(json, &rates_buf) catch {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+
+    if (rate_count == 0) {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    }
+
+    return heft.revaluation.revalueForexBalances(h.sqlite, book_id, period_id, rates_buf[0..rate_count], std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+}
+
 // ── Error Reporting ────────────────────────────────────────────
 
 threadlocal var last_error_code: i32 = 0;
@@ -2046,4 +2067,10 @@ test "C ABI: system account designation happy path" {
 
 test "C ABI: null handle returns false for ledger_close_period" {
     try std.testing.expect(!ledger_close_period(null, 1, 1, "admin"));
+}
+
+// ── Sprint 15: FX revaluation C ABI tests ──
+
+test "C ABI: null handle returns -1 for ledger_revalue_forex_balances" {
+    try std.testing.expectEqual(@as(i64, -1), ledger_revalue_forex_balances(null, 1, 1, "[{\"currency\":\"USD\",\"rate\":57000000000}]", "admin"));
 }
