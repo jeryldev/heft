@@ -24,12 +24,12 @@ pub fn createAll(database: db.Database) !void {
     for (indexes) |idx| try database.exec(idx);
     for (views) |v| try database.exec(v);
     for (triggers) |trg| try database.exec(trg);
-    try database.exec("PRAGMA user_version = 3;");
+    try database.exec("PRAGMA user_version = 4;");
 
     try database.commit();
 }
 
-// ── Tables (11) ─────────────────────────────────────────────────
+// ── Tables (14) ─────────────────────────────────────────────────
 // Order matters — foreign keys reference earlier tables.
 
 const tables = [_][*:0]const u8{
@@ -282,7 +282,48 @@ const tables = [_][*:0]const u8{
     \\);
     ,
 
-    // ── 11. Audit Log ───────────────────────────────────────────
+    // ── 11. Dimensions ──────────────────────────────────────────
+    // Universal tagging infrastructure: tax codes, cost centers,
+    // departments, projects, segments. Any industry or jurisdiction
+    // can tag entry lines without engine changes.
+    \\CREATE TABLE IF NOT EXISTS ledger_dimensions (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  name TEXT NOT NULL
+    \\    CHECK (length(name) BETWEEN 1 AND 100),
+    \\  dimension_type TEXT NOT NULL
+    \\    CHECK (dimension_type IN ('tax_code', 'cost_center', 'department', 'project', 'segment', 'custom')),
+    \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+    \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  UNIQUE (book_id, name)
+    \\);
+    ,
+
+    // ── 12. Dimension Values ───────────────────────────────────
+    // Codes within a dimension (e.g. "VAT12" under tax_code).
+    \\CREATE TABLE IF NOT EXISTS ledger_dimension_values (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  code TEXT NOT NULL
+    \\    CHECK (length(code) BETWEEN 1 AND 50),
+    \\  label TEXT NOT NULL
+    \\    CHECK (length(label) BETWEEN 1 AND 255),
+    \\  dimension_id INTEGER NOT NULL REFERENCES ledger_dimensions(id),
+    \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  UNIQUE (dimension_id, code)
+    \\);
+    ,
+
+    // ── 13. Line Dimensions ────────────────────────────────────
+    // Many-to-many: entry lines tagged with dimension values.
+    \\CREATE TABLE IF NOT EXISTS ledger_line_dimensions (
+    \\  line_id INTEGER NOT NULL REFERENCES ledger_entry_lines(id),
+    \\  dimension_value_id INTEGER NOT NULL REFERENCES ledger_dimension_values(id),
+    \\  PRIMARY KEY (line_id, dimension_value_id)
+    \\);
+    ,
+
+    // ── 14. Audit Log ───────────────────────────────────────────
     // Append-only change log. Every mutation writes here in the same
     // SQLite transaction. Required for GoBD (Germany), UGB/BAO (Austria),
     // BIR (Philippines), ACRA (Singapore) compliance.
@@ -309,7 +350,7 @@ const tables = [_][*:0]const u8{
     ,
 };
 
-// ── Indexes (9) ─────────────────────────────────────────────────
+// ── Indexes (13) ────────────────────────────────────────────────
 
 const indexes = [_][*:0]const u8{
     // Primary query path: find posted entries by book and date
@@ -361,6 +402,10 @@ const indexes = [_][*:0]const u8{
     \\CREATE INDEX IF NOT EXISTS idx_entries_reverses
     \\  ON ledger_entries (reverses_entry_id)
     \\  WHERE reverses_entry_id IS NOT NULL;
+    ,
+    // Dimension queries: find lines by dimension value
+    \\CREATE INDEX IF NOT EXISTS idx_line_dimensions_value
+    \\  ON ledger_line_dimensions (dimension_value_id);
     ,
 };
 
@@ -425,7 +470,7 @@ const triggers = [_][*:0]const u8{
 
 // ── Tests ───────────────────────────────────────────────────────
 
-test "createAll creates 11 tables" {
+test "createAll creates 14 tables" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -435,10 +480,10 @@ test "createAll creates 11 tables" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 11), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 14), stmt.columnInt(0));
 }
 
-test "createAll creates 12 indexes" {
+test "createAll creates 13 indexes" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -448,7 +493,7 @@ test "createAll creates 12 indexes" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 13), stmt.columnInt(0));
 }
 
 test "createAll creates transaction history view" {
@@ -464,7 +509,7 @@ test "createAll creates transaction history view" {
     try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
 }
 
-test "createAll sets user_version to 3" {
+test "createAll sets user_version to 4" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -472,7 +517,7 @@ test "createAll sets user_version to 3" {
     var stmt = try database.prepare("PRAGMA user_version;");
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
 }
 
 test "createAll is idempotent" {

@@ -1,0 +1,740 @@
+const std = @import("std");
+const db = @import("db.zig");
+const audit = @import("audit.zig");
+const export_mod = @import("export.zig");
+
+pub const DimensionType = enum {
+    tax_code,
+    cost_center,
+    department,
+    project,
+    segment,
+    custom,
+
+    pub fn toString(self: DimensionType) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromString(s: []const u8) ?DimensionType {
+        const map = .{
+            .{ "tax_code", DimensionType.tax_code },
+            .{ "cost_center", DimensionType.cost_center },
+            .{ "department", DimensionType.department },
+            .{ "project", DimensionType.project },
+            .{ "segment", DimensionType.segment },
+            .{ "custom", DimensionType.custom },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
+};
+
+pub const Dimension = struct {
+    pub fn create(database: db.Database, book_id: i64, name: []const u8, dimension_type: DimensionType, performed_by: []const u8) !i64 {
+        if (name.len == 0) return error.InvalidInput;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
+        var stmt = try database.prepare(
+            \\INSERT INTO ledger_dimensions (name, dimension_type, book_id)
+            \\VALUES (?, ?, ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, name);
+        try stmt.bindText(2, dimension_type.toString());
+        try stmt.bindInt(3, book_id);
+        _ = stmt.step() catch return error.DuplicateNumber;
+
+        const id = database.lastInsertRowId();
+        try audit.log(database, "dimension", id, "create", null, null, null, performed_by, book_id);
+
+        try database.commit();
+        return id;
+    }
+
+    pub fn delete(database: db.Database, dimension_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT book_id FROM ledger_dimensions WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, dimension_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_dimension_values WHERE dimension_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, dimension_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_dimensions WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, dimension_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "dimension", dimension_id, "delete", null, null, null, performed_by, book_id);
+        try database.commit();
+    }
+};
+
+pub const DimensionValue = struct {
+    pub fn create(database: db.Database, dimension_id: i64, code: []const u8, label: []const u8, performed_by: []const u8) !i64 {
+        if (code.len == 0 or label.len == 0) return error.InvalidInput;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT d.book_id, b.status FROM ledger_dimensions d
+                \\JOIN ledger_books b ON b.id = d.book_id WHERE d.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, dimension_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+            if (std.mem.eql(u8, stmt.columnText(1).?, "archived")) return error.BookArchived;
+        }
+
+        var stmt = try database.prepare(
+            \\INSERT INTO ledger_dimension_values (code, label, dimension_id)
+            \\VALUES (?, ?, ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, code);
+        try stmt.bindText(2, label);
+        try stmt.bindInt(3, dimension_id);
+        _ = stmt.step() catch return error.DuplicateNumber;
+
+        const id = database.lastInsertRowId();
+        try audit.log(database, "dimension_value", id, "create", null, null, null, performed_by, book_id);
+
+        try database.commit();
+        return id;
+    }
+
+    pub fn delete(database: db.Database, value_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT d.book_id, b.status FROM ledger_dimension_values dv
+                \\JOIN ledger_dimensions d ON d.id = dv.dimension_id
+                \\JOIN ledger_books b ON b.id = d.book_id
+                \\WHERE dv.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, value_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+            if (std.mem.eql(u8, stmt.columnText(1).?, "archived")) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_line_dimensions WHERE dimension_value_id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, value_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("DELETE FROM ledger_dimension_values WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, value_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "dimension_value", value_id, "delete", null, null, null, performed_by, book_id);
+        try database.commit();
+    }
+};
+
+pub const LineDimension = struct {
+    pub fn assign(database: db.Database, line_id: i64, dimension_value_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT e.book_id FROM ledger_entry_lines el
+                \\JOIN ledger_entries e ON e.id = el.entry_id
+                \\WHERE el.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, line_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+        }
+
+        {
+            var stmt = try database.prepare(
+                \\SELECT d.book_id FROM ledger_dimension_values dv
+                \\JOIN ledger_dimensions d ON d.id = dv.dimension_id
+                \\WHERE dv.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, dimension_value_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (stmt.columnInt64(0) != book_id) return error.CrossBookViolation;
+        }
+
+        {
+            var stmt = try database.prepare(
+                \\INSERT OR IGNORE INTO ledger_line_dimensions (line_id, dimension_value_id)
+                \\VALUES (?, ?);
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, line_id);
+            try stmt.bindInt(2, dimension_value_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "line_dimension", line_id, "assign", "dimension_value_id", null, null, performed_by, book_id);
+        try database.commit();
+    }
+
+    pub fn remove(database: db.Database, line_id: i64, dimension_value_id: i64, performed_by: []const u8) !void {
+        try database.beginTransaction();
+        errdefer database.rollback();
+
+        var book_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\SELECT e.book_id FROM ledger_entry_lines el
+                \\JOIN ledger_entries e ON e.id = el.entry_id
+                \\WHERE el.id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, line_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+        }
+
+        {
+            var stmt = try database.prepare(
+                \\DELETE FROM ledger_line_dimensions WHERE line_id = ? AND dimension_value_id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, line_id);
+            try stmt.bindInt(2, dimension_value_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "line_dimension", line_id, "remove", "dimension_value_id", null, null, performed_by, book_id);
+        try database.commit();
+    }
+};
+
+pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, start_date: []const u8, end_date: []const u8, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var stmt = try database.prepare(
+        \\SELECT dv.code, dv.label,
+        \\  COALESCE(SUM(el.base_debit_amount), 0),
+        \\  COALESCE(SUM(el.base_credit_amount), 0)
+        \\FROM ledger_dimension_values dv
+        \\LEFT JOIN ledger_line_dimensions ld ON ld.dimension_value_id = dv.id
+        \\LEFT JOIN ledger_entry_lines el ON el.id = ld.line_id
+        \\LEFT JOIN ledger_entries e ON e.id = el.entry_id
+        \\  AND e.status = 'posted' AND e.book_id = ?
+        \\  AND e.posting_date >= ? AND e.posting_date <= ?
+        \\WHERE dv.dimension_id = ?
+        \\GROUP BY dv.id
+        \\ORDER BY dv.code ASC;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindText(2, start_date);
+    try stmt.bindText(3, end_date);
+    try stmt.bindInt(4, dimension_id);
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            const header = "code,label,total_debits,total_credits,net\n";
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            while (try stmt.step()) {
+                const code = stmt.columnText(0) orelse "";
+                const label = stmt.columnText(1) orelse "";
+                const debits = stmt.columnInt64(2);
+                const credits = stmt.columnInt64(3);
+                const net = debits - credits;
+
+                pos += try export_mod.csvField(buf[pos..], code);
+                if (pos >= buf.len) return error.BufferTooSmall;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], label);
+                const row = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{ debits, credits, net }) catch return error.BufferTooSmall;
+                pos += row.len;
+            }
+        },
+        .json => {
+            const open = "{\"rows\":[";
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + open.len], open);
+            pos += open.len;
+
+            var first = true;
+            while (try stmt.step()) {
+                const code = stmt.columnText(0) orelse "";
+                const label = stmt.columnText(1) orelse "";
+                const debits = stmt.columnInt64(2);
+                const credits = stmt.columnInt64(3);
+                const net = debits - credits;
+
+                if (!first) {
+                    if (pos >= buf.len) return error.BufferTooSmall;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
+                first = false;
+
+                const pre = std.fmt.bufPrint(buf[pos..], "{{\"code\":\"", .{}) catch return error.BufferTooSmall;
+                pos += pre.len;
+                pos += try export_mod.jsonString(buf[pos..], code);
+                const mid1 = std.fmt.bufPrint(buf[pos..], "\",\"label\":\"", .{}) catch return error.BufferTooSmall;
+                pos += mid1.len;
+                pos += try export_mod.jsonString(buf[pos..], label);
+                const rest = std.fmt.bufPrint(buf[pos..], "\",\"total_debits\":{d},\"total_credits\":{d},\"net\":{d}}}", .{ debits, credits, net }) catch return error.BufferTooSmall;
+                pos += rest.len;
+            }
+
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
+// ── Tests ───────────────────────────────────────────────────────
+
+const schema = @import("schema.zig");
+const entry_mod = @import("entry.zig");
+
+fn setupTestDb() !db.Database {
+    const database = try db.Database.open(":memory:");
+    try schema.createAll(database);
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    return database;
+}
+
+fn setupFullDb() !db.Database {
+    const database = try setupTestDb();
+    try database.exec(
+        \\INSERT INTO ledger_accounts (number, name, account_type, normal_balance, book_id)
+        \\VALUES ('1000', 'Cash', 'asset', 'debit', 1);
+    );
+    try database.exec(
+        \\INSERT INTO ledger_accounts (number, name, account_type, normal_balance, book_id)
+        \\VALUES ('4000', 'Revenue', 'revenue', 'credit', 1);
+    );
+    try database.exec(
+        \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, book_id)
+        \\VALUES ('Jan 2026', 1, 2026, '2026-01-01', '2026-01-31', 1);
+    );
+    return database;
+}
+
+test "create dimension and verify via SQL" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    try std.testing.expect(id > 0);
+
+    var stmt = try database.prepare("SELECT name, dimension_type, book_id FROM ledger_dimensions WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Tax Code", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("tax_code", stmt.columnText(1).?);
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(2));
+}
+
+test "create dimension value and verify via SQL" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    try std.testing.expect(val_id > 0);
+
+    var stmt = try database.prepare("SELECT code, label, dimension_id FROM ledger_dimension_values WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, val_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("VAT12", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("VAT 12%", stmt.columnText(1).?);
+    try std.testing.expectEqual(dim_id, stmt.columnInt64(2));
+}
+
+test "assign dimension value to posted entry line" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+
+    try LineDimension.assign(database, line1, val_id, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_line_dimensions WHERE line_id = ? AND dimension_value_id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, line1);
+    try stmt.bindInt(2, val_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "remove dimension assignment" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const dim_id = try Dimension.create(database, 1, "Cost Center", .cost_center, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "CC100", "Engineering", "admin");
+
+    try LineDimension.assign(database, line1, val_id, "admin");
+    try LineDimension.remove(database, line1, val_id, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_line_dimensions WHERE line_id = ? AND dimension_value_id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, line1);
+    try stmt.bindInt(2, val_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "duplicate dimension name in same book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const result = Dimension.create(database, 1, "Tax Code", .cost_center, "admin");
+    try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+test "duplicate value code in same dimension rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    _ = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    const result = DimensionValue.create(database, dim_id, "VAT12", "Different label", "admin");
+    try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+test "delete dimension with values fails" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    _ = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    const result = Dimension.delete(database, dim_id, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "delete value with line assignments fails" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    try LineDimension.assign(database, line1, val_id, "admin");
+
+    const result = DimensionValue.delete(database, val_id, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "cross-book dimension value assignment rejected" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Book 2', 'USD');");
+    const dim_id = try Dimension.create(database, 2, "Dept", .department, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "DEPT1", "Sales", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const result = LineDimension.assign(database, line1, val_id, "admin");
+    try std.testing.expectError(error.CrossBookViolation, result);
+}
+
+test "archived book rejected for dimension create" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try database.exec("UPDATE ledger_books SET status = 'archived' WHERE id = 1;");
+    const result = Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "archived book rejected for dimension delete" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    try database.exec("UPDATE ledger_books SET status = 'archived' WHERE id = 1;");
+    const result = Dimension.delete(database, dim_id, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "archived book rejected for dimension value create" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    try database.exec("UPDATE ledger_books SET status = 'archived' WHERE id = 1;");
+    const result = DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "DimensionType.fromString with invalid string returns null" {
+    try std.testing.expect(DimensionType.fromString("invalid") == null);
+    try std.testing.expect(DimensionType.fromString("") == null);
+    try std.testing.expect(DimensionType.fromString("TAX_CODE") == null);
+}
+
+test "DimensionType.fromString with valid strings" {
+    try std.testing.expect(DimensionType.fromString("tax_code") == .tax_code);
+    try std.testing.expect(DimensionType.fromString("cost_center") == .cost_center);
+    try std.testing.expect(DimensionType.fromString("department") == .department);
+    try std.testing.expect(DimensionType.fromString("project") == .project);
+    try std.testing.expect(DimensionType.fromString("segment") == .segment);
+    try std.testing.expect(DimensionType.fromString("custom") == .custom);
+}
+
+test "dimensionSummary CSV with posted lines" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    const line2 = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const v1 = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    const v2 = try DimensionValue.create(database, dim_id, "EXEMPT", "Tax Exempt", "admin");
+
+    try LineDimension.assign(database, line1, v1, "admin");
+    try LineDimension.assign(database, line2, v2, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try dimensionSummary(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .csv);
+    try std.testing.expect(result.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, result, "code,label,total_debits,total_credits,net") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "EXEMPT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "VAT12") != null);
+}
+
+test "dimensionSummary JSON with posted lines" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const v1 = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    try LineDimension.assign(database, line1, v1, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try dimensionSummary(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .json);
+    try std.testing.expect(result.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"code\":\"VAT12\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"total_debits\":") != null);
+}
+
+test "dimension create with empty name rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Dimension.create(database, 1, "", .tax_code, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "dimension value create with empty code rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const result = DimensionValue.create(database, dim_id, "", "Label", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "dimension value create with empty label rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const result = DimensionValue.create(database, dim_id, "CODE", "", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "delete dimension without values succeeds" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    try Dimension.delete(database, dim_id, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_dimensions WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, dim_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "delete dimension value without assignments succeeds" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    try DimensionValue.delete(database, val_id, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_dimension_values WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, val_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "dimension not found returns error" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Dimension.delete(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "dimension value not found returns error" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = DimensionValue.delete(database, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "dimension value create with non-existent dimension returns error" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = DimensionValue.create(database, 999, "VAT12", "VAT 12%", "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "assign to non-existent line returns error" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const dim_id = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "VAT12", "VAT 12%", "admin");
+    const result = LineDimension.assign(database, 999, val_id, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "assign non-existent dimension value returns error" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const result = LineDimension.assign(database, line1, 999, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "audit log created for dimension operations" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Dimension.create(database, 1, "Tax Code", .tax_code, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'dimension' AND action = 'create';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "all dimension types create successfully" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Dimension.create(database, 1, "Tax", .tax_code, "admin");
+    _ = try Dimension.create(database, 1, "CC", .cost_center, "admin");
+    _ = try Dimension.create(database, 1, "Dept", .department, "admin");
+    _ = try Dimension.create(database, 1, "Proj", .project, "admin");
+    _ = try Dimension.create(database, 1, "Seg", .segment, "admin");
+    _ = try Dimension.create(database, 1, "Other", .custom, "admin");
+
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_dimensions WHERE book_id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 6), stmt.columnInt(0));
+}
