@@ -1169,6 +1169,44 @@ pub export fn ledger_budget_vs_actual(handle: ?*LedgerDB, budget_id: i64, start_
     return safeIntCast(result.len);
 }
 
+// ── Sprint 19: Batch Operations ─────────────────────────────────
+
+pub export fn ledger_batch_post(handle: ?*LedgerDB, entry_ids_json: [*:0]const u8, performed_by: [*:0]const u8, out_succeeded: ?*u32, out_failed: ?*u32) bool {
+    const h = handle orelse return false;
+    const json = std.mem.span(entry_ids_json);
+    var ids_buf: [1000]i64 = undefined;
+    const count = heft.batch.parseIdArray(json, &ids_buf) catch {
+        setError(mapError(error.InvalidInput));
+        return false;
+    };
+    if (count == 0) {
+        setError(mapError(error.InvalidInput));
+        return false;
+    }
+    const result = heft.batch.batchPost(h.sqlite, ids_buf[0..count], std.mem.span(performed_by));
+    if (out_succeeded) |p| p.* = result.succeeded;
+    if (out_failed) |p| p.* = result.failed;
+    return result.failed == 0;
+}
+
+pub export fn ledger_batch_void(handle: ?*LedgerDB, entry_ids_json: [*:0]const u8, reason: [*:0]const u8, performed_by: [*:0]const u8, out_succeeded: ?*u32, out_failed: ?*u32) bool {
+    const h = handle orelse return false;
+    const json = std.mem.span(entry_ids_json);
+    var ids_buf: [1000]i64 = undefined;
+    const count = heft.batch.parseIdArray(json, &ids_buf) catch {
+        setError(mapError(error.InvalidInput));
+        return false;
+    };
+    if (count == 0) {
+        setError(mapError(error.InvalidInput));
+        return false;
+    }
+    const result = heft.batch.batchVoid(h.sqlite, ids_buf[0..count], std.mem.span(reason), std.mem.span(performed_by));
+    if (out_succeeded) |p| p.* = result.succeeded;
+    if (out_failed) |p| p.* = result.failed;
+    return result.failed == 0;
+}
+
 // ── Sprint 13A: Cache Recalculation ────────────────────────────
 
 pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 {
@@ -2334,4 +2372,50 @@ test "C ABI: null handle returns error for budget exports" {
     try std.testing.expectEqual(@as(i64, -1), ledger_set_budget_line(null, 1, 1, 1, 100, "admin"));
     var buf: [1024]u8 = undefined;
     try std.testing.expectEqual(@as(i32, -1), ledger_budget_vs_actual(null, 1, "2026-01-01", "2026-01-31", &buf, 1024, 1));
+}
+
+// ── Sprint 19: Batch C ABI tests ──
+
+test "C ABI: null handle returns false for batch exports" {
+    var succeeded: u32 = 99;
+    var failed: u32 = 99;
+    try std.testing.expect(!ledger_batch_post(null, "[1,2]", "admin", &succeeded, &failed));
+    try std.testing.expect(!ledger_batch_void(null, "[1,2]", "Error", "admin", &succeeded, &failed));
+}
+
+test "C ABI: batch post and void lifecycle" {
+    defer cleanupTestFile("test-cabi-batch.ledger");
+    const handle = ledger_open("test-cabi-batch.ledger") orelse unreachable;
+    defer ledger_close(handle);
+
+    _ = ledger_create_book(handle, "Test", "PHP", 2, "admin");
+    _ = ledger_create_account(handle, 1, "1000", "Cash", "asset", 0, "admin");
+    _ = ledger_create_account(handle, 1, "2000", "AP", "liability", 0, "admin");
+    _ = ledger_create_period(handle, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const e1 = ledger_create_draft(handle, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(handle, e1, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+    _ = ledger_add_line(handle, e1, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
+
+    const e2 = ledger_create_draft(handle, 1, "JE-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(handle, e2, 1, 2_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+    _ = ledger_add_line(handle, e2, 2, 0, 2_000_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
+
+    var succeeded: u32 = 0;
+    var failed: u32 = 0;
+
+    var ids_json_buf: [65]u8 = undefined;
+    const ids_json = std.fmt.bufPrint(ids_json_buf[0..64], "[{d},{d}]", .{ e1, e2 }) catch unreachable;
+    ids_json_buf[ids_json.len] = 0;
+    const ids_z: [*:0]const u8 = ids_json_buf[0..ids_json.len :0];
+
+    const post_ok = ledger_batch_post(handle, ids_z, "admin", &succeeded, &failed);
+    try std.testing.expect(post_ok);
+    try std.testing.expectEqual(@as(u32, 2), succeeded);
+    try std.testing.expectEqual(@as(u32, 0), failed);
+
+    const void_ok = ledger_batch_void(handle, ids_z, "Batch correction", "admin", &succeeded, &failed);
+    try std.testing.expect(void_ok);
+    try std.testing.expectEqual(@as(u32, 2), succeeded);
+    try std.testing.expectEqual(@as(u32, 0), failed);
 }
