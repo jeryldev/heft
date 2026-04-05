@@ -24,12 +24,15 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
     );
     defer update_stmt.finalize();
 
+    var stale_stmt = try database.prepare(
+        \\SELECT account_id FROM ledger_account_balances
+        \\WHERE book_id = ? AND period_id = ? AND is_stale = 1;
+    );
+    defer stale_stmt.finalize();
+
     for (period_ids) |period_id| {
-        var stale_stmt = try database.prepare(
-            \\SELECT account_id FROM ledger_account_balances
-            \\WHERE book_id = ? AND period_id = ? AND is_stale = 1;
-        );
-        defer stale_stmt.finalize();
+        stale_stmt.reset();
+        stale_stmt.clearBindings();
         try stale_stmt.bindInt(1, book_id);
         try stale_stmt.bindInt(2, period_id);
 
@@ -73,7 +76,7 @@ pub fn recalculateAllStale(database: db.Database, book_id: i64) !u32 {
     defer period_stmt.finalize();
     try period_stmt.bindInt(1, book_id);
 
-    var period_ids: [200]i64 = undefined;
+    var period_ids: [200]i64 = undefined; // Max 200 stale periods per recalculation. Silent truncation if exceeded.
     var period_count: usize = 0;
     while (try period_stmt.step()) {
         if (period_count >= period_ids.len) break;

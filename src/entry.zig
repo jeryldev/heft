@@ -66,7 +66,7 @@ pub const Entry = struct {
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
         // Verify period exists and posting_date falls within range
@@ -1078,6 +1078,8 @@ pub const Entry = struct {
         errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
+        var old_approval_buf: [16]u8 = undefined;
+        var old_approval_len: usize = 0;
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -1086,6 +1088,17 @@ pub const Entry = struct {
             if (!has_row) return error.NotFound;
             if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
             book_id = stmt.columnInt64(1);
+        }
+
+        {
+            var as_stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = ?;");
+            defer as_stmt.finalize();
+            try as_stmt.bindInt(1, entry_id);
+            _ = try as_stmt.step();
+            if (as_stmt.columnText(0)) |s| {
+                old_approval_len = @min(s.len, old_approval_buf.len);
+                @memcpy(old_approval_buf[0..old_approval_len], s[0..old_approval_len]);
+            }
         }
 
         {
@@ -1101,7 +1114,7 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "entry", entry_id, "approve", "approval_status", "none", "approved", performed_by, book_id);
+        try audit.log(database, "entry", entry_id, "approve", "approval_status", old_approval_buf[0..old_approval_len], "approved", performed_by, book_id);
         if (owns_txn) try database.commit();
     }
 
@@ -1112,6 +1125,8 @@ pub const Entry = struct {
         errdefer if (owns_txn) database.rollback();
 
         var book_id: i64 = 0;
+        var old_approval_buf: [16]u8 = undefined;
+        var old_approval_len: usize = 0;
         {
             var stmt = try database.prepare("SELECT status, book_id FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
@@ -1120,6 +1135,17 @@ pub const Entry = struct {
             if (!has_row) return error.NotFound;
             if (!std.mem.eql(u8, stmt.columnText(0).?, "draft")) return error.AlreadyPosted;
             book_id = stmt.columnInt64(1);
+        }
+
+        {
+            var as_stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = ?;");
+            defer as_stmt.finalize();
+            try as_stmt.bindInt(1, entry_id);
+            _ = try as_stmt.step();
+            if (as_stmt.columnText(0)) |s| {
+                old_approval_len = @min(s.len, old_approval_buf.len);
+                @memcpy(old_approval_buf[0..old_approval_len], s[0..old_approval_len]);
+            }
         }
 
         {
@@ -1133,7 +1159,7 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "entry", entry_id, "reject", "approval_status", "none", "rejected", performed_by, book_id);
+        try audit.log(database, "entry", entry_id, "reject", "approval_status", old_approval_buf[0..old_approval_len], "rejected", performed_by, book_id);
         if (owns_txn) try database.commit();
     }
 };
@@ -1222,7 +1248,7 @@ test "createDraft rejects archived book" {
     try book_mod.Book.archive(database, 1, "admin");
 
     const result = Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BookArchived, result);
 }
 
 test "createDraft rejects nonexistent period" {

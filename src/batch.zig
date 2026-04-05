@@ -84,7 +84,7 @@ pub fn parseIdArray(json: []const u8, buf: *[1000]i64) !usize {
             }
             if (negative) value = -value;
 
-            if (count >= 1000) return error.InvalidInput;
+            if (count >= buf.len) return error.InvalidInput;
             buf[count] = value;
             count += 1;
             start = i + 1;

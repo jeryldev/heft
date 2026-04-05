@@ -481,6 +481,11 @@ const tbm_sql: [*:0]const u8 =
 
 pub fn trialBalanceMovement(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, start_date, end_date });
     return buildReportResult(database, tbm_sql, .{ book_id, start_date, end_date });
 }
 

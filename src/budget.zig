@@ -3,6 +3,8 @@ const db = @import("db.zig");
 const audit = @import("audit.zig");
 const export_mod = @import("export.zig");
 
+/// Budget status lifecycle. Transition function not yet implemented.
+/// Will be exposed as ledger_transition_budget in a future sprint.
 pub const BudgetStatus = enum {
     draft,
     approved,
@@ -216,8 +218,8 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
                 const budget_amt = stmt.columnInt64(3);
                 const actual_debit = stmt.columnInt64(4);
                 const actual_credit = stmt.columnInt64(5);
-                const actual_net = actual_debit - actual_credit;
-                const variance = actual_net - budget_amt;
+                const actual_net = std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
+                const variance = std.math.sub(i64, actual_net, budget_amt) catch return error.AmountOverflow;
 
                 const row = std.fmt.bufPrint(buf[pos..], "{d},", .{acct_id}) catch return error.InvalidInput;
                 pos += row.len;
@@ -251,8 +253,8 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
                 const budget_amt = stmt.columnInt64(3);
                 const actual_debit = stmt.columnInt64(4);
                 const actual_credit = stmt.columnInt64(5);
-                const actual_net = actual_debit - actual_credit;
-                const variance = actual_net - budget_amt;
+                const actual_net = std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
+                const variance = std.math.sub(i64, actual_net, budget_amt) catch return error.AmountOverflow;
 
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"account_id\":{d},\"account_number\":\"", .{acct_id}) catch return error.InvalidInput;
                 pos += j1.len;

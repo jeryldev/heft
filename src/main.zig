@@ -19,7 +19,7 @@ pub const LedgerDB = struct {
 
 // ── Internal (Zig idioms) ───────────────────────────────────────
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION = heft.schema.SCHEMA_VERSION;
 
 fn internal_open(path: [*:0]const u8) !*LedgerDB {
     const db = try heft.db.Database.open(path);
@@ -574,6 +574,9 @@ pub export fn ledger_revalue_forex_balances(handle: ?*LedgerDB, book_id: i64, pe
 
 threadlocal var last_error_code: i32 = 0;
 
+/// Returns the error code from the most recent failed operation on this thread.
+/// Only meaningful after a function returns -1, false, or null.
+/// The error code is NOT cleared on success — check the return value first.
 pub export fn ledger_last_error() i32 {
     return last_error_code;
 }
@@ -617,7 +620,6 @@ fn mapError(err: anyerror) i32 {
         error.TooFewLines => 16,
         error.SchemaVersionMismatch => 17,
         error.OutOfMemory => 18,
-        error.DraftNotFound => 19,
         error.InvalidAmount => 20,
         error.BookArchived => 21,
         error.CrossBookViolation => 22,
@@ -2506,4 +2508,43 @@ test "C ABI: batch post and void lifecycle" {
     try std.testing.expect(void_ok);
     try std.testing.expectEqual(@as(u32, 2), succeeded);
     try std.testing.expectEqual(@as(u32, 0), failed);
+}
+
+test "C ABI: ledger_describe_schema null handle returns -1" {
+    var buf: [64]u8 = undefined;
+    const result = ledger_describe_schema(null, &buf, 64, 0);
+    try std.testing.expectEqual(@as(i32, -1), result);
+}
+
+test "C ABI: ledger_describe_schema happy path returns > 0" {
+    defer cleanupTestFile("test-describe-schema.ledger");
+    const handle = ledger_open("test-describe-schema.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    var buf: [65536]u8 = undefined;
+    const csv_len = ledger_describe_schema(handle, &buf, 65536, 0);
+    try std.testing.expect(csv_len > 0);
+
+    const json_len = ledger_describe_schema(handle, &buf, 65536, 1);
+    try std.testing.expect(json_len > 0);
+}
+
+test "C ABI: ledger_approve_entry null handle returns false" {
+    const result = ledger_approve_entry(null, 1, "admin");
+    try std.testing.expect(!result);
+}
+
+test "C ABI: ledger_reject_entry null handle returns false" {
+    const result = ledger_reject_entry(null, 1, "bad", "admin");
+    try std.testing.expect(!result);
+}
+
+test "C ABI: ledger_set_require_approval null handle returns false" {
+    const result = ledger_set_require_approval(null, 1, 1, "admin");
+    try std.testing.expect(!result);
+}
+
+test "C ABI: ledger_recalculate_balances null handle returns -1" {
+    const result = ledger_recalculate_balances(null, 1);
+    try std.testing.expectEqual(@as(i32, -1), result);
 }

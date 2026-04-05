@@ -1,8 +1,8 @@
 const std = @import("std");
 const db = @import("db.zig");
+const cache = @import("cache.zig");
 const entry_mod = @import("entry.zig");
 const period_mod = @import("period.zig");
-const audit = @import("audit.zig");
 const money = @import("money.zig");
 
 pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8) !void {
@@ -76,7 +76,9 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         if (stmt.columnInt(0) > 0) return error.InvalidInput;
     }
 
-    const MaxAccounts = 500;
+    _ = try cache.recalculateStale(database, book_id, &.{period_id});
+
+    const MaxAccounts = 500; // Maximum R/E accounts per period for closing. Silent truncation if exceeded.
     var account_ids: [MaxAccounts]i64 = undefined;
     var debit_sums: [MaxAccounts]i64 = undefined;
     var credit_sums: [MaxAccounts]i64 = undefined;
@@ -288,17 +290,6 @@ fn queryBalance(database: db.Database, account_id: i64, period_id: i64) !struct 
     const has_row = try stmt.step();
     if (!has_row) return .{ .debit_sum = 0, .credit_sum = 0 };
     return .{ .debit_sum = stmt.columnInt64(0), .credit_sum = stmt.columnInt64(1) };
-}
-
-fn queryPeriodStatus(database: db.Database, period_id: i64, out_buf: []u8) ![]u8 {
-    var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
-    defer stmt.finalize();
-    try stmt.bindInt(1, period_id);
-    _ = try stmt.step();
-    const status = stmt.columnText(0).?;
-    const len = @min(status.len, out_buf.len);
-    @memcpy(out_buf[0..len], status[0..len]);
-    return out_buf[0..len];
 }
 
 test "closePeriod: direct close with profit" {

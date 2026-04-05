@@ -14,6 +14,8 @@
 const std = @import("std");
 const db = @import("db.zig");
 
+pub const SCHEMA_VERSION: i32 = 4;
+
 /// Create all ledger tables, indexes, and views.
 /// Safe to call multiple times — uses IF NOT EXISTS.
 pub fn createAll(database: db.Database) !void {

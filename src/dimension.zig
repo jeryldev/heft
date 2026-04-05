@@ -228,7 +228,9 @@ pub const LineDimension = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "line_dimension", line_id, "assign", "dimension_value_id", null, null, performed_by, book_id);
+        var val_buf: [20]u8 = undefined;
+        const val_str = std.fmt.bufPrint(&val_buf, "{d}", .{dimension_value_id}) catch unreachable;
+        try audit.log(database, "line_dimension", line_id, "assign", "dimension_value_id", null, val_str, performed_by, book_id);
         if (owns_txn) try database.commit();
     }
 
@@ -260,7 +262,9 @@ pub const LineDimension = struct {
             _ = try stmt.step();
         }
 
-        try audit.log(database, "line_dimension", line_id, "remove", "dimension_value_id", null, null, performed_by, book_id);
+        var val_buf: [20]u8 = undefined;
+        const val_str = std.fmt.bufPrint(&val_buf, "{d}", .{dimension_value_id}) catch unreachable;
+        try audit.log(database, "line_dimension", line_id, "remove", "dimension_value_id", val_str, null, performed_by, book_id);
         if (owns_txn) try database.commit();
     }
 };

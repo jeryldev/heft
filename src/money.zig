@@ -21,6 +21,8 @@ pub fn computeBaseAmount(amount: i64, fx_rate: i64) !i64 {
     return @intCast(result);
 }
 
+/// Parse a decimal string into a scaled i64. Currently used by tests and language bindings.
+/// Not exposed via C ABI — language bindings call this directly through the Zig module.
 pub fn parseDecimal(input: []const u8, scale: i64) !i64 {
     if (input.len == 0) return error.InvalidAmount;
 

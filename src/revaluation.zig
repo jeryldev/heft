@@ -59,34 +59,37 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
     }
     const end_date = end_date_buf[0..end_date_len];
 
-    const MaxAdjustments = 500;
+    const MaxAdjustments = 500; // Maximum FX adjustments per revaluation. Silent truncation if exceeded.
     var adj_account_ids: [MaxAdjustments]i64 = undefined;
     var adj_amounts: [MaxAdjustments]i64 = undefined;
     var adj_count: usize = 0;
 
+    var rate_stmt = try database.prepare(
+        \\SELECT el.account_id,
+        \\  SUM(CASE WHEN el.debit_amount > 0 THEN el.debit_amount ELSE -el.credit_amount END) as net_txn_amount,
+        \\  SUM(el.base_debit_amount - el.base_credit_amount) as existing_base
+        \\FROM ledger_entry_lines el
+        \\JOIN ledger_entries e ON e.id = el.entry_id
+        \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
+        \\  AND el.transaction_currency = ?
+        \\GROUP BY el.account_id;
+    );
+    defer rate_stmt.finalize();
+
     for (rates) |rate| {
         if (std.mem.eql(u8, rate.currency, base_currency)) continue;
 
-        var stmt = try database.prepare(
-            \\SELECT el.account_id,
-            \\  SUM(CASE WHEN el.debit_amount > 0 THEN el.debit_amount ELSE -el.credit_amount END) as net_txn_amount,
-            \\  SUM(el.base_debit_amount - el.base_credit_amount) as existing_base
-            \\FROM ledger_entry_lines el
-            \\JOIN ledger_entries e ON e.id = el.entry_id
-            \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
-            \\  AND el.transaction_currency = ?
-            \\GROUP BY el.account_id;
-        );
-        defer stmt.finalize();
-        try stmt.bindInt(1, book_id);
-        try stmt.bindInt(2, period_id);
-        try stmt.bindText(3, rate.currency);
+        rate_stmt.reset();
+        rate_stmt.clearBindings();
+        try rate_stmt.bindInt(1, book_id);
+        try rate_stmt.bindInt(2, period_id);
+        try rate_stmt.bindText(3, rate.currency);
 
-        while (try stmt.step()) {
+        while (try rate_stmt.step()) {
             if (adj_count >= MaxAdjustments) break;
-            const account_id = stmt.columnInt64(0);
-            const net_txn_amount = stmt.columnInt64(1);
-            const existing_base = stmt.columnInt64(2);
+            const account_id = rate_stmt.columnInt64(0);
+            const net_txn_amount = rate_stmt.columnInt64(1);
+            const existing_base = rate_stmt.columnInt64(2);
 
             const revalued_base = try money.computeBaseAmount(net_txn_amount, rate.new_rate);
 

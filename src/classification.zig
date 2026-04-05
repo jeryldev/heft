@@ -301,6 +301,7 @@ pub const ClassificationNode = struct {
     pub fn move(database: db.Database, node_id: i64, new_parent_id: ?i64, new_position: i32, performed_by: []const u8) !void {
         var book_id: i64 = 0;
         var old_depth: i32 = 0;
+        var old_parent_id: ?i64 = null;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
@@ -342,12 +343,13 @@ pub const ClassificationNode = struct {
         const new_depth = try computeDepth(database, new_parent_id);
 
         {
-            var d_stmt = try database.prepare("SELECT depth FROM ledger_classification_nodes WHERE id = ?;");
+            var d_stmt = try database.prepare("SELECT depth, parent_id FROM ledger_classification_nodes WHERE id = ?;");
             defer d_stmt.finalize();
             try d_stmt.bindInt(1, node_id);
             const has_row = try d_stmt.step();
             if (!has_row) return error.NotFound;
             old_depth = d_stmt.columnInt(0);
+            if (d_stmt.columnText(1) != null) old_parent_id = d_stmt.columnInt64(1);
         }
 
         {
@@ -382,7 +384,18 @@ pub const ClassificationNode = struct {
             }
         }
 
-        try audit.log(database, "classification_node", node_id, "move", "parent_id", null, null, performed_by, book_id);
+        var old_parent_buf: [20]u8 = undefined;
+        var new_parent_buf: [20]u8 = undefined;
+        const old_parent_str: ?[]const u8 = if (old_parent_id) |opid|
+            std.fmt.bufPrint(&old_parent_buf, "{d}", .{opid}) catch unreachable
+        else
+            null;
+        const new_parent_str: ?[]const u8 = if (new_parent_id) |npid|
+            std.fmt.bufPrint(&new_parent_buf, "{d}", .{npid}) catch unreachable
+        else
+            null;
+
+        try audit.log(database, "classification_node", node_id, "move", "parent_id", old_parent_str, new_parent_str, performed_by, book_id);
 
         if (owns_txn) try database.commit();
     }
@@ -2061,4 +2074,89 @@ test "cashFlowStatement filters by date range" {
 
     // Operating group should only show Feb's 20k
     try std.testing.expect(r.rows[0].debit_balance == 20_000_000_000_00);
+}
+
+test "Classification.create on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "Classification.updateName on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = Classification.updateName(database, cls_id, "New Name", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "Classification.delete on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = Classification.delete(database, cls_id, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "ClassificationNode.move on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = ClassificationNode.move(database, group, null, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "ClassificationNode.updateLabel on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = ClassificationNode.updateLabel(database, group, "New Label", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "ClassificationNode.delete on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = ClassificationNode.delete(database, group, "admin");
+    try std.testing.expectError(error.BookArchived, result);
 }

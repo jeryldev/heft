@@ -15,7 +15,6 @@ pub const LedgerError = error{
     BufferTooSmall,
     CircularReference,
     CrossBookViolation,
-    DraftNotFound,
     DuplicateNumber,
     FxGainLossAccountRequired,
     IncomeSummaryAccountRequired,

@@ -414,6 +414,15 @@ pub const Book = struct {
             if (status == .archived) return error.BookArchived;
         }
 
+        var old_val: i32 = 0;
+        {
+            var rv_stmt = try database.prepare("SELECT require_approval FROM ledger_books WHERE id = ?;");
+            defer rv_stmt.finalize();
+            try rv_stmt.bindInt(1, book_id);
+            _ = try rv_stmt.step();
+            old_val = rv_stmt.columnInt(0);
+        }
+
         {
             var stmt = try database.prepare("UPDATE ledger_books SET require_approval = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
             defer stmt.finalize();
@@ -422,9 +431,11 @@ pub const Book = struct {
             _ = try stmt.step();
         }
 
-        const old_val = if (require) "0" else "1";
-        const new_val = if (require) "1" else "0";
-        try audit.log(database, "book", book_id, "update", "require_approval", old_val, new_val, performed_by, book_id);
+        var old_buf: [2]u8 = undefined;
+        var new_buf: [2]u8 = undefined;
+        const old_str = std.fmt.bufPrint(&old_buf, "{d}", .{old_val}) catch unreachable;
+        const new_str = std.fmt.bufPrint(&new_buf, "{d}", .{@as(i32, if (require) 1 else 0)}) catch unreachable;
+        try audit.log(database, "book", book_id, "update", "require_approval", old_str, new_str, performed_by, book_id);
 
         if (owns_txn) try database.commit();
     }
