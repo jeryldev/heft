@@ -15,17 +15,17 @@ pub const Classification = struct {
     pub fn create(database: db.Database, book_id: i64, name: []const u8, report_type: []const u8, performed_by: []const u8) !i64 {
         if (!isValidType(report_type)) return error.InvalidInput;
 
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
-            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.InvalidInput;
+            if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         var stmt = try database.prepare("INSERT INTO ledger_classifications (name, report_type, book_id) VALUES (?, ?, ?);");
         defer stmt.finalize();
@@ -47,6 +47,10 @@ pub const Classification = struct {
         var old_name_buf: [256]u8 = undefined;
         var old_name_len: usize = 0;
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT name, book_id FROM ledger_classifications WHERE id = ?;");
             defer stmt.finalize();
@@ -59,8 +63,14 @@ pub const Classification = struct {
             book_id = stmt.columnInt64(1);
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
 
         {
             var stmt = try database.prepare("UPDATE ledger_classifications SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -77,6 +87,10 @@ pub const Classification = struct {
 
     pub fn delete(database: db.Database, classification_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare("SELECT book_id FROM ledger_classifications WHERE id = ?;");
             defer stmt.finalize();
@@ -86,8 +100,14 @@ pub const Classification = struct {
             book_id = stmt.columnInt64(0);
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
 
         {
             var stmt = try database.prepare("DELETE FROM ledger_classification_nodes WHERE classification_id = ?;");
@@ -147,7 +167,10 @@ pub const ClassificationNode = struct {
             const has_row = try stmt.step();
             if (!has_row) return;
             const parent_text = stmt.columnText(0);
-            if (parent_text == null) { stmt.reset(); return; }
+            if (parent_text == null) {
+                stmt.reset();
+                return;
+            }
             current = stmt.columnInt64(0);
             stmt.reset();
             stmt.clearBindings();
@@ -191,11 +214,21 @@ pub const ClassificationNode = struct {
     }
 
     pub fn addGroup(database: db.Database, classification_id: i64, label: []const u8, parent_id: ?i64, position: i32, performed_by: []const u8) !i64 {
-        const book_id = try getBookId(database, classification_id);
-        const depth = try computeDepth(database, parent_id);
-
         try database.beginTransaction();
         errdefer database.rollback();
+
+        const book_id = try getBookId(database, classification_id);
+
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
+        const depth = try computeDepth(database, parent_id);
 
         var stmt = try database.prepare("INSERT INTO ledger_classification_nodes (node_type, label, parent_id, position, depth, classification_id) VALUES ('group', ?, ?, ?, ?, ?);");
         defer stmt.finalize();
@@ -214,8 +247,11 @@ pub const ClassificationNode = struct {
     }
 
     pub fn addAccount(database: db.Database, classification_id: i64, account_id: i64, parent_id: ?i64, position: i32, performed_by: []const u8) !i64 {
-        // Single query: get book_id + check duplicate in one pass
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT c.book_id,
@@ -232,13 +268,18 @@ pub const ClassificationNode = struct {
             if (stmt.columnInt(1) > 0) return error.DuplicateNumber;
         }
 
-        // Validate account type matches report_type (1 query)
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
         try validateAccountType(database, classification_id, account_id);
 
         const depth = try computeDepth(database, parent_id);
-
-        try database.beginTransaction();
-        errdefer database.rollback();
 
         var stmt = try database.prepare("INSERT INTO ledger_classification_nodes (node_type, label, parent_id, account_id, position, depth, classification_id) VALUES ('account', NULL, ?, ?, ?, ?, ?);");
         defer stmt.finalize();
@@ -257,10 +298,14 @@ pub const ClassificationNode = struct {
     }
 
     pub fn move(database: db.Database, node_id: i64, new_parent_id: ?i64, new_position: i32, performed_by: []const u8) !void {
-        // Check cycle
+        var book_id: i64 = 0;
+        var old_depth: i32 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         try checkCycle(database, node_id, new_parent_id);
 
-        var book_id: i64 = 0;
         {
             var stmt = try database.prepare("SELECT c.book_id FROM ledger_classification_nodes n JOIN ledger_classifications c ON c.id = n.classification_id WHERE n.id = ?;");
             defer stmt.finalize();
@@ -270,10 +315,39 @@ pub const ClassificationNode = struct {
             book_id = stmt.columnInt64(0);
         }
 
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
+
+        if (new_parent_id) |pid| {
+            var cls_stmt = try database.prepare(
+                \\SELECT n1.classification_id, n2.classification_id
+                \\FROM ledger_classification_nodes n1, ledger_classification_nodes n2
+                \\WHERE n1.id = ? AND n2.id = ?;
+            );
+            defer cls_stmt.finalize();
+            try cls_stmt.bindInt(1, node_id);
+            try cls_stmt.bindInt(2, pid);
+            const has_row = try cls_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (cls_stmt.columnInt64(0) != cls_stmt.columnInt64(1)) return error.CrossBookViolation;
+        }
+
         const new_depth = try computeDepth(database, new_parent_id);
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        {
+            var d_stmt = try database.prepare("SELECT depth FROM ledger_classification_nodes WHERE id = ?;");
+            defer d_stmt.finalize();
+            try d_stmt.bindInt(1, node_id);
+            const has_row = try d_stmt.step();
+            if (!has_row) return error.NotFound;
+            old_depth = d_stmt.columnInt(0);
+        }
 
         {
             var stmt = try database.prepare("UPDATE ledger_classification_nodes SET parent_id = ?, position = ?, depth = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -283,6 +357,28 @@ pub const ClassificationNode = struct {
             try stmt.bindInt(3, @intCast(new_depth));
             try stmt.bindInt(4, node_id);
             _ = try stmt.step();
+        }
+
+        {
+            const depth_diff = @as(i32, @intCast(new_depth)) - old_depth;
+            if (depth_diff != 0) {
+                var desc_stmt = try database.prepare(
+                    \\UPDATE ledger_classification_nodes SET depth = depth + ?
+                    \\WHERE id IN (
+                    \\  WITH RECURSIVE descendants(id) AS (
+                    \\    SELECT id FROM ledger_classification_nodes WHERE parent_id = ?
+                    \\    UNION ALL
+                    \\    SELECT n.id FROM ledger_classification_nodes n
+                    \\    JOIN descendants d ON n.parent_id = d.id
+                    \\  )
+                    \\  SELECT id FROM descendants
+                    \\);
+                );
+                defer desc_stmt.finalize();
+                try desc_stmt.bindInt(1, @intCast(depth_diff));
+                try desc_stmt.bindInt(2, node_id);
+                _ = try desc_stmt.step();
+            }
         }
 
         try audit.log(database, "classification_node", node_id, "move", "parent_id", null, null, performed_by, book_id);
@@ -296,6 +392,10 @@ pub const ClassificationNode = struct {
         var old_label_buf: [256]u8 = undefined;
         var old_label_len: usize = 0;
         var book_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT n.label, c.book_id, n.node_type FROM ledger_classification_nodes n
@@ -313,8 +413,14 @@ pub const ClassificationNode = struct {
             if (std.mem.eql(u8, node_type, "account")) return error.InvalidInput;
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
 
         {
             var stmt = try database.prepare("UPDATE ledger_classification_nodes SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -332,6 +438,10 @@ pub const ClassificationNode = struct {
     pub fn delete(database: db.Database, node_id: i64, performed_by: []const u8) !void {
         var book_id: i64 = 0;
         var classification_id: i64 = 0;
+
+        try database.beginTransaction();
+        errdefer database.rollback();
+
         {
             var stmt = try database.prepare(
                 \\SELECT n.classification_id, c.book_id FROM ledger_classification_nodes n
@@ -345,10 +455,33 @@ pub const ClassificationNode = struct {
             book_id = stmt.columnInt64(1);
         }
 
-        try database.beginTransaction();
-        errdefer database.rollback();
+        {
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            if (std.mem.eql(u8, bs_stmt.columnText(0).?, "archived")) return error.BookArchived;
+        }
 
-        // Delete node and all descendants recursively
+        {
+            var desc_stmt = try database.prepare(
+                \\WITH RECURSIVE descendants(id) AS (
+                \\  SELECT id FROM ledger_classification_nodes WHERE parent_id = ?
+                \\  UNION ALL
+                \\  SELECT n.id FROM ledger_classification_nodes n
+                \\  JOIN descendants d ON n.parent_id = d.id
+                \\)
+                \\SELECT id FROM descendants;
+            );
+            defer desc_stmt.finalize();
+            try desc_stmt.bindInt(1, node_id);
+            while (try desc_stmt.step()) {
+                const desc_id = desc_stmt.columnInt64(0);
+                try audit.log(database, "classification_node", desc_id, "delete", null, null, null, performed_by, book_id);
+            }
+        }
+
         {
             var stmt = try database.prepare(
                 \\WITH RECURSIVE descendants(id) AS (
@@ -465,10 +598,16 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
             var credit_bal: i64 = 0;
             if (std.mem.eql(u8, normal, "debit")) {
                 debit_bal = debit_sum - credit_sum;
-                if (debit_bal < 0) { credit_bal = -debit_bal; debit_bal = 0; }
+                if (debit_bal < 0) {
+                    credit_bal = -debit_bal;
+                    debit_bal = 0;
+                }
             } else {
                 credit_bal = credit_sum - debit_sum;
-                if (credit_bal < 0) { debit_bal = -credit_bal; credit_bal = 0; }
+                if (credit_bal < 0) {
+                    debit_bal = -credit_bal;
+                    credit_bal = 0;
+                }
             }
             try balance_map.put(allocator, acct_id, .{ debit_bal, credit_bal });
         }
@@ -1453,4 +1592,175 @@ test "node delete rejects nonexistent node" {
 
     const result = ClassificationNode.delete(database, 999, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "move: cross-classification reparent rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls1 = try Classification.create(database, 1, "IFRS BS", "balance_sheet", "admin");
+    const cls2 = try Classification.create(database, 1, "GAAP BS", "balance_sheet", "admin");
+    const g1 = try ClassificationNode.addGroup(database, cls1, "Assets", null, 0, "admin");
+    const g2 = try ClassificationNode.addGroup(database, cls2, "Assets", null, 0, "admin");
+
+    // Move g1 (from cls1) under g2 (from cls2) — should reject
+    const result = ClassificationNode.move(database, g1, g2, 0, "admin");
+    try std.testing.expectError(error.CrossBookViolation, result);
+}
+
+test "move: children depths updated after reparent" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    // A(depth=0) -> B(depth=1) -> C(depth=2)
+    const a = try ClassificationNode.addGroup(database, cls_id, "A", null, 0, "admin");
+    const b = try ClassificationNode.addGroup(database, cls_id, "B", a, 0, "admin");
+    const c = try ClassificationNode.addGroup(database, cls_id, "C", b, 0, "admin");
+
+    // Create D(depth=0) -> E(depth=1) -> F(depth=2)
+    const d = try ClassificationNode.addGroup(database, cls_id, "D", null, 1, "admin");
+    const e = try ClassificationNode.addGroup(database, cls_id, "E", d, 0, "admin");
+    _ = try ClassificationNode.addGroup(database, cls_id, "F", e, 0, "admin");
+
+    // Move B under F (depth=2) — B becomes depth=3, C becomes depth=4
+    try ClassificationNode.move(database, b, 6, 0, "admin");
+
+    // Verify B is now depth=3
+    {
+        var stmt = try database.prepare("SELECT depth FROM ledger_classification_nodes WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, b);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+    }
+    // Verify C is now depth=4
+    {
+        var stmt = try database.prepare("SELECT depth FROM ledger_classification_nodes WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, c);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+    }
+}
+
+test "move: self-parent rejected as circular reference" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const node = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+
+    const result = ClassificationNode.move(database, node, node, 0, "admin");
+    try std.testing.expectError(error.CircularReference, result);
+}
+
+test "addGroup on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+
+    // Archive the book
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "addAccount on archived book rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+
+    // Archive the book
+    try period_mod.Period.transition(database, 1, .soft_closed, "admin");
+    try period_mod.Period.transition(database, 1, .closed, "admin");
+    try book_mod.Book.archive(database, 1, "admin");
+
+    const result = ClassificationNode.addAccount(database, cls_id, 1, group, 0, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "delete node cascades audit for descendants" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+    const parent = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addGroup(database, cls_id, "Current", parent, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, parent, 1, "admin");
+
+    // Count audit entries before delete
+    var before_count: i32 = 0;
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'classification_node' AND action = 'delete';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        before_count = stmt.columnInt(0);
+    }
+
+    try ClassificationNode.delete(database, parent, "admin");
+
+    // After delete: should have audit entries for both descendants plus the parent itself
+    var after_count: i32 = 0;
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'classification_node' AND action = 'delete';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        after_count = stmt.columnInt(0);
+    }
+
+    // 2 descendants + 1 parent = 3 delete audit entries
+    try std.testing.expectEqual(@as(i32, 3), after_count - before_count);
+}
+
+test "checkCycle: deep tree at 19 levels works, 21 levels rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const cls_id = try Classification.create(database, 1, "BS", "balance_sheet", "admin");
+
+    // Build a chain of 19 levels (depth 0..18)
+    var prev_id: i64 = 0;
+    var parent_opt: ?i64 = null;
+    var i: usize = 0;
+    while (i < 19) : (i += 1) {
+        prev_id = try ClassificationNode.addGroup(database, cls_id, "Level", parent_opt, 0, "admin");
+        parent_opt = prev_id;
+    }
+
+    // Verify we can still add at depth 19 (under 20 limit)
+    const deep_node = try ClassificationNode.addGroup(database, cls_id, "Level19", prev_id, 0, "admin");
+    try std.testing.expect(deep_node > 0);
+
+    // Build another branch to depth 20+ and verify cycle check catches it
+    // Create a standalone node and try to move it to create a 21-deep chain
+    // The checkCycle walks up to max_depth (20) iterations, so a chain of 21 triggers CircularReference
+    const standalone = try ClassificationNode.addGroup(database, cls_id, "Standalone", null, 1, "admin");
+
+    // Move standalone under deep_node (depth 19) — standalone would be depth 20
+    // computeDepth returns parent_depth + 1 = 20, which is fine for addGroup
+    // But checkCycle traverses ancestors; a chain of 20+ triggers the safety limit
+    // Build a chain longer than max_depth and verify checkCycle rejects
+    var extra_parent: i64 = deep_node;
+    var j: usize = 0;
+    while (j < 2) : (j += 1) {
+        // Insert directly to bypass depth checks for testing
+        var stmt = try database.prepare("INSERT INTO ledger_classification_nodes (node_type, label, parent_id, position, depth, classification_id) VALUES ('group', 'Extra', ?, 0, ?, ?);");
+        defer stmt.finalize();
+        try stmt.bindInt(1, extra_parent);
+        try stmt.bindInt(2, @as(i64, @intCast(20 + j)));
+        try stmt.bindInt(3, cls_id);
+        _ = try stmt.step();
+        extra_parent = database.lastInsertRowId();
+    }
+
+    // Now move standalone under the deepest node — checkCycle must walk 21+ ancestors
+    const result = ClassificationNode.move(database, standalone, extra_parent, 0, "admin");
+    try std.testing.expectError(error.CircularReference, result);
 }
