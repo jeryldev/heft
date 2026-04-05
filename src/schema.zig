@@ -26,7 +26,8 @@ pub fn createAll(database: db.Database) !void {
     for (indexes) |idx| try database.exec(idx);
     for (views) |v| try database.exec(v);
     for (triggers) |trg| try database.exec(trg);
-    try database.exec("PRAGMA user_version = 4;");
+    const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
+    try database.exec(version_pragma);
 
     if (owns_txn) try database.commit();
 }

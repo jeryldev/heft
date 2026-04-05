@@ -592,11 +592,12 @@ fn setError(code: i32) void {
 // 8 = invalid transition, 9 = account inactive, 10 = missing counterparty,
 // 11 = invalid counterparty, 12 = amount overflow, 13 = void reason required,
 // 14 = reverse reason required, 15 = circular reference, 16 = too few lines,
-// 17 = schema version mismatch, 18 = out of memory, 19 = draft not found,
+// 17 = schema version mismatch, 18 = out of memory,
 // 20 = invalid amount, 21 = book archived, 22 = cross-book violation,
 // 23 = invalid fx rate, 24 = invalid decimal places, 25 = buffer too small,
 // 26 = retained earnings account required, 27 = fx gain/loss account required,
 // 28 = opening balance account required, 29 = income summary account required,
+// 30 = approval required, 31 = too many accounts,
 // 90-94 = sqlite errors (open, exec, prepare, step, bind),
 // 99 = unknown
 
@@ -1305,7 +1306,7 @@ pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 
         setError(mapError(err));
         return -1;
     };
-    return @intCast(count);
+    return safeIntCast(count);
 }
 
 // ── Tests ───────────────────────────────────────────────────────

@@ -110,6 +110,18 @@ pub const Classification = struct {
         }
 
         {
+            var node_stmt = try database.prepare("SELECT id FROM ledger_classification_nodes WHERE classification_id = ?;");
+            defer node_stmt.finalize();
+            try node_stmt.bindInt(1, classification_id);
+            var audit_stmt = try database.prepare(audit.insert_sql);
+            defer audit_stmt.finalize();
+            while (try node_stmt.step()) {
+                const node_id = node_stmt.columnInt64(0);
+                try audit.logWithStmt(&audit_stmt, "classification_node", node_id, "delete", null, null, null, performed_by, book_id);
+            }
+        }
+
+        {
             var stmt = try database.prepare("DELETE FROM ledger_classification_nodes WHERE classification_id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, classification_id);
