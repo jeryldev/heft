@@ -413,7 +413,7 @@ pub fn exportChartOfAccounts(database: db_mod.Database, book_id: i64, buf: []u8,
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-            if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.InvalidInput;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -718,7 +718,7 @@ pub fn exportAuditTrail(database: db_mod.Database, book_id: i64, start_date: []c
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-            if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.InvalidInput;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -842,7 +842,7 @@ pub fn exportPeriods(database: db_mod.Database, book_id: i64, buf: []u8, format:
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-            if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.InvalidInput;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -959,7 +959,7 @@ pub fn exportSubledger(database: db_mod.Database, book_id: i64, buf: []u8, forma
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-            if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.InvalidInput;
                     buf[pos] = ',';
                     pos += 1;
                 }

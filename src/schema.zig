@@ -24,7 +24,7 @@ pub fn createAll(database: db.Database) !void {
     for (indexes) |idx| try database.exec(idx);
     for (views) |v| try database.exec(v);
     for (triggers) |trg| try database.exec(trg);
-    try database.exec("PRAGMA user_version = 1;");
+    try database.exec("PRAGMA user_version = 3;");
 
     try database.commit();
 }
@@ -49,6 +49,11 @@ const tables = [_][*:0]const u8{
     \\  status TEXT NOT NULL DEFAULT 'active'
     \\    CHECK (status IN ('active', 'archived')),
     \\  rounding_account_id INTEGER,
+    \\  fx_gain_loss_account_id INTEGER,
+    \\  retained_earnings_account_id INTEGER,
+    \\  income_summary_account_id INTEGER,
+    \\  opening_balance_account_id INTEGER,
+    \\  suspense_account_id INTEGER,
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     \\);
@@ -92,9 +97,9 @@ const tables = [_][*:0]const u8{
     \\    CHECK (period_number BETWEEN 1 AND 16),
     \\  year INTEGER NOT NULL,
     \\  start_date TEXT NOT NULL
-    \\    CHECK (length(start_date) = 10),
+    \\    CHECK (length(start_date) = 10 AND date(start_date) IS NOT NULL),
     \\  end_date TEXT NOT NULL
-    \\    CHECK (length(end_date) = 10),
+    \\    CHECK (length(end_date) = 10 AND date(end_date) IS NOT NULL),
     \\  period_type TEXT NOT NULL DEFAULT 'regular'
     \\    CHECK (period_type IN ('regular', 'adjustment')),
     \\  status TEXT NOT NULL DEFAULT 'open'
@@ -139,7 +144,8 @@ const tables = [_][*:0]const u8{
     \\  depth INTEGER NOT NULL DEFAULT 0,
     \\  classification_id INTEGER NOT NULL REFERENCES ledger_classifications(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  CHECK ((node_type = 'group' AND label IS NOT NULL) OR (node_type = 'account' AND account_id IS NOT NULL))
     \\);
     ,
 
@@ -161,7 +167,8 @@ const tables = [_][*:0]const u8{
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    \\  UNIQUE (book_id, type, group_number)
+    \\  UNIQUE (book_id, type, group_number),
+    \\  CHECK (number_range_start IS NULL OR number_range_end IS NULL OR number_range_start <= number_range_end)
     \\);
     ,
 
@@ -193,9 +200,9 @@ const tables = [_][*:0]const u8{
     \\  document_number TEXT NOT NULL
     \\    CHECK (length(document_number) BETWEEN 1 AND 100),
     \\  transaction_date TEXT NOT NULL
-    \\    CHECK (length(transaction_date) = 10),
+    \\    CHECK (length(transaction_date) = 10 AND date(transaction_date) IS NOT NULL),
     \\  posting_date TEXT NOT NULL
-    \\    CHECK (length(posting_date) = 10),
+    \\    CHECK (length(posting_date) = 10 AND date(posting_date) IS NOT NULL),
     \\  description TEXT
     \\    CHECK (description IS NULL OR length(description) <= 1000),
     \\  status TEXT NOT NULL DEFAULT 'draft'
@@ -214,7 +221,8 @@ const tables = [_][*:0]const u8{
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    \\  UNIQUE (book_id, document_number)
+    \\  UNIQUE (book_id, document_number),
+    \\  CHECK (reverses_entry_id IS NULL OR reverses_entry_id != id)
     \\);
     ,
 
@@ -341,6 +349,19 @@ const indexes = [_][*:0]const u8{
     \\CREATE INDEX IF NOT EXISTS idx_audit_log_book_date
     \\  ON ledger_audit_log (book_id, performed_at);
     ,
+    // Composite: entries by book, period, and status (report queries)
+    \\CREATE INDEX IF NOT EXISTS idx_entries_book_period
+    \\  ON ledger_entries (book_id, period_id, status);
+    ,
+    // Balance cache: lookup by period and account
+    \\CREATE INDEX IF NOT EXISTS idx_balances_period
+    \\  ON ledger_account_balances (period_id, account_id);
+    ,
+    // Partial: find reversal entries
+    \\CREATE INDEX IF NOT EXISTS idx_entries_reverses
+    \\  ON ledger_entries (reverses_entry_id)
+    \\  WHERE reverses_entry_id IS NOT NULL;
+    ,
 };
 
 // ── Views (1) ───────────────────────────────────────────────────
@@ -417,7 +438,7 @@ test "createAll creates 11 tables" {
     try std.testing.expectEqual(@as(i32, 11), stmt.columnInt(0));
 }
 
-test "createAll creates 9 indexes" {
+test "createAll creates 12 indexes" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -427,7 +448,7 @@ test "createAll creates 9 indexes" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 9), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 12), stmt.columnInt(0));
 }
 
 test "createAll creates transaction history view" {
@@ -443,7 +464,7 @@ test "createAll creates transaction history view" {
     try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
 }
 
-test "createAll sets user_version to 1" {
+test "createAll sets user_version to 3" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -451,7 +472,7 @@ test "createAll sets user_version to 1" {
     var stmt = try database.prepare("PRAGMA user_version;");
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
 }
 
 test "createAll is idempotent" {
