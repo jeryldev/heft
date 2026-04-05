@@ -16,6 +16,7 @@ pub const cache = @import("cache.zig");
 pub const close = @import("close.zig");
 pub const revaluation = @import("revaluation.zig");
 pub const dimension = @import("dimension.zig");
+pub const budget = @import("budget.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
 comptime {
@@ -37,5 +38,6 @@ comptime {
     _ = close;
     _ = revaluation;
     _ = dimension;
+    _ = budget;
     _ = LedgerError;
 }
