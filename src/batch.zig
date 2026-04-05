@@ -227,3 +227,38 @@ test "parseIdArray overflow returns error" {
     const result = parseIdArray("[99999999999999999999]", &buf);
     try std.testing.expectError(error.InvalidInput, result);
 }
+
+test "batchVoid empty slice returns succeeded=0 failed=0" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const ids = [_]i64{};
+    const result = batchVoid(database, &ids, "Correction", "admin");
+
+    try std.testing.expectEqual(@as(u32, 0), result.succeeded);
+    try std.testing.expectEqual(@as(u32, 0), result.failed);
+}
+
+test "batchVoid success has first_error_index null" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const e1 = try createPostableEntry(database, "JE-001");
+    try entry_mod.Entry.post(database, e1, "admin");
+
+    const ids = [_]i64{e1};
+    const result = batchVoid(database, &ids, "Correction", "admin");
+
+    try std.testing.expectEqual(@as(u32, 1), result.succeeded);
+    try std.testing.expectEqual(@as(u32, 0), result.failed);
+    try std.testing.expect(result.first_error_index == null);
+}
+
+test "parseIdArray with whitespace parses correctly" {
+    var buf: [1000]i64 = undefined;
+
+    const count = try parseIdArray(" [ 1 , 2 ] ", &buf);
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqual(@as(i64, 1), buf[0]);
+    try std.testing.expectEqual(@as(i64, 2), buf[1]);
+}

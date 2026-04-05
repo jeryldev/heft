@@ -145,3 +145,29 @@ test "describeSchema version matches PRAGMA user_version" {
     const expected = std.fmt.bufPrint(&expected_buf, "\"schema_version\":{d}", .{version}) catch unreachable;
     try std.testing.expect(std.mem.indexOf(u8, result, expected) != null);
 }
+
+test "describeSchema CSV format contains header and table rows" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    var buf: [65536]u8 = undefined;
+    const result = try describeSchema(database, &buf, .csv);
+
+    try std.testing.expect(result.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, result, "# schema_version=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "type,name,sql\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "ledger_books") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "ledger_entries") != null);
+}
+
+test "describeSchema buffer too small returns error" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    var buf: [10]u8 = undefined;
+    const json_result = describeSchema(database, &buf, .json);
+    try std.testing.expectError(error.BufferTooSmall, json_result);
+
+    const csv_result = describeSchema(database, &buf, .csv);
+    try std.testing.expectError(error.BufferTooSmall, csv_result);
+}

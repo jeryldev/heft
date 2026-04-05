@@ -2548,3 +2548,102 @@ test "C ABI: ledger_recalculate_balances null handle returns -1" {
     const result = ledger_recalculate_balances(null, 1);
     try std.testing.expectEqual(@as(i32, -1), result);
 }
+
+test "C ABI: comprehensive lifecycle — book, accounts, period, draft, lines, approve, post, TB, verify, close, describe" {
+    defer cleanupTestFile("test-cabi-comprehensive.ledger");
+    const handle = ledger_open("test-cabi-comprehensive.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const book_id = ledger_create_book(handle, "Comprehensive", "PHP", 2, "admin");
+    try std.testing.expect(book_id > 0);
+
+    const cash_id = ledger_create_account(handle, book_id, "1000", "Cash", "asset", 0, "admin");
+    try std.testing.expect(cash_id > 0);
+    const rev_id = ledger_create_account(handle, book_id, "4000", "Revenue", "revenue", 0, "admin");
+    try std.testing.expect(rev_id > 0);
+    const equity_id = ledger_create_account(handle, book_id, "3000", "Capital", "equity", 0, "admin");
+    try std.testing.expect(equity_id > 0);
+
+    const period_id = ledger_create_period(handle, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try std.testing.expect(period_id > 0);
+
+    try std.testing.expect(ledger_set_require_approval(handle, book_id, 1, "admin"));
+
+    const entry_id = ledger_create_draft(handle, book_id, "JE-001", "2026-01-15", "2026-01-15", "Service income", period_id, null, "admin");
+    try std.testing.expect(entry_id > 0);
+
+    const l1 = ledger_add_line(handle, entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, cash_id, 0, null, "admin");
+    try std.testing.expect(l1 > 0);
+    const l2 = ledger_add_line(handle, entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, rev_id, 0, null, "admin");
+    try std.testing.expect(l2 > 0);
+
+    try std.testing.expect(ledger_approve_entry(handle, entry_id, "manager"));
+
+    try std.testing.expect(ledger_post_entry(handle, entry_id, "admin"));
+
+    const tb = ledger_trial_balance(handle, book_id, "2026-01-31");
+    try std.testing.expect(tb != null);
+    if (tb) |r| {
+        defer ledger_free_result(r);
+        try std.testing.expect(ledger_result_row_count(r) >= 2);
+        try std.testing.expectEqual(ledger_result_total_debits(r), ledger_result_total_credits(r));
+        try std.testing.expectEqual(@as(i64, 5_000_000_000_00), ledger_result_total_debits(r));
+    }
+
+    var err_count: u32 = 0;
+    var warn_count: u32 = 0;
+    try std.testing.expect(ledger_verify(handle, book_id, &err_count, &warn_count));
+    try std.testing.expectEqual(@as(u32, 0), err_count);
+
+    try std.testing.expect(ledger_transition_period(handle, period_id, "soft_closed", "admin"));
+    try std.testing.expect(ledger_transition_period(handle, period_id, "closed", "admin"));
+
+    var desc_buf: [65536]u8 = undefined;
+    const json_len = ledger_describe_schema(handle, &desc_buf, 65536, 1);
+    try std.testing.expect(json_len > 0);
+    const csv_len = ledger_describe_schema(handle, &desc_buf, 65536, 0);
+    try std.testing.expect(csv_len > 0);
+}
+
+test "C ABI: ledger_reject_entry rejects draft with reason" {
+    defer cleanupTestFile("test-cabi-reject.ledger");
+    const handle = ledger_open("test-cabi-reject.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const book_id = ledger_create_book(handle, "Test", "PHP", 2, "admin");
+    _ = ledger_create_account(handle, book_id, "1000", "Cash", "asset", 0, "admin");
+    _ = ledger_create_account(handle, book_id, "2000", "AP", "liability", 0, "admin");
+    _ = ledger_create_period(handle, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    try std.testing.expect(ledger_set_require_approval(handle, book_id, 1, "admin"));
+
+    const entry_id = ledger_create_draft(handle, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(handle, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+    _ = ledger_add_line(handle, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
+
+    try std.testing.expect(ledger_reject_entry(handle, entry_id, "Incorrect amounts", "manager"));
+
+    try std.testing.expect(!ledger_post_entry(handle, entry_id, "admin"));
+}
+
+test "C ABI: ledger_revalue_forex_balances with valid rates" {
+    defer cleanupTestFile("test-cabi-revalue.ledger");
+    const handle = ledger_open("test-cabi-revalue.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const book_id = ledger_create_book(handle, "FX Book", "PHP", 2, "admin");
+    const cash_php = ledger_create_account(handle, book_id, "1000", "Cash PHP", "asset", 0, "admin");
+    const cash_usd = ledger_create_account(handle, book_id, "1001", "Cash USD", "asset", 0, "admin");
+    const fx_gl = ledger_create_account(handle, book_id, "5000", "FX Gain/Loss", "expense", 0, "admin");
+    _ = ledger_create_period(handle, book_id, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    try std.testing.expect(ledger_set_fx_gain_loss_account(handle, book_id, fx_gl, "admin"));
+
+    const entry_id = ledger_create_draft(handle, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(handle, entry_id, 1, 10_000_000_000, 0, "USD", 565_000_000_000, cash_usd, 0, null, "admin");
+    _ = ledger_add_line(handle, entry_id, 2, 0, 565_000_000_000, "PHP", 10_000_000_000, cash_php, 0, null, "admin");
+    try std.testing.expect(ledger_post_entry(handle, entry_id, "admin"));
+
+    const reval_entry_id = ledger_revalue_forex_balances(handle, book_id, 1, "[{\"currency\":\"USD\",\"rate\":570000000000}]", "admin");
+    try std.testing.expect(reval_entry_id > 0);
+}

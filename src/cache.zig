@@ -195,6 +195,57 @@ test "recalculateStale no-op when nothing stale" {
     try std.testing.expectEqual(@as(u32, 0), fixed);
 }
 
+test "recalculateStale empty period_ids slice returns 0" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+
+    const empty: []const i64 = &.{};
+    const fixed = try recalculateStale(database, 1, empty);
+    try std.testing.expectEqual(@as(u32, 0), fixed);
+}
+
+test "recalculateStale entry_count correct after recalculation" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+    try postEntry(database, "JE-002", "2026-01-20", 1, 1, 2, 2_000_000_000_00);
+
+    try markStale(database, 1, 1);
+    _ = try recalculateStale(database, 1, &.{1});
+
+    var stmt = try database.prepare(
+        \\SELECT entry_count FROM ledger_account_balances
+        \\WHERE book_id = 1 AND period_id = 1 AND account_id = 1;
+    );
+    defer stmt.finalize();
+    if (try stmt.step()) {
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+}
+
+test "recalculateStale last_recalculated_at not null after recalculation" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+
+    try markStale(database, 1, 1);
+    _ = try recalculateStale(database, 1, &.{1});
+
+    var stmt = try database.prepare(
+        \\SELECT last_recalculated_at FROM ledger_account_balances
+        \\WHERE book_id = 1 AND period_id = 1 AND account_id = 1;
+    );
+    defer stmt.finalize();
+    if (try stmt.step()) {
+        const recalc_at = stmt.columnText(0);
+        try std.testing.expect(recalc_at != null);
+    }
+}
+
 test "report auto-recalculates before querying" {
     const database = try setupTestDb();
     defer database.close();
