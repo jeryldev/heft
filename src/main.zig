@@ -19,7 +19,7 @@ pub const LedgerDB = struct {
 
 // ── Internal (Zig idioms) ───────────────────────────────────────
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 fn internal_open(path: [*:0]const u8) !*LedgerDB {
     const db = try heft.db.Database.open(path);
@@ -1056,6 +1056,78 @@ pub export fn ledger_edit_line_full(handle: ?*LedgerDB, line_id: i64, debit_amou
     return true;
 }
 
+// ── Sprint 17: Dimension Exports ──────────────────────────────
+
+pub export fn ledger_create_dimension(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, dimension_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const dt = heft.dimension.DimensionType.fromString(std.mem.span(dimension_type)) orelse {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    return heft.dimension.Dimension.create(h.sqlite, book_id, std.mem.span(name), dt, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+}
+
+pub export fn ledger_delete_dimension(handle: ?*LedgerDB, dimension_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.dimension.Dimension.delete(h.sqlite, dimension_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_create_dimension_value(handle: ?*LedgerDB, dimension_id: i64, code: [*:0]const u8, label: [*:0]const u8, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    return heft.dimension.DimensionValue.create(h.sqlite, dimension_id, std.mem.span(code), std.mem.span(label), std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+}
+
+pub export fn ledger_delete_dimension_value(handle: ?*LedgerDB, value_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.dimension.DimensionValue.delete(h.sqlite, value_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_assign_line_dimension(handle: ?*LedgerDB, line_id: i64, dimension_value_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.dimension.LineDimension.assign(h.sqlite, line_id, dimension_value_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_remove_line_dimension(handle: ?*LedgerDB, line_id: i64, dimension_value_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.dimension.LineDimension.remove(h.sqlite, line_id, dimension_value_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_dimension_summary(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const b = safeBuf(buf, buf_len) orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.dimension.dimensionSummary(h.sqlite, book_id, dimension_id, std.mem.span(start_date), std.mem.span(end_date), b, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
 // ── Sprint 13A: Cache Recalculation ────────────────────────────
 
 pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 {
@@ -1094,7 +1166,7 @@ test "ledger_open returns non-null, ledger_close cleans up" {
     if (handle) |h| ledger_close(h);
 }
 
-test "ledger_open creates all 11 schema tables" {
+test "ledger_open creates all 14 schema tables" {
     defer cleanupTestFile("test-schema-main.ledger");
     const handle = ledger_open("test-schema-main.ledger");
     try std.testing.expect(handle != null);
@@ -1113,6 +1185,9 @@ test "ledger_open creates all 11 schema tables" {
             "ledger_entries",
             "ledger_entry_lines",
             "ledger_account_balances",
+            "ledger_dimensions",
+            "ledger_dimension_values",
+            "ledger_line_dimensions",
             "ledger_audit_log",
         };
 
@@ -1158,7 +1233,7 @@ test "ledger_open enables foreign keys" {
     }
 }
 
-test "ledger_open sets schema version 3 on new file" {
+test "ledger_open sets schema version 4 on new file" {
     defer cleanupTestFile("test-version.ledger");
     const handle = ledger_open("test-version.ledger");
     try std.testing.expect(handle != null);
@@ -1169,7 +1244,7 @@ test "ledger_open sets schema version 3 on new file" {
         var stmt = try h.sqlite.prepare("PRAGMA user_version;");
         defer stmt.finalize();
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
     }
 }
 
@@ -1203,7 +1278,7 @@ test "ledger_open preserves schema version on reopen" {
         var stmt = try h.sqlite.prepare("PRAGMA user_version;");
         defer stmt.finalize();
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
     }
 }
 
@@ -2141,4 +2216,69 @@ test "C ABI: null handle returns null for ledger_equity_changes" {
 
 test "C ABI: free null equity result is safe" {
     ledger_free_equity_result(null);
+}
+
+// ── Sprint 17: Dimension C ABI tests ──
+
+test "C ABI: null handle returns error for dimension exports" {
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_dimension(null, 1, "Tax", "tax_code", "admin"));
+    try std.testing.expect(!ledger_delete_dimension(null, 1, "admin"));
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_dimension_value(null, 1, "VAT12", "VAT 12%", "admin"));
+    try std.testing.expect(!ledger_delete_dimension_value(null, 1, "admin"));
+    try std.testing.expect(!ledger_assign_line_dimension(null, 1, 1, "admin"));
+    try std.testing.expect(!ledger_remove_line_dimension(null, 1, 1, "admin"));
+    var buf: [1024]u8 = undefined;
+    try std.testing.expectEqual(@as(i32, -1), ledger_dimension_summary(null, 1, 1, "2026-01-01", "2026-01-31", &buf, 1024, 1));
+}
+
+test "C ABI: invalid dimension_type string returns -1" {
+    defer cleanupTestFile("test-cabi-bad-dimtype.ledger");
+    const handle = ledger_open("test-cabi-bad-dimtype.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        const result = ledger_create_dimension(h, book_id, "Bad", "invalid_type", "admin");
+        try std.testing.expectEqual(@as(i64, -1), result);
+    }
+}
+
+test "C ABI: dimension full lifecycle through C boundary" {
+    defer cleanupTestFile("test-cabi-dim-lifecycle.ledger");
+    const handle = ledger_open("test-cabi-dim-lifecycle.ledger");
+    try std.testing.expect(handle != null);
+
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, book_id, "4000", "Revenue", "revenue", 0, "admin");
+        _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+        const dim_id = ledger_create_dimension(h, book_id, "Tax Code", "tax_code", "admin");
+        try std.testing.expect(dim_id > 0);
+
+        const val_id = ledger_create_dimension_value(h, dim_id, "VAT12", "VAT 12%", "admin");
+        try std.testing.expect(val_id > 0);
+
+        const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+        const line1 = ledger_add_line(h, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+        _ = ledger_add_line(h, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
+        _ = ledger_post_entry(h, entry_id, "admin");
+
+        try std.testing.expect(ledger_assign_line_dimension(h, line1, val_id, "admin"));
+
+        var buf: [4096]u8 = undefined;
+        const len = ledger_dimension_summary(h, book_id, dim_id, "2026-01-01", "2026-01-31", &buf, 4096, 1);
+        try std.testing.expect(len > 0);
+        const json = buf[0..@intCast(len)];
+        try std.testing.expect(std.mem.indexOf(u8, json, "VAT12") != null);
+
+        try std.testing.expect(ledger_remove_line_dimension(h, line1, val_id, "admin"));
+        try std.testing.expect(ledger_delete_dimension_value(h, val_id, "admin"));
+        try std.testing.expect(ledger_delete_dimension(h, dim_id, "admin"));
+    }
 }
