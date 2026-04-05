@@ -448,6 +448,33 @@ test "create period rejects period_number out of range" {
     try std.testing.expectError(error.InvalidInput, seventeen);
 }
 
+test "create period rejects year less than 1" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const zero = Period.create(database, 1, "Bad", 1, 0, "2026-01-01", "2026-01-31", "regular", "admin");
+    try std.testing.expectError(error.InvalidInput, zero);
+
+    const negative = Period.create(database, 1, "Bad", 1, -1, "2026-01-01", "2026-01-31", "regular", "admin");
+    try std.testing.expectError(error.InvalidInput, negative);
+}
+
+test "create period rejects inverted date range" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Period.create(database, 1, "Bad", 1, 2026, "2026-01-31", "2026-01-01", "regular", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "bulkCreate rejects fiscal_year less than 1" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Period.bulkCreate(database, 1, 0, 1, .monthly, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
 test "create period rejects invalid period_type" {
     const database = try setupTestDb();
     defer database.close();

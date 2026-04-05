@@ -1215,3 +1215,55 @@ test "integration: designate RE, OB, IS accounts and verify book" {
     try std.testing.expectEqual(ob_id, stmt.columnInt64(1));
     try std.testing.expectEqual(is_id, stmt.columnInt64(2));
 }
+
+test "setRequireApproval enables approval" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try Book.create(database, "Test", "PHP", 2, "admin");
+    try Book.setRequireApproval(database, book_id, true, "admin");
+    var stmt = try database.prepare("SELECT require_approval FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "setRequireApproval disables approval" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try Book.create(database, "Test", "PHP", 2, "admin");
+    try Book.setRequireApproval(database, book_id, true, "admin");
+    try Book.setRequireApproval(database, book_id, false, "admin");
+    var stmt = try database.prepare("SELECT require_approval FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "setRequireApproval rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try Book.create(database, "Test", "PHP", 2, "admin");
+    try Book.archive(database, book_id, "admin");
+    const result = Book.setRequireApproval(database, book_id, true, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setRequireApproval rejects nonexistent book" {
+    const database = try setupTestDb();
+    defer database.close();
+    const result = Book.setRequireApproval(database, 999, true, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "setRequireApproval writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try Book.create(database, "Test", "PHP", 2, "admin");
+    try Book.setRequireApproval(database, book_id, true, "admin");
+    var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE entity_type = 'book' AND action = 'update' AND field_changed = 'require_approval';");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}

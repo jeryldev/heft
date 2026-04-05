@@ -2328,3 +2328,23 @@ test "createAll creates 2 audit protection triggers" {
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
 }
+
+test "audit log trigger rejects DELETE" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
+    const result = database.exec("DELETE FROM ledger_audit_log WHERE id = 1;");
+    try std.testing.expectError(error.SqliteExecFailed, result);
+}
+
+test "audit log trigger rejects UPDATE" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_audit_log (entity_type, entity_id, action, performed_by, book_id) VALUES ('book', 1, 'create', 'admin', 1);");
+    const result = database.exec("UPDATE ledger_audit_log SET action = 'modified' WHERE id = 1;");
+    try std.testing.expectError(error.SqliteExecFailed, result);
+}
