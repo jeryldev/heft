@@ -246,6 +246,63 @@ test "recalculateStale last_recalculated_at not null after recalculation" {
     }
 }
 
+test "recalculateStale after void shows zero cache" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+
+    const entry_id: i64 = 1;
+    try entry_mod.Entry.voidEntry(database, entry_id, "Correction", "admin");
+
+    try markStale(database, 1, 1);
+    _ = try recalculateStale(database, 1, &.{1});
+
+    var stmt = try database.prepare(
+        \\SELECT debit_sum, credit_sum FROM ledger_account_balances
+        \\WHERE book_id = 1 AND period_id = 1 AND account_id = 1;
+    );
+    defer stmt.finalize();
+    if (try stmt.step()) {
+        try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+        try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
+    }
+}
+
+test "recalculateStale with multiple accounts in same period" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const acct3 = try account_mod.Account.create(database, 1, "3000", "Equity", .equity, false, "admin");
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+    try postEntry(database, "JE-002", "2026-01-20", 1, 1, acct3, 500_000_000_00);
+
+    try markStale(database, 1, 1);
+    const fixed = try recalculateStale(database, 1, &.{1});
+    try std.testing.expectEqual(@as(u32, 3), fixed);
+
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 1));
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 2));
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, acct3));
+}
+
+test "recalculateAllStale returns correct total count" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+    try postEntry(database, "JE-002", "2026-02-15", 2, 1, 2, 500_000_000_00);
+
+    try markStale(database, 1, 1);
+    try markStale(database, 1, 2);
+
+    const fixed = try recalculateAllStale(database, 1);
+    try std.testing.expectEqual(@as(u32, 4), fixed);
+}
+
 test "report auto-recalculates before querying" {
     const database = try setupTestDb();
     defer database.close();

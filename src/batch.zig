@@ -254,6 +254,84 @@ test "batchVoid success has first_error_index null" {
     try std.testing.expect(result.first_error_index == null);
 }
 
+test "batchPost: verify entries are actually posted" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const e1 = try createPostableEntry(database, "JE-001");
+    const e2 = try createPostableEntry(database, "JE-002");
+
+    const ids = [_]i64{ e1, e2 };
+    const result = batchPost(database, &ids, "admin");
+    try std.testing.expectEqual(@as(u32, 2), result.succeeded);
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+
+    for (ids) |eid| {
+        stmt.reset();
+        stmt.clearBindings();
+        try stmt.bindInt(1, eid);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+    }
+}
+
+test "batchVoid: verify entries are actually voided" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const e1 = try createPostableEntry(database, "JE-001");
+    const e2 = try createPostableEntry(database, "JE-002");
+    try entry_mod.Entry.post(database, e1, "admin");
+    try entry_mod.Entry.post(database, e2, "admin");
+
+    const ids = [_]i64{ e1, e2 };
+    const result = batchVoid(database, &ids, "Batch correction", "admin");
+    try std.testing.expectEqual(@as(u32, 2), result.succeeded);
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+
+    for (ids) |eid| {
+        stmt.reset();
+        stmt.clearBindings();
+        try stmt.bindInt(1, eid);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("void", stmt.columnText(0).?);
+    }
+}
+
+test "batchPost partial: entries before failure remain posted" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const e1 = try createPostableEntry(database, "JE-001");
+    const e2 = try entry_mod.Entry.createDraft(database, 1, "JE-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, e2, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    const e3 = try createPostableEntry(database, "JE-003");
+
+    const ids = [_]i64{ e1, e2, e3 };
+    const result = batchPost(database, &ids, "admin");
+
+    try std.testing.expectEqual(@as(u32, 2), result.succeeded);
+    try std.testing.expectEqual(@as(u32, 1), result.failed);
+    try std.testing.expectEqual(@as(u32, 1), result.first_error_index.?);
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+
+    try stmt.bindInt(1, e1);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+
+    stmt.reset();
+    stmt.clearBindings();
+    try stmt.bindInt(1, e3);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
+}
+
 test "parseIdArray with whitespace parses correctly" {
     var buf: [1000]i64 = undefined;
 

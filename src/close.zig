@@ -504,6 +504,137 @@ test "closePeriod: soft_closed period closes correctly" {
     }
 }
 
+test "closePeriod: two-step close with only revenue (no expenses)" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const is_id = try account_mod.Account.create(s.database, s.book_id, "3200", "Income Summary", .equity, false, "admin");
+    try book_mod.Book.setIncomeSummaryAccount(s.database, s.book_id, is_id, "admin");
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 8_000_000_000_00, s.revenue_id, 8_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    {
+        var stmt = try s.database.prepare("SELECT COUNT(*) FROM ledger_entries WHERE book_id = ? AND metadata LIKE '%income_summary%' AND status = 'posted';");
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+
+    const rev_bal = try queryBalance(s.database, s.revenue_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 0), rev_bal.credit_sum - rev_bal.debit_sum);
+
+    const re_bal = try queryBalance(s.database, s.re_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 8_000_000_000_00), re_bal.credit_sum - re_bal.debit_sum);
+}
+
+test "closePeriod: two-step close with only expenses (no revenue)" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const is_id = try account_mod.Account.create(s.database, s.book_id, "3200", "Income Summary", .equity, false, "admin");
+    try book_mod.Book.setIncomeSummaryAccount(s.database, s.book_id, is_id, "admin");
+
+    try postTestEntry(s.database, s.book_id, "EXP-001", s.expense_id, 5_000_000_000_00, s.cash_id, 5_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    {
+        var stmt = try s.database.prepare("SELECT COUNT(*) FROM ledger_entries WHERE book_id = ? AND metadata LIKE '%income_summary%' AND status = 'posted';");
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+
+    const exp_bal = try queryBalance(s.database, s.expense_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 0), exp_bal.debit_sum - exp_bal.credit_sum);
+
+    const re_bal = try queryBalance(s.database, s.re_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 5_000_000_000_00), re_bal.debit_sum - re_bal.credit_sum);
+}
+
+test "closePeriod: direct close with contra revenue account" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const contra_rev_id = try account_mod.Account.create(s.database, s.book_id, "4100", "Sales Returns", .revenue, true, "admin");
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 10_000_000_000_00, s.revenue_id, 10_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "RET-001", contra_rev_id, 2_000_000_000_00, s.cash_id, 2_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "EXP-001", s.expense_id, 3_000_000_000_00, s.cash_id, 3_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    const contra_bal = try queryBalance(s.database, contra_rev_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 0), contra_bal.debit_sum - contra_bal.credit_sum);
+
+    const rev_bal = try queryBalance(s.database, s.revenue_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 0), rev_bal.credit_sum - rev_bal.debit_sum);
+
+    const re_bal = try queryBalance(s.database, s.re_id, s.period_id);
+    const expected_net: i64 = (10_000_000_000_00 - 2_000_000_000_00) - 3_000_000_000_00;
+    try std.testing.expectEqual(expected_net, re_bal.credit_sum - re_bal.debit_sum);
+}
+
+test "closePeriod: direct close with contra expense account" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const contra_exp_id = try account_mod.Account.create(s.database, s.book_id, "5100", "Purchase Returns", .expense, true, "admin");
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 10_000_000_000_00, s.revenue_id, 10_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "EXP-001", s.expense_id, 7_000_000_000_00, s.cash_id, 7_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "PR-001", s.cash_id, 1_000_000_000_00, contra_exp_id, 1_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    const contra_bal = try queryBalance(s.database, contra_exp_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 0), contra_bal.credit_sum - contra_bal.debit_sum);
+
+    const exp_bal = try queryBalance(s.database, s.expense_id, s.period_id);
+    try std.testing.expectEqual(@as(i64, 0), exp_bal.debit_sum - exp_bal.credit_sum);
+
+    const re_bal = try queryBalance(s.database, s.re_id, s.period_id);
+    const expected_net: i64 = 10_000_000_000_00 - (7_000_000_000_00 - 1_000_000_000_00);
+    try std.testing.expectEqual(expected_net, re_bal.credit_sum - re_bal.debit_sum);
+}
+
+test "closePeriod: balance sheet shows correct RE after close" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 10_000_000_000_00, s.revenue_id, 10_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "EXP-001", s.expense_id, 6_000_000_000_00, s.cash_id, 6_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    const report_mod = @import("report.zig");
+    const result = try report_mod.balanceSheet(s.database, s.book_id, "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    var re_credit: i64 = 0;
+    var phantom_ni_count: u32 = 0;
+    for (result.rows) |row| {
+        if (row.account_id == s.re_id) {
+            re_credit += row.credit_balance;
+            re_credit -= row.debit_balance;
+        }
+    }
+    for (result.rows) |row| {
+        const name = row.account_name[0..row.account_name_len];
+        if (std.mem.indexOf(u8, name, "Net Income") != null and row.account_id != s.re_id) {
+            phantom_ni_count += 1;
+        }
+    }
+
+    const net_income: i64 = 10_000_000_000_00 - 6_000_000_000_00;
+    try std.testing.expectEqual(net_income, re_credit);
+    try std.testing.expectEqual(result.total_debits, result.total_credits);
+}
+
 test "closePeriod: book archived rejected" {
     const database = try db.Database.open(":memory:");
     defer database.close();

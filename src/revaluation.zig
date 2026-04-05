@@ -487,3 +487,105 @@ test "revalueForexBalances: base currency rate skipped" {
     const reval_id = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
     try std.testing.expectEqual(@as(i64, 0), reval_id);
 }
+
+test "parseRatesJson: malformed JSON parses partial data gracefully" {
+    const json = "[{\"currency\":\"USD\",\"rate\":56";
+    var buf: [10]CurrencyRate = undefined;
+    const count = try parseRatesJson(json, &buf);
+    // Parser extracts what it can from truncated input: currency="USD", rate=56 (>0), so 1 rate
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expect(std.mem.eql(u8, buf[0].currency, "USD"));
+    try std.testing.expectEqual(@as(i64, 56), buf[0].new_rate);
+}
+
+test "parseRatesJson: negative rate silently dropped" {
+    const json = "[{\"currency\":\"USD\",\"rate\":-100}]";
+    var buf: [10]CurrencyRate = undefined;
+    const count = try parseRatesJson(json, &buf);
+    try std.testing.expectEqual(@as(usize, 0), count);
+}
+
+test "revalueForexBalances: entry has correct revaluation metadata" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const reval_id = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+    try std.testing.expect(reval_id > 0);
+
+    var stmt = try s.database.prepare("SELECT metadata FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, reval_id);
+    _ = try stmt.step();
+    const metadata = stmt.columnText(0).?;
+    try std.testing.expect(std.mem.indexOf(u8, metadata, "\"revaluation\":true") != null);
+}
+
+test "revalueForexBalances: audit trail exists for revaluation entry" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const reval_id = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+    try std.testing.expect(reval_id > 0);
+
+    var stmt = try s.database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'entry' AND entity_id = ? AND action = 'create';
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, reval_id);
+    _ = try stmt.step();
+    try std.testing.expect(stmt.columnInt(0) >= 1);
+}
+
+test "revalueForexBalances: multiple accounts same currency adjusted" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    const ar_usd = try account_mod.Account.create(s.database, s.book_id, "1100", "AR USD", .asset, false, "admin");
+
+    // Post $100 to Cash-USD at 56.50
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+    // Post $200 to AR-USD at 56.50
+    try postFxEntry(s.database, s.book_id, "FX-002", ar_usd, 20_000_000_000, "USD", 565_000_000_000, s.cash_php, 1_130_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    // Revalue USD to 57.00
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const reval_id = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+    try std.testing.expect(reval_id > 0);
+
+    // Cash-USD gain: (100*57 - 100*56.50) = 50 PHP -> 2 lines
+    // AR-USD gain: (200*57 - 200*56.50) = 100 PHP -> 2 lines
+    // Total: 4 lines
+    {
+        var stmt = try s.database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, reval_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+    }
+}
+
+test "revalueForexBalances: zero net transaction amount produces no adjustment" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    // Post $100 debit and $100 credit to same account in USD -> net = 0
+    const eid = try entry_mod.Entry.createDraft(s.database, s.book_id, "FX-NET0", "2026-01-15", "2026-01-15", null, s.period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid, 1, 10_000_000_000, 0, "USD", 565_000_000_000, s.cash_usd, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid, 2, 0, 10_000_000_000, "USD", 565_000_000_000, s.cash_usd, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid, 3, 565_000_000_000, 0, "PHP", 10_000_000_000, s.cash_php, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid, 4, 0, 565_000_000_000, "PHP", 10_000_000_000, s.revenue, null, null, "admin");
+    try entry_mod.Entry.post(s.database, eid, "admin");
+
+    // Revalue USD at a different rate
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const reval_id = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+    // Net USD on cash_usd = 0, so no adjustment needed
+    try std.testing.expectEqual(@as(i64, 0), reval_id);
+}

@@ -517,3 +517,106 @@ test "BudgetStatus round-trips through toString and fromString" {
     }
     try std.testing.expect(BudgetStatus.fromString("invalid") == null);
 }
+
+test "Budget.create with empty name returns InvalidInput" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+
+    const result = Budget.create(database, book_id, "", 2026, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "Budget.delete on archived book returns BookArchived" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_mod = @import("book.zig");
+    const book_id = try book_mod.Book.create(database, "Del Test", "PHP", 2, "admin");
+    const budget_id = try Budget.create(database, book_id, "FY2026", 2026, "admin");
+
+    try book_mod.Book.archive(database, book_id, "admin");
+
+    const result = Budget.delete(database, budget_id, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "BudgetLine.set with nonexistent budget_id returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const acct_id = try createTestAccount(database, book_id, "1000", "Cash", .asset);
+    const period_id = try createTestPeriod(database, book_id);
+
+    const result = BudgetLine.set(database, 999, acct_id, period_id, 100, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "BudgetLine.set with nonexistent account_id returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const period_id = try createTestPeriod(database, book_id);
+    const budget_id = try Budget.create(database, book_id, "FY2026", 2026, "admin");
+
+    const result = BudgetLine.set(database, budget_id, 999, period_id, 100, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "BudgetLine.set with nonexistent period_id returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const acct_id = try createTestAccount(database, book_id, "1000", "Cash", .asset);
+    const budget_id = try Budget.create(database, book_id, "FY2026", 2026, "admin");
+
+    const result = BudgetLine.set(database, budget_id, acct_id, 999, 100, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "BudgetLine.set cross-book period returns CrossBookViolation" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const acct_id = try createTestAccount(database, book_id, "1000", "Cash", .asset);
+    const budget_id = try Budget.create(database, book_id, "FY2026", 2026, "admin");
+
+    const book_mod = @import("book.zig");
+    const period_mod = @import("period.zig");
+    const book2_id = try book_mod.Book.create(database, "Other Book", "USD", 2, "admin");
+    const other_period = try period_mod.Period.create(database, book2_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const result = BudgetLine.set(database, budget_id, acct_id, other_period, 100, "admin");
+    try std.testing.expectError(error.CrossBookViolation, result);
+}
+
+test "budgetVsActual buffer too small returns InvalidInput" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+    const cash_id = try createTestAccount(database, book_id, "1000", "Cash", .asset);
+    const period_id = try createTestPeriod(database, book_id);
+    const budget_id = try Budget.create(database, book_id, "FY2026", 2026, "admin");
+
+    _ = try BudgetLine.set(database, budget_id, cash_id, period_id, 10_000_000_000_00, "admin");
+
+    var buf: [10]u8 = undefined;
+    const result = budgetVsActual(database, budget_id, "2026-01-01", "2026-01-31", &buf, .csv);
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "Budget audit log verified on create" {
+    const database = try setupTestDb();
+    defer database.close();
+    const book_id = try createTestBook(database);
+
+    const budget_id = try Budget.create(database, book_id, "FY2026 Audit", 2026, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'budget' AND entity_id = ? AND action = 'create';
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, budget_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}

@@ -207,3 +207,67 @@ test "logWithStmt resets statement between calls" {
     try std.testing.expectEqual(@as(i64, 2), q.columnInt64(1));
     try std.testing.expectEqualStrings("create", q.columnText(2).?);
 }
+
+test "audit log timestamp auto-populated" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try database.beginTransaction();
+    try log(database, "book", 1, "create", null, null, null, "admin", 1);
+    try database.commit();
+
+    var stmt = try database.prepare("SELECT performed_at FROM ledger_audit_log WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    const ts = stmt.columnText(0).?;
+    try std.testing.expect(ts.len >= 20);
+    try std.testing.expect(ts[4] == '-');
+    try std.testing.expect(ts[7] == '-');
+    try std.testing.expect(ts[10] == 'T');
+}
+
+test "audit log entity_type at max length" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const long_type = "abcdefghij" ** 5;
+    try database.beginTransaction();
+    try log(database, long_type, 1, "create", null, null, null, "admin", 1);
+    try database.commit();
+
+    var stmt = try database.prepare("SELECT entity_type FROM ledger_audit_log WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings(long_type, stmt.columnText(0).?);
+}
+
+test "audit log performed_by at max length" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const long_user = "u" ** 100;
+    try database.beginTransaction();
+    try log(database, "book", 1, "create", null, null, null, long_user, 1);
+    try database.commit();
+
+    var stmt = try database.prepare("SELECT performed_by FROM ledger_audit_log WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings(long_user, stmt.columnText(0).?);
+}
+
+test "audit log old_value/new_value at max length" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const long_val = "v" ** 4000;
+    try database.beginTransaction();
+    try log(database, "book", 1, "update", "field", long_val, long_val, "admin", 1);
+    try database.commit();
+
+    var stmt = try database.prepare("SELECT old_value, new_value FROM ledger_audit_log WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(usize, 4000), stmt.columnText(0).?.len);
+    try std.testing.expectEqual(@as(usize, 4000), stmt.columnText(1).?.len);
+}
