@@ -110,6 +110,30 @@ pub const ComparativeReportResult = struct {
     }
 };
 
+pub const EquityRow = struct {
+    account_id: i64,
+    account_number: [50]u8,
+    account_number_len: usize,
+    account_name: [256]u8,
+    account_name_len: usize,
+    opening_balance: i64,
+    period_activity: i64,
+    closing_balance: i64,
+};
+
+pub const EquityResult = struct {
+    arena: std.heap.ArenaAllocator,
+    rows: []EquityRow,
+    net_income: i64,
+    total_opening: i64,
+    total_closing: i64,
+
+    pub fn deinit(self: *EquityResult) void {
+        self.arena.deinit();
+        std.heap.c_allocator.destroy(self);
+    }
+};
+
 const RunningMode = enum { none, debit_normal, credit_normal };
 
 fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, running_mode: RunningMode) !*LedgerResult {
@@ -667,6 +691,125 @@ pub fn trialBalanceMovementComparative(database: db.Database, book_id: i64, cur_
     const prior = try trialBalanceMovement(database, book_id, prior_start, prior_end);
     defer prior.deinit();
     return mergeComparative(current, prior);
+}
+
+pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8, fy_start_date: []const u8) !*EquityResult {
+    try verifyBookExists(database, book_id);
+
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, end_date });
+
+    const result = try std.heap.c_allocator.create(EquityResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    var rows = std.ArrayListUnmanaged(EquityRow){};
+
+    var stmt = try database.prepare(
+        \\SELECT a.id, a.number, a.name,
+        \\  COALESCE(opening.open_debit, 0), COALESCE(opening.open_credit, 0),
+        \\  COALESCE(activity.act_debit, 0), COALESCE(activity.act_credit, 0),
+        \\  a.is_contra
+        \\FROM ledger_accounts a
+        \\LEFT JOIN (
+        \\  SELECT ab.account_id,
+        \\    SUM(ab.debit_sum) as open_debit, SUM(ab.credit_sum) as open_credit
+        \\  FROM ledger_account_balances ab
+        \\  JOIN ledger_periods p ON p.id = ab.period_id
+        \\  WHERE ab.book_id = ? AND p.end_date < ?
+        \\  GROUP BY ab.account_id
+        \\) opening ON opening.account_id = a.id
+        \\LEFT JOIN (
+        \\  SELECT ab.account_id,
+        \\    SUM(ab.debit_sum) as act_debit, SUM(ab.credit_sum) as act_credit
+        \\  FROM ledger_account_balances ab
+        \\  JOIN ledger_periods p ON p.id = ab.period_id
+        \\  WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ?
+        \\  GROUP BY ab.account_id
+        \\) activity ON activity.account_id = a.id
+        \\WHERE a.book_id = ? AND a.account_type = 'equity'
+        \\  AND (opening.open_debit IS NOT NULL OR activity.act_debit IS NOT NULL)
+        \\ORDER BY a.number ASC;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindText(2, start_date);
+    try stmt.bindInt(3, book_id);
+    try stmt.bindText(4, start_date);
+    try stmt.bindText(5, end_date);
+    try stmt.bindInt(6, book_id);
+
+    var total_opening: i64 = 0;
+    var total_closing: i64 = 0;
+
+    while (try stmt.step()) {
+        var row = std.mem.zeroes(EquityRow);
+        row.account_id = stmt.columnInt64(0);
+        row.account_number_len = copyText(&row.account_number, stmt.columnText(1));
+        row.account_name_len = copyText(&row.account_name, stmt.columnText(2));
+
+        const open_debit = stmt.columnInt64(3);
+        const open_credit = stmt.columnInt64(4);
+        const act_debit = stmt.columnInt64(5);
+        const act_credit = stmt.columnInt64(6);
+        const is_contra = stmt.columnInt(7);
+
+        if (is_contra == 1) {
+            row.opening_balance = open_debit - open_credit;
+            row.period_activity = act_debit - act_credit;
+        } else {
+            row.opening_balance = open_credit - open_debit;
+            row.period_activity = act_credit - act_debit;
+        }
+        row.closing_balance = std.math.add(i64, row.opening_balance, row.period_activity) catch return error.AmountOverflow;
+
+        total_opening = std.math.add(i64, total_opening, row.opening_balance) catch return error.AmountOverflow;
+        total_closing = std.math.add(i64, total_closing, row.closing_balance) catch return error.AmountOverflow;
+
+        try rows.append(allocator, row);
+    }
+
+    var net_income: i64 = 0;
+    {
+        var ni_stmt = try database.prepare(
+            \\SELECT a.account_type,
+            \\  COALESCE(SUM(ab.credit_sum), 0), COALESCE(SUM(ab.debit_sum), 0)
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ?
+            \\  AND a.account_type IN ('revenue', 'expense')
+            \\GROUP BY a.account_type;
+        );
+        defer ni_stmt.finalize();
+        try ni_stmt.bindInt(1, book_id);
+        try ni_stmt.bindText(2, fy_start_date);
+        try ni_stmt.bindText(3, end_date);
+
+        while (try ni_stmt.step()) {
+            const acct_type = ni_stmt.columnText(0).?;
+            const credits = ni_stmt.columnInt64(1);
+            const debits = ni_stmt.columnInt64(2);
+            if (std.mem.eql(u8, acct_type, "revenue")) {
+                const delta = std.math.sub(i64, credits, debits) catch return error.AmountOverflow;
+                net_income = std.math.add(i64, net_income, delta) catch return error.AmountOverflow;
+            } else {
+                const delta = std.math.sub(i64, debits, credits) catch return error.AmountOverflow;
+                net_income = std.math.sub(i64, net_income, delta) catch return error.AmountOverflow;
+            }
+        }
+    }
+
+    result.rows = try rows.toOwnedSlice(allocator);
+    result.net_income = net_income;
+    result.total_opening = total_opening;
+    result.total_closing = total_closing;
+    return result;
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -2147,4 +2290,114 @@ test "Comparative: account in prior but not current" {
         try std.testing.expectEqual(-row.prior_debit, row.variance_debit);
         try std.testing.expectEqual(-row.prior_credit, row.variance_credit);
     }
+}
+
+// ── Equity Changes tests ───────────────────────────────────────
+
+fn findEquityRow(rows: []const EquityRow, acct_num: []const u8) ?EquityRow {
+    for (rows) |row| {
+        if (std.mem.eql(u8, row.account_number[0..row.account_number_len], acct_num)) return row;
+    }
+    return null;
+}
+
+test "equity changes: basic capital contribution and net income" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    // Capital contribution: debit Cash(1), credit Capital(3) = 10,000
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
+    // Revenue: debit Cash(1), credit Revenue(4) = 5,000
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+    // Expense: debit COGS(5), credit Cash(1) = 3,000
+    try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 5 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }});
+
+    const result = try equityChanges(database, 1, "2026-01-01", "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    const capital = findEquityRow(result.rows, "3000").?;
+    try std.testing.expectEqual(@as(i64, 0), capital.opening_balance);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), capital.period_activity);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), capital.closing_balance);
+    // Net income = revenue 5000 - expense 3000 = 2000
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), result.net_income);
+}
+
+test "equity changes: prior period opening balance" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    // Period 1: capital contribution
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
+    // Period 2: revenue and expense
+    try postEntry(database, "JE-002", "2026-02-15", 2, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+    try postEntry(database, "JE-003", "2026-02-20", 2, &.{.{ .amount = 3_000_000_000_00, .account_id = 5 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }});
+
+    const result = try equityChanges(database, 1, "2026-02-01", "2026-02-28", "2026-01-01");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    const capital = findEquityRow(result.rows, "3000").?;
+    // Opening from period 1, no new capital in period 2
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), capital.opening_balance);
+    try std.testing.expectEqual(@as(i64, 0), capital.period_activity);
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), capital.closing_balance);
+    // Net income from FY start (Jan) through Feb
+    try std.testing.expectEqual(@as(i64, 2_000_000_000_00), result.net_income);
+}
+
+test "equity changes: empty — no equity transactions" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = try equityChanges(database, 1, "2026-01-01", "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 0), result.net_income);
+    try std.testing.expectEqual(@as(i64, 0), result.total_opening);
+    try std.testing.expectEqual(@as(i64, 0), result.total_closing);
+}
+
+test "equity changes: contra equity (drawings) shows correct sign" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Capital", .equity, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "3900", "Drawings", .equity, true, "admin");
+    _ = try account_mod.Account.create(database, 1, "4000", "Revenue", .revenue, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "5000", "Expenses", .expense, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Capital contribution: debit Cash(1), credit Capital(2) = 10,000
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 2 }});
+    // Drawing: debit Drawings(3), credit Cash(1) = 1,000
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 3 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }});
+
+    const result = try equityChanges(database, 1, "2026-01-01", "2026-01-31", "2026-01-01");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+
+    const capital = findEquityRow(result.rows, "3000").?;
+    // Capital is credit-normal: credits - debits = 10,000
+    try std.testing.expectEqual(@as(i64, 10_000_000_000_00), capital.closing_balance);
+
+    const drawings = findEquityRow(result.rows, "3900").?;
+    // Drawings is contra equity (debit-normal): debits - credits = 1,000
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), drawings.closing_balance);
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), drawings.period_activity);
+}
+
+test "equity changes: nonexistent book returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = equityChanges(database, 999, "2026-01-01", "2026-01-31", "2026-01-01");
+    try std.testing.expectError(error.NotFound, result);
 }

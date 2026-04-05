@@ -120,7 +120,7 @@ const tables = [_][*:0]const u8{
     \\  name TEXT NOT NULL
     \\    CHECK (length(name) BETWEEN 1 AND 255),
     \\  report_type TEXT NOT NULL
-    \\    CHECK (report_type IN ('balance_sheet', 'income_statement', 'trial_balance')),
+    \\    CHECK (report_type IN ('balance_sheet', 'income_statement', 'trial_balance', 'cash_flow')),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -949,7 +949,7 @@ test "classification report_type CHECK rejects invalid type" {
 
     const bad = database.exec(
         \\INSERT INTO ledger_classifications (name, report_type, book_id)
-        \\VALUES ('Bad', 'cash_flow', 1);
+        \\VALUES ('Bad', 'journal_register', 1);
     );
     try std.testing.expectError(error.SqliteExecFailed, bad);
 }
