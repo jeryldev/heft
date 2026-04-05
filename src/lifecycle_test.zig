@@ -19,6 +19,20 @@ const query_mod = @import("query.zig");
 const describe_mod = @import("describe.zig");
 const batch_mod = @import("batch.zig");
 
+fn findReportRow(rows: []const report_mod.ReportRow, account_id: i64) ?report_mod.ReportRow {
+    for (rows) |row| {
+        if (row.account_id == account_id) return row;
+    }
+    return null;
+}
+
+fn findEquityRow(rows: []const report_mod.EquityRow, account_id: i64) ?report_mod.EquityRow {
+    for (rows) |row| {
+        if (row.account_id == account_id) return row;
+    }
+    return null;
+}
+
 test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
     const database = try db.Database.open(":memory:");
     defer database.close();
@@ -359,6 +373,28 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
         defer tb.deinit();
         try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+
+        // Capital: credit-normal equity, OB credit 70_000_000_000_000 (PHP 7,000,000.00)
+        if (findReportRow(tb.rows, capital)) |row| {
+            try std.testing.expectEqual(@as(i64, 70_000_000_000_000), row.credit_balance);
+            try std.testing.expectEqual(@as(i64, 0), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Equipment: debit-normal asset, OB debit 20_000_000_000_000 (PHP 2,000,000.00)
+        if (findReportRow(tb.rows, equipment)) |row| {
+            try std.testing.expectEqual(@as(i64, 20_000_000_000_000), row.debit_balance);
+            try std.testing.expectEqual(@as(i64, 0), row.credit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Cash USD: debit-normal, FX original 5_650_000_000_000 + reval 50_000_000_000 = 5_700_000_000_000
+        if (findReportRow(tb.rows, cash_usd)) |row| {
+            try std.testing.expectEqual(@as(i64, 5_700_000_000_000), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Accum Dep: contra asset (credit normal), 100_000_000_000
+        if (findReportRow(tb.rows, accum_dep)) |row| {
+            try std.testing.expectEqual(@as(i64, 100_000_000_000), row.credit_balance);
+        } else return error.TestUnexpectedResult;
     }
 
     // Income Statement
@@ -366,6 +402,38 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         const is_report = try report_mod.incomeStatement(database, book_id, "2026-01-01", "2026-01-31");
         defer is_report.deinit();
         try std.testing.expect(is_report.rows.len > 0);
+
+        // Revenue: INV-001 = 1_000_000_000_000 credit (PHP 100,000.00)
+        if (findReportRow(is_report.rows, revenue)) |row| {
+            try std.testing.expectEqual(@as(i64, 1_000_000_000_000), row.credit_balance);
+            try std.testing.expectEqual(@as(i64, 0), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Salaries: PR-2026-01 = 500_000_000_000 debit (PHP 50,000.00)
+        if (findReportRow(is_report.rows, salaries)) |row| {
+            try std.testing.expectEqual(@as(i64, 500_000_000_000), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Rent: 200_000_000_000 + 20_000_000_000 + 30_000_000_000 = 250_000_000_000 (PHP 25,000.00)
+        if (findReportRow(is_report.rows, rent)) |row| {
+            try std.testing.expectEqual(@as(i64, 250_000_000_000), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Depreciation: DEP-2026-01 = 100_000_000_000 (PHP 10,000.00)
+        if (findReportRow(is_report.rows, depreciation_exp)) |row| {
+            try std.testing.expectEqual(@as(i64, 100_000_000_000), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // COGS: BILL 600_000_000_000 + ADJ 50_000_000_000 = 650_000_000_000 (PHP 65,000.00)
+        if (findReportRow(is_report.rows, cogs)) |row| {
+            try std.testing.expectEqual(@as(i64, 650_000_000_000), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // FX Gain/Loss: reval gain of 50_000_000_000 shows as credit (expense with credit balance)
+        if (findReportRow(is_report.rows, fx_gain_loss)) |row| {
+            try std.testing.expectEqual(@as(i64, 50_000_000_000), row.credit_balance);
+            try std.testing.expectEqual(@as(i64, 0), row.debit_balance);
+        } else return error.TestUnexpectedResult;
     }
 
     // Balance Sheet
@@ -395,6 +463,20 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         const al = try report_mod.accountLedger(database, book_id, cash, "2026-01-01", "2026-01-31");
         defer al.deinit();
         try std.testing.expect(al.rows.len > 0);
+
+        // Cash is debit-normal. January is the first period so opening_balance = 0
+        try std.testing.expectEqual(@as(i64, 0), al.opening_balance);
+
+        // Cash has 10 posted lines in January (OB dr, CR dr, CD cr, FX cr, PR cr, RENT cr, MISC cr, ADJ cr, REM cr, APPR cr)
+        // Debits: 50_000_000_000_000 + 1_000_000_000_000 = 51_000_000_000_000
+        try std.testing.expectEqual(@as(i64, 51_000_000_000_000), al.total_debits);
+        // Credits: 600_000_000_000 + 5_650_000_000_000 + 500_000_000_000 + 200_000_000_000
+        //        + 10_000_000_000 + 50_000_000_000 + 20_000_000_000 + 30_000_000_000 = 7_060_000_000_000
+        try std.testing.expectEqual(@as(i64, 7_060_000_000_000), al.total_credits);
+
+        // Closing balance = opening(0) + debits - credits = 43_940_000_000_000 (debit normal)
+        try std.testing.expectEqual(@as(i64, 43_940_000_000_000), al.closing_balance);
+        try std.testing.expect(al.total_debits > al.total_credits);
     }
 
     // 3.3c Journal Register — JR for January
@@ -639,11 +721,62 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         try std.testing.expectEqual(@as(u32, 0), v.errors);
     }
 
+    // Post-close drilldown: verify R/E accounts zeroed in January cache
+    {
+        var stmt = try database.prepare(
+            \\SELECT debit_sum, credit_sum FROM ledger_account_balances
+            \\WHERE account_id = ? AND period_id = ?;
+        );
+        defer stmt.finalize();
+
+        // Revenue in January: closing entry debits revenue to zero it
+        try stmt.bindInt(1, revenue);
+        try stmt.bindInt(2, period_ids[0]);
+        if (try stmt.step()) {
+            try std.testing.expectEqual(stmt.columnInt64(0), stmt.columnInt64(1));
+        } else return error.TestUnexpectedResult;
+
+        stmt.reset();
+        stmt.clearBindings();
+
+        // Salaries in January: closing entry credits salaries to zero it
+        try stmt.bindInt(1, salaries);
+        try stmt.bindInt(2, period_ids[0]);
+        if (try stmt.step()) {
+            try std.testing.expectEqual(stmt.columnInt64(0), stmt.columnInt64(1));
+        } else return error.TestUnexpectedResult;
+
+        stmt.reset();
+        stmt.clearBindings();
+
+        // COGS in January: closing entry credits COGS to zero it
+        try stmt.bindInt(1, cogs);
+        try stmt.bindInt(2, period_ids[0]);
+        if (try stmt.step()) {
+            try std.testing.expectEqual(stmt.columnInt64(0), stmt.columnInt64(1));
+        } else return error.TestUnexpectedResult;
+    }
+
     // Balance sheet after close
     {
         const bs_final = try report_mod.balanceSheet(database, book_id, "2026-12-31", "2026-01-01");
         defer bs_final.deinit();
         try std.testing.expectEqual(bs_final.total_debits, bs_final.total_credits);
+
+        // Capital: credit 70_000_000_000_000 (unchanged by closing)
+        if (findReportRow(bs_final.rows, capital)) |row| {
+            try std.testing.expectEqual(@as(i64, 70_000_000_000_000), row.credit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Equipment: debit 20_000_000_000_000 (unchanged)
+        if (findReportRow(bs_final.rows, equipment)) |row| {
+            try std.testing.expectEqual(@as(i64, 20_000_000_000_000), row.debit_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Retained Earnings: should have net income transferred from closing
+        if (findReportRow(bs_final.rows, retained_earnings)) |row| {
+            try std.testing.expect(row.credit_balance != 0 or row.debit_balance != 0);
+        } else return error.TestUnexpectedResult;
     }
 
     // Equity changes for the full year
@@ -651,6 +784,16 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         const eq = try report_mod.equityChanges(database, book_id, "2026-01-01", "2026-12-31", "2026-01-01");
         defer eq.deinit();
         try std.testing.expect(eq.rows.len > 0);
+
+        // Capital account: opening = 0 (FY start), closing = 70_000_000_000_000 (from OB entry)
+        if (findEquityRow(eq.rows, capital)) |row| {
+            try std.testing.expectEqual(@as(i64, 70_000_000_000_000), row.closing_balance);
+        } else return error.TestUnexpectedResult;
+
+        // Retained Earnings: receives net income from closing entries
+        if (findEquityRow(eq.rows, retained_earnings)) |row| {
+            try std.testing.expect(row.closing_balance != 0);
+        } else return error.TestUnexpectedResult;
     }
 
     // ═══════════════════════════════════════════════════════════════
