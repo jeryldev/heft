@@ -56,4 +56,41 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_main_tests.step);
+
+    const safe_mod = b.addModule("heft-safe", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    safe_mod.addCSourceFile(.{
+        .file = b.path("vendor/sqlite3.c"),
+        .flags = &.{
+            "-DSQLITE_DQS=0",
+            "-DSQLITE_THREADSAFE=0",
+            "-DSQLITE_OMIT_DEPRECATED",
+            "-DSQLITE_DEFAULT_MEMSTATUS=0",
+            "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
+            "-DSQLITE_OMIT_SHARED_CACHE",
+        },
+    });
+    safe_mod.addIncludePath(b.path("vendor/"));
+    safe_mod.link_libc = true;
+
+    const safe_main_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .imports = &.{
+            .{ .name = "heft", .module = safe_mod },
+        },
+    });
+
+    const safe_lib = b.addLibrary(.{
+        .name = "heft-safe",
+        .root_module = safe_main_mod,
+        .linkage = .static,
+    });
+
+    const check_step = b.step("check", "Build in ReleaseSafe to verify no UB");
+    check_step.dependOn(&safe_lib.step);
 }

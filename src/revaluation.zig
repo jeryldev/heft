@@ -142,7 +142,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
             line_num += 1;
         } else {
-            const abs_amount = -amount;
+            const abs_amount = std.math.negate(amount) catch return error.AmountOverflow;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, abs_amount, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
             line_num += 1;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, abs_amount, base_currency, fx_one, acct_id, null, null, performed_by);
@@ -193,7 +193,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
                     _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, amount, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
                     rev_line += 1;
                 } else {
-                    const abs_amount = -amount;
+                    const abs_amount = std.math.negate(amount) catch return error.AmountOverflow;
                     _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, 0, abs_amount, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
                     rev_line += 1;
                     _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, abs_amount, 0, base_currency, fx_one, acct_id, null, null, performed_by);

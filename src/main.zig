@@ -2320,7 +2320,7 @@ test "C ABI: ledger_translate_report" {
         _ = ledger_add_line(h, eid, 1, 5650_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
         _ = ledger_add_line(h, eid, 2, 0, 5650_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
         _ = ledger_post_entry(h, eid, "admin");
-        const tb = heft.report.trialBalance(h.sqlite, 1, "2026-01-31") catch unreachable;
+        const tb = try heft.report.trialBalance(h.sqlite, 1, "2026-01-31");
         defer tb.deinit();
         const translated = ledger_translate_report(tb, 180_000_000, 175_000_000);
         try std.testing.expect(translated != null);
