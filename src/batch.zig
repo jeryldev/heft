@@ -82,7 +82,7 @@ pub fn parseIdArray(json: []const u8, buf: *[1000]i64) !usize {
                 value = std.math.mul(i64, value, 10) catch return error.InvalidInput;
                 value = std.math.add(i64, value, @as(i64, d - '0')) catch return error.InvalidInput;
             }
-            if (negative) value = -value;
+            if (negative) value = std.math.negate(value) catch return error.InvalidInput;
 
             if (count >= buf.len) return error.InvalidInput;
             buf[count] = value;

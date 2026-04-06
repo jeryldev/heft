@@ -527,7 +527,7 @@ pub const Entry = struct {
                     if (diff > 0) {
                         rounding_credit = diff; // credits > debits needed
                     } else {
-                        rounding_debit = -diff; // debits > credits needed
+                        rounding_debit = std.math.negate(diff) catch return error.AmountOverflow;
                     }
 
                     var round_stmt = try database.prepare(

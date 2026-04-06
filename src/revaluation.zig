@@ -260,7 +260,7 @@ pub fn parseRatesJson(json: []const u8, rates_buf: []CurrencyRate) !usize {
                     rate_val = std.math.add(i64, rate_val, @as(i64, json[i] - '0')) catch return error.InvalidAmount;
                     i += 1;
                 }
-                if (negative) rate_val = -rate_val;
+                if (negative) rate_val = std.math.negate(rate_val) catch return error.InvalidAmount;
             }
 
             while (i < json.len and (json[i] == ',' or json[i] == ' ')) : (i += 1) {}

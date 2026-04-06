@@ -635,15 +635,15 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
             var debit_bal: i64 = 0;
             var credit_bal: i64 = 0;
             if (std.mem.eql(u8, normal, "debit")) {
-                debit_bal = debit_sum - credit_sum;
+                debit_bal = std.math.sub(i64, debit_sum, credit_sum) catch return error.AmountOverflow;
                 if (debit_bal < 0) {
-                    credit_bal = -debit_bal;
+                    credit_bal = std.math.negate(debit_bal) catch return error.AmountOverflow;
                     debit_bal = 0;
                 }
             } else {
-                credit_bal = credit_sum - debit_sum;
+                credit_bal = std.math.sub(i64, credit_sum, debit_sum) catch return error.AmountOverflow;
                 if (credit_bal < 0) {
-                    debit_bal = -credit_bal;
+                    debit_bal = std.math.negate(credit_bal) catch return error.AmountOverflow;
                     credit_bal = 0;
                 }
             }
@@ -831,15 +831,15 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
             var debit_bal: i64 = 0;
             var credit_bal: i64 = 0;
             if (std.mem.eql(u8, normal, "debit")) {
-                debit_bal = debit_sum - credit_sum;
+                debit_bal = std.math.sub(i64, debit_sum, credit_sum) catch return error.AmountOverflow;
                 if (debit_bal < 0) {
-                    credit_bal = -debit_bal;
+                    credit_bal = std.math.negate(debit_bal) catch return error.AmountOverflow;
                     debit_bal = 0;
                 }
             } else {
-                credit_bal = credit_sum - debit_sum;
+                credit_bal = std.math.sub(i64, credit_sum, debit_sum) catch return error.AmountOverflow;
                 if (credit_bal < 0) {
-                    debit_bal = -credit_bal;
+                    debit_bal = std.math.negate(credit_bal) catch return error.AmountOverflow;
                     credit_bal = 0;
                 }
             }
@@ -1121,11 +1121,11 @@ pub fn classifiedTrialBalance(database: db.Database, classification_id: i64, as_
             var debit_bal: i64 = 0;
             var credit_bal: i64 = 0;
             if (std.mem.eql(u8, normal, "debit")) {
-                debit_bal = debit_sum - credit_sum;
-                if (debit_bal < 0) { credit_bal = -debit_bal; debit_bal = 0; }
+                debit_bal = std.math.sub(i64, debit_sum, credit_sum) catch return error.AmountOverflow;
+                if (debit_bal < 0) { credit_bal = std.math.negate(debit_bal) catch return error.AmountOverflow; debit_bal = 0; }
             } else {
-                credit_bal = credit_sum - debit_sum;
-                if (credit_bal < 0) { debit_bal = -credit_bal; credit_bal = 0; }
+                credit_bal = std.math.sub(i64, credit_sum, debit_sum) catch return error.AmountOverflow;
+                if (credit_bal < 0) { debit_bal = std.math.negate(credit_bal) catch return error.AmountOverflow; credit_bal = 0; }
             }
 
             if (debit_bal == 0 and credit_bal == 0) continue;
