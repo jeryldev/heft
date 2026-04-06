@@ -213,7 +213,8 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
         \\SELECT a.id, a.number, a.name,
         \\  COALESCE(budget.total_budget, 0) as budget_amount,
         \\  COALESCE(actual.actual_debit, 0) as actual_debit,
-        \\  COALESCE(actual.actual_credit, 0) as actual_credit
+        \\  COALESCE(actual.actual_credit, 0) as actual_credit,
+        \\  a.normal_balance
         \\FROM ledger_accounts a
         \\LEFT JOIN (
         \\  SELECT bl.account_id, SUM(bl.amount) as total_budget
@@ -257,7 +258,11 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
                 const budget_amt = stmt.columnInt64(3);
                 const actual_debit = stmt.columnInt64(4);
                 const actual_credit = stmt.columnInt64(5);
-                const actual_net = std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
+                const is_credit_normal = if (stmt.columnText(6)) |nb| std.mem.eql(u8, nb, "credit") else false;
+                const actual_net = if (is_credit_normal)
+                    std.math.sub(i64, actual_credit, actual_debit) catch return error.AmountOverflow
+                else
+                    std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
                 const variance = std.math.sub(i64, actual_net, budget_amt) catch return error.AmountOverflow;
 
                 const row = std.fmt.bufPrint(buf[pos..], "{d},", .{acct_id}) catch return error.InvalidInput;
@@ -292,7 +297,11 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
                 const budget_amt = stmt.columnInt64(3);
                 const actual_debit = stmt.columnInt64(4);
                 const actual_credit = stmt.columnInt64(5);
-                const actual_net = std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
+                const is_credit_normal = if (stmt.columnText(6)) |nb| std.mem.eql(u8, nb, "credit") else false;
+                const actual_net = if (is_credit_normal)
+                    std.math.sub(i64, actual_credit, actual_debit) catch return error.AmountOverflow
+                else
+                    std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
                 const variance = std.math.sub(i64, actual_net, budget_amt) catch return error.AmountOverflow;
 
                 const j1 = std.fmt.bufPrint(buf[pos..], "{{\"account_id\":{d},\"account_number\":\"", .{acct_id}) catch return error.InvalidInput;

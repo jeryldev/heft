@@ -9,6 +9,8 @@ pub const DimensionType = enum {
     department,
     project,
     segment,
+    profit_center,
+    fund,
     custom,
 
     pub fn toString(self: DimensionType) []const u8 {
@@ -22,6 +24,8 @@ pub const DimensionType = enum {
             .{ "department", DimensionType.department },
             .{ "project", DimensionType.project },
             .{ "segment", DimensionType.segment },
+            .{ "profit_center", DimensionType.profit_center },
+            .{ "fund", DimensionType.fund },
             .{ "custom", DimensionType.custom },
         };
         inline for (map) |entry| {
@@ -109,6 +113,10 @@ pub const Dimension = struct {
 
 pub const DimensionValue = struct {
     pub fn create(database: db.Database, dimension_id: i64, code: []const u8, label: []const u8, performed_by: []const u8) !i64 {
+        return createWithParent(database, dimension_id, code, label, null, performed_by);
+    }
+
+    pub fn createWithParent(database: db.Database, dimension_id: i64, code: []const u8, label: []const u8, parent_value_id: ?i64, performed_by: []const u8) !i64 {
         if (code.len == 0 or label.len == 0) return error.InvalidInput;
 
         const owns_txn = try database.beginTransactionIfNeeded();
@@ -128,14 +136,24 @@ pub const DimensionValue = struct {
             if (std.mem.eql(u8, stmt.columnText(1).?, "archived")) return error.BookArchived;
         }
 
+        if (parent_value_id) |pid| {
+            var pstmt = try database.prepare("SELECT dimension_id FROM ledger_dimension_values WHERE id = ?;");
+            defer pstmt.finalize();
+            try pstmt.bindInt(1, pid);
+            const has_row = try pstmt.step();
+            if (!has_row) return error.NotFound;
+            if (pstmt.columnInt64(0) != dimension_id) return error.InvalidInput;
+        }
+
         var stmt = try database.prepare(
-            \\INSERT INTO ledger_dimension_values (code, label, dimension_id)
-            \\VALUES (?, ?, ?);
+            \\INSERT INTO ledger_dimension_values (code, label, dimension_id, parent_value_id)
+            \\VALUES (?, ?, ?, ?);
         );
         defer stmt.finalize();
         try stmt.bindText(1, code);
         try stmt.bindText(2, label);
         try stmt.bindInt(3, dimension_id);
+        if (parent_value_id) |pid| try stmt.bindInt(4, pid) else try stmt.bindNull(4);
         _ = stmt.step() catch return error.DuplicateNumber;
 
         const id = database.lastInsertRowId();
@@ -997,4 +1015,43 @@ test "dimensionSummary with tax_code dimension produces correct tax totals" {
     const result = try dimensionSummary(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .json);
     try std.testing.expect(std.mem.indexOf(u8, result, "VAT12") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"total_debits\":") != null);
+}
+
+test "create dimension with profit_center type" {
+    const database = try setupTestDb();
+    defer database.close();
+    const dim_id = try Dimension.create(database, 1, "Profit Centers", .profit_center, "admin");
+    try std.testing.expect(dim_id > 0);
+}
+
+test "create dimension with fund type" {
+    const database = try setupTestDb();
+    defer database.close();
+    const dim_id = try Dimension.create(database, 1, "Grant Funds", .fund, "admin");
+    try std.testing.expect(dim_id > 0);
+}
+
+test "create dimension value with parent hierarchy" {
+    const database = try setupTestDb();
+    defer database.close();
+    const dim_id = try Dimension.create(database, 1, "Cost Centers", .cost_center, "admin");
+    const parent_id = try DimensionValue.create(database, dim_id, "CC-100", "Sales", "admin");
+    const child_id = try DimensionValue.createWithParent(database, dim_id, "CC-101", "Sales East", parent_id, "admin");
+    try std.testing.expect(child_id > 0);
+
+    var stmt = try database.prepare("SELECT parent_value_id FROM ledger_dimension_values WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, child_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(parent_id, stmt.columnInt64(0));
+}
+
+test "create dimension value with parent from different dimension rejected" {
+    const database = try setupTestDb();
+    defer database.close();
+    const dim1 = try Dimension.create(database, 1, "Departments", .department, "admin");
+    const dim2 = try Dimension.create(database, 1, "Projects", .project, "admin");
+    const parent = try DimensionValue.create(database, dim1, "DEP-001", "Engineering", "admin");
+    const result = DimensionValue.createWithParent(database, dim2, "PRJ-001", "Alpha", parent, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
 }

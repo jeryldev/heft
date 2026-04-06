@@ -316,7 +316,7 @@ const tables = [_][*:0]const u8{
     \\  name TEXT NOT NULL
     \\    CHECK (length(name) BETWEEN 1 AND 100),
     \\  dimension_type TEXT NOT NULL
-    \\    CHECK (dimension_type IN ('tax_code', 'cost_center', 'department', 'project', 'segment', 'custom')),
+    \\    CHECK (dimension_type IN ('tax_code', 'cost_center', 'department', 'project', 'segment', 'profit_center', 'fund', 'custom')),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
