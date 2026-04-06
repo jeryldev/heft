@@ -14,7 +14,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
@@ -59,6 +59,12 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
     if (from_version < 7) {
         database.exec("ALTER TABLE ledger_accounts ADD COLUMN is_monetary INTEGER NOT NULL DEFAULT 1 CHECK (is_monetary IN (0, 1));") catch |err| {
             std.log.debug("migrate v7: is_monetary column: {s} (expected if exists)", .{@errorName(err)});
+        };
+    }
+
+    if (from_version < 8) {
+        database.exec("ALTER TABLE ledger_books ADD COLUMN fy_start_month INTEGER NOT NULL DEFAULT 1 CHECK (fy_start_month BETWEEN 1 AND 12);") catch |err| {
+            std.log.debug("migrate v8: fy_start_month column: {s} (expected if exists)", .{@errorName(err)});
         };
     }
 
@@ -109,6 +115,8 @@ const tables = [_][*:0]const u8{
     \\  suspense_account_id INTEGER,
     \\  require_approval INTEGER NOT NULL DEFAULT 0
     \\    CHECK (require_approval IN (0, 1)),
+    \\  fy_start_month INTEGER NOT NULL DEFAULT 1
+    \\    CHECK (fy_start_month BETWEEN 1 AND 12),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     \\);

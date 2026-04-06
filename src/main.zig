@@ -337,6 +337,23 @@ pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date:
     };
 }
 
+pub export fn ledger_balance_sheet_auto(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8) ?*heft.report.ReportResult {
+    const h = handle orelse return null;
+    return heft.report.balanceSheetAuto(h.sqlite, book_id, std.mem.span(as_of_date)) catch |err| {
+        setError(mapError(err));
+        return null;
+    };
+}
+
+pub export fn ledger_set_fy_start_month(handle: ?*LedgerDB, book_id: i64, month: i32, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.setFyStartMonth(h.sqlite, book_id, month, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 pub export fn ledger_general_ledger(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
     const h = handle orelse return null;
     return heft.report.generalLedger(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| {
@@ -2341,6 +2358,8 @@ test "C ABI: null handle returns false for all CRUD exports" {
     try std.testing.expect(!ledger_update_book_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_update_account_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_set_account_monetary(null, 1, 0, "admin"));
+    try std.testing.expect(!ledger_set_fy_start_month(null, 1, 4, "admin"));
+    try std.testing.expect(ledger_balance_sheet_auto(null, 1, "2026-01-31") == null);
     try std.testing.expect(!ledger_update_classification_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_update_node_label(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_delete_node(null, 1, "admin"));

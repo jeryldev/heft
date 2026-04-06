@@ -1,6 +1,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 const cache = @import("cache.zig");
+const book_mod = @import("book.zig");
 
 pub const MAX_REPORT_ROWS: usize = 10_000;
 
@@ -559,6 +560,20 @@ const ni_sql: [*:0]const u8 =
     \\GROUP BY a.account_type;
 ;
 
+pub fn balanceSheetAuto(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
+    var fy_month: i32 = 1;
+    {
+        var stmt = try database.prepare("SELECT fy_start_month FROM ledger_books WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        fy_month = stmt.columnInt(0);
+    }
+    const fy_start = book_mod.Book.getFyStartDate(as_of_date, fy_month);
+    return balanceSheet(database, book_id, as_of_date, &fy_start);
+}
+
 pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8, fy_start_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
     try ensureFreshCache(database, book_id,
@@ -873,7 +888,6 @@ pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
-const book_mod = @import("book.zig");
 const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");

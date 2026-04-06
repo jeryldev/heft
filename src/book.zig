@@ -475,6 +475,65 @@ pub const Book = struct {
 
         if (owns_txn) try database.commit();
     }
+
+    pub fn setFyStartMonth(database: db.Database, book_id: i64, month: i32, performed_by: []const u8) !void {
+        if (month < 1 or month > 12) return error.InvalidInput;
+
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        var old_val: i32 = 0;
+        {
+            var stmt = try database.prepare("SELECT status, fy_start_month FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+            old_val = stmt.columnInt(1);
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET fy_start_month = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, @as(i64, @intCast(month)));
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var old_buf: [4]u8 = undefined;
+        var new_buf: [4]u8 = undefined;
+        const old_str = std.fmt.bufPrint(&old_buf, "{d}", .{old_val}) catch unreachable;
+        const new_str = std.fmt.bufPrint(&new_buf, "{d}", .{month}) catch unreachable;
+        try audit.log(database, "book", book_id, "update", "fy_start_month", old_str, new_str, performed_by, book_id);
+
+        if (owns_txn) try database.commit();
+    }
+
+    pub fn getFyStartDate(as_of_date: []const u8, fy_start_month: i32) [10]u8 {
+        var result: [10]u8 = "0000-00-01".*;
+        var year: i32 = 0;
+        for (as_of_date[0..4]) |c| {
+            year = year * 10 + @as(i32, c - '0');
+        }
+        var month: i32 = 0;
+        for (as_of_date[5..7]) |c| {
+            month = month * 10 + @as(i32, c - '0');
+        }
+        if (fy_start_month > 1 and month < fy_start_month) {
+            year -= 1;
+        }
+        const uy: u32 = @intCast(year);
+        const um: u32 = @intCast(fy_start_month);
+        result[0] = @intCast('0' + (uy / 1000) % 10);
+        result[1] = @intCast('0' + (uy / 100) % 10);
+        result[2] = @intCast('0' + (uy / 10) % 10);
+        result[3] = @intCast('0' + uy % 10);
+        result[5] = @intCast('0' + (um / 10) % 10);
+        result[6] = @intCast('0' + um % 10);
+        return result;
+    }
 };
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -1326,4 +1385,70 @@ test "duplicate system account role rejected" {
     const result = Book.setRetainedEarningsAccount(database, 1, is_acct, "admin");
     try std.testing.expectError(error.InvalidInput, result);
     try Book.setRetainedEarningsAccount(database, 1, re, "admin");
+}
+
+test "setFyStartMonth: default is 1 (January)" {
+    const database = try setupTestDb();
+    defer database.close();
+    _ = try Book.create(database, "Test", "PHP", 2, "admin");
+    var stmt = try database.prepare("SELECT fy_start_month FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "setFyStartMonth: set to April (India)" {
+    const database = try setupTestDb();
+    defer database.close();
+    _ = try Book.create(database, "India Book", "INR", 2, "admin");
+    try Book.setFyStartMonth(database, 1, 4, "admin");
+    var stmt = try database.prepare("SELECT fy_start_month FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+}
+
+test "setFyStartMonth: rejects 0 and 13" {
+    const database = try setupTestDb();
+    defer database.close();
+    _ = try Book.create(database, "Test", "PHP", 2, "admin");
+    try std.testing.expectError(error.InvalidInput, Book.setFyStartMonth(database, 1, 0, "admin"));
+    try std.testing.expectError(error.InvalidInput, Book.setFyStartMonth(database, 1, 13, "admin"));
+}
+
+test "setFyStartMonth: rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+    _ = try Book.create(database, "Test", "PHP", 2, "admin");
+    {
+        var stmt = try database.prepare("UPDATE ledger_books SET status = 'archived' WHERE id = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+    }
+    try std.testing.expectError(error.BookArchived, Book.setFyStartMonth(database, 1, 4, "admin"));
+}
+
+test "getFyStartDate: calendar year (Jan start)" {
+    const result = Book.getFyStartDate("2026-06-15", 1);
+    try std.testing.expect(std.mem.eql(u8, &result, "2026-01-01"));
+}
+
+test "getFyStartDate: India April start, date in FY" {
+    const result = Book.getFyStartDate("2026-06-15", 4);
+    try std.testing.expect(std.mem.eql(u8, &result, "2026-04-01"));
+}
+
+test "getFyStartDate: India April start, date before April" {
+    const result = Book.getFyStartDate("2026-02-15", 4);
+    try std.testing.expect(std.mem.eql(u8, &result, "2025-04-01"));
+}
+
+test "getFyStartDate: Australia July start, date in FY" {
+    const result = Book.getFyStartDate("2026-09-30", 7);
+    try std.testing.expect(std.mem.eql(u8, &result, "2026-07-01"));
+}
+
+test "getFyStartDate: Australia July start, date before July" {
+    const result = Book.getFyStartDate("2026-03-31", 7);
+    try std.testing.expect(std.mem.eql(u8, &result, "2025-07-01"));
 }
