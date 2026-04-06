@@ -948,6 +948,102 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
     return result;
 }
 
+pub const CashFlowIndirectResult = struct {
+    arena: std.heap.ArenaAllocator,
+    net_income: i64,
+    adjustments: []ClassifiedRow,
+    operating_total: i64,
+    investing_total: i64,
+    financing_total: i64,
+    net_cash_change: i64,
+
+    pub fn deinit(self: *CashFlowIndirectResult) void {
+        self.arena.deinit();
+        std.heap.c_allocator.destroy(self);
+    }
+};
+
+pub fn cashFlowStatementIndirect(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8, classification_id: i64) !*CashFlowIndirectResult {
+    const result = try std.heap.c_allocator.create(CashFlowIndirectResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    const cache_mod = @import("cache.zig");
+    {
+        var stale_stmt = try database.prepare(
+            \\SELECT p.id FROM ledger_periods p
+            \\JOIN ledger_account_balances ab ON ab.period_id = p.id AND ab.is_stale = 1
+            \\WHERE p.book_id = ? AND p.end_date <= ?
+            \\GROUP BY p.id;
+        );
+        defer stale_stmt.finalize();
+        try stale_stmt.bindInt(1, book_id);
+        try stale_stmt.bindText(2, end_date);
+        var period_ids: [200]i64 = undefined;
+        var pcount: usize = 0;
+        while (try stale_stmt.step()) {
+            if (pcount >= period_ids.len) break;
+            period_ids[pcount] = stale_stmt.columnInt64(0);
+            pcount += 1;
+        }
+        if (pcount > 0) _ = try cache_mod.recalculateStale(database, book_id, period_ids[0..pcount]);
+    }
+
+    var net_income: i64 = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT COALESCE(SUM(ab.debit_sum), 0), COALESCE(SUM(ab.credit_sum), 0)
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND a.account_type IN ('revenue', 'expense')
+            \\  AND p.start_date >= ? AND p.end_date <= ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, start_date);
+        try stmt.bindText(3, end_date);
+        _ = try stmt.step();
+        const total_debits = stmt.columnInt64(0);
+        const total_credits = stmt.columnInt64(1);
+        net_income = std.math.sub(i64, total_credits, total_debits) catch return error.AmountOverflow;
+    }
+    result.net_income = net_income;
+
+    const cf_result = try cashFlowStatement(database, classification_id, start_date, end_date);
+    defer cf_result.deinit();
+
+    var rows = std.ArrayListUnmanaged(ClassifiedRow){};
+    var operating: i64 = 0;
+    var investing: i64 = 0;
+    var financing: i64 = 0;
+
+    for (cf_result.rows) |row| {
+        try rows.append(allocator, row);
+        const net = std.math.sub(i64, row.debit_balance, row.credit_balance) catch return error.AmountOverflow;
+        if (row.depth == 0) {
+            const label = row.label[0..row.label_len];
+            if (std.mem.indexOf(u8, label, "Operating") != null or std.mem.indexOf(u8, label, "operating") != null) {
+                operating = net;
+            } else if (std.mem.indexOf(u8, label, "Investing") != null or std.mem.indexOf(u8, label, "investing") != null) {
+                investing = net;
+            } else if (std.mem.indexOf(u8, label, "Financing") != null or std.mem.indexOf(u8, label, "financing") != null) {
+                financing = net;
+            }
+        }
+    }
+
+    result.adjustments = try rows.toOwnedSlice(allocator);
+    result.operating_total = std.math.add(i64, net_income, operating) catch return error.AmountOverflow;
+    result.investing_total = investing;
+    result.financing_total = financing;
+    result.net_cash_change = std.math.add(i64, result.operating_total, std.math.add(i64, investing, financing) catch return error.AmountOverflow) catch return error.AmountOverflow;
+
+    return result;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
@@ -2180,4 +2276,33 @@ test "ClassificationNode.delete on archived book rejected" {
 
     const result = ClassificationNode.delete(database, group, "admin");
     try std.testing.expectError(error.BookArchived, result);
+}
+
+test "cashFlowStatementIndirect computes net income and activity totals" {
+    const database = try setupTestDb();
+    defer database.close();
+    // setupTestDb creates: 1=Cash, 2=AR, 3=Equipment, 7=Revenue, period_id=1
+
+    const eid1 = try entry_mod.Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 1, 500_000_000_000, 0, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 2, 0, 500_000_000_000, "PHP", money.FX_RATE_SCALE, 7, null, null, "admin");
+    try entry_mod.Entry.post(database, eid1, "admin");
+
+    const eid2 = try entry_mod.Entry.createDraft(database, 1, "PAY-001", "2026-01-20", "2026-01-20", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 1, 300_000_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 2, 0, 300_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, eid2, "admin");
+
+    const cf_cls = try Classification.create(database, 1, "Cash Flow", "cash_flow", "admin");
+    const op_group = try ClassificationNode.addGroup(database, cf_cls, "Operating Activities", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cf_cls, 2, op_group, 0, "admin");
+    const inv_group = try ClassificationNode.addGroup(database, cf_cls, "Investing Activities", null, 1, "admin");
+    _ = try ClassificationNode.addAccount(database, cf_cls, 3, inv_group, 0, "admin");
+    _ = try ClassificationNode.addGroup(database, cf_cls, "Financing Activities", null, 2, "admin");
+
+    const result = try cashFlowStatementIndirect(database, 1, "2026-01-01", "2026-01-31", cf_cls);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(i64, 500_000_000_000), result.net_income);
+    try std.testing.expect(result.adjustments.len > 0);
 }
