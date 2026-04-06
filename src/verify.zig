@@ -284,6 +284,36 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         }
     }
 
+    // Check 11: Reversal pair integrity — reversed entries must have a matching reversal
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entries
+            \\WHERE book_id = ? AND status = 'reversed'
+            \\  AND id NOT IN (SELECT reverses_entry_id FROM ledger_entries WHERE reverses_entry_id IS NOT NULL AND book_id = ?);
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.errors += 1;
+    }
+
+    // Check 12: Zero-total-activity entries (all amounts = 0)
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entries e
+            \\WHERE e.book_id = ? AND e.status = 'posted'
+            \\  AND NOT EXISTS (
+            \\    SELECT 1 FROM ledger_entry_lines el
+            \\    WHERE el.entry_id = e.id AND (el.base_debit_amount > 0 OR el.base_credit_amount > 0)
+            \\  );
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.warnings += 1;
+    }
+
     return result;
 }
 

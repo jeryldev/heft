@@ -7,9 +7,9 @@ pub const insert_sql: [*:0]const u8 =
     \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 ;
 
-const genesis_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+pub const genesis_hash = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn computeHash(prev_hash: []const u8, entity_type: []const u8, entity_id: i64, action: []const u8) [64]u8 {
+pub fn computeHash(prev_hash: []const u8, entity_type: []const u8, entity_id: i64, action: []const u8) [64]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(prev_hash);
     hasher.update(entity_type);
