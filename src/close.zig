@@ -78,7 +78,7 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
 
     _ = try cache.recalculateStale(database, book_id, &.{period_id});
 
-    const MaxAccounts = 500;
+    const MaxAccounts = 2000;
     var account_ids: [MaxAccounts]i64 = undefined;
     var debit_sums: [MaxAccounts]i64 = undefined;
     var credit_sums: [MaxAccounts]i64 = undefined;
@@ -140,13 +140,13 @@ fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_i
     var line_num: i32 = 1;
     for (account_ids, debit_sums, credit_sums) |acct_id, ds, cs| {
         if (ds > cs) {
-            const amount = ds - cs;
+            const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
             line_num += 1;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
             line_num += 1;
         } else if (cs > ds) {
-            const amount = cs - ds;
+            const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
             line_num += 1;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
@@ -168,13 +168,13 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
             if (ds == cs) continue;
             has_lines = true;
             if (cs > ds) {
-                const amount = cs - ds;
+                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
                 line_num += 1;
             } else {
-                const amount = ds - cs;
+                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
                 line_num += 1;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
@@ -198,13 +198,13 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
             if (ds == cs) continue;
             has_lines = true;
             if (ds > cs) {
-                const amount = ds - cs;
+                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
                 line_num += 1;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
             } else {
-                const amount = cs - ds;
+                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
@@ -240,12 +240,12 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
         }
 
         if (is_credit > is_debit) {
-            const amount = is_credit - is_debit;
+            const amount = std.math.sub(i64, is_credit, is_debit) catch return error.AmountOverflow;
             _ = try entry_mod.Entry.addLine(database, entry_id, 1, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
             _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, amount, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
             try entry_mod.Entry.post(database, entry_id, performed_by);
         } else if (is_debit > is_credit) {
-            const amount = is_debit - is_credit;
+            const amount = std.math.sub(i64, is_debit, is_credit) catch return error.AmountOverflow;
             _ = try entry_mod.Entry.addLine(database, entry_id, 1, amount, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
             _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
             try entry_mod.Entry.post(database, entry_id, performed_by);

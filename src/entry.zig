@@ -630,6 +630,19 @@ pub const Entry = struct {
             if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
         }
 
+        // Reject void if entry has non-closed open items (prevents orphaned AR/AP)
+        {
+            var stmt = try database.prepare(
+                \\SELECT COUNT(*) FROM ledger_open_items oi
+                \\JOIN ledger_entry_lines el ON el.id = oi.entry_line_id
+                \\WHERE el.entry_id = ? AND oi.status != 'closed';
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
         // Update entry status
         {
             var stmt = try database.prepare("UPDATE ledger_entries SET status = 'void', void_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
@@ -3334,4 +3347,65 @@ test "self-approval rejected — same user who created cannot approve" {
     const result = Entry.approve(database, 1, "admin");
     try std.testing.expectError(error.ApprovalRequired, result);
     try Entry.approve(database, 1, "manager");
+}
+
+test "void rejects entry with open open items" {
+    const subledger_mod = @import("subledger.zig");
+    const open_item_mod = @import("open_item.zig");
+
+    const database = try setupTestDb();
+    defer database.close();
+
+    const ar = try account_mod.Account.create(database, 1, "1100", "AR", .asset, false, "admin");
+    const group_id = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, ar, null, null, "admin");
+    const customer = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", group_id, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, ar, customer, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    _ = try open_item_mod.createOpenItem(database, line_id, customer, 1_000_000_000_00, "2026-02-14", 1, "admin");
+
+    const result = Entry.voidEntry(database, eid, "Wrong invoice", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "void succeeds after open item is closed" {
+    const subledger_mod = @import("subledger.zig");
+    const open_item_mod = @import("open_item.zig");
+
+    const database = try setupTestDb();
+    defer database.close();
+
+    const ar = try account_mod.Account.create(database, 1, "1100", "AR", .asset, false, "admin");
+    const group_id = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, ar, null, null, "admin");
+    const customer = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", group_id, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "INV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, ar, customer, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    const oi_id = try open_item_mod.createOpenItem(database, line_id, customer, 1_000_000_000_00, "2026-02-14", 1, "admin");
+    try open_item_mod.allocatePayment(database, oi_id, 1_000_000_000_00, "admin");
+
+    try Entry.voidEntry(database, eid, "Correction after payment", "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, eid);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("void", stmt.columnText(0).?);
+}
+
+test "void succeeds when entry has no open items" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const eid = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+    try Entry.voidEntry(database, eid, "No open items", "admin");
 }

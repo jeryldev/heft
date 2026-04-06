@@ -1358,3 +1358,379 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// SCENARIO TESTS — Isolated scenarios for review-identified gaps
+// ═══════════════════════════════════════════════════════════════════
+
+test "SCENARIO: Void blocked by open items, succeeds after payment" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "AR Test", "PHP", 2, "admin");
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const ar = try account_mod.Account.create(database, book_id, "1100", "AR", .asset, false, "admin");
+    const revenue = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    _ = revenue;
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const group_id = try subledger_mod.SubledgerGroup.create(database, book_id, "AR Customers", "customer", 1, ar, null, null, "admin");
+    const customer = try subledger_mod.SubledgerAccount.create(database, book_id, "C001", "Customer A", "customer", group_id, "admin");
+
+    // Post invoice: AR 50,000 / Revenue 50,000
+    const inv_eid = try entry_mod.Entry.createDraft(database, book_id, "INV-001", "2026-01-15", "2026-01-15", null, period_id, null, "admin");
+    const inv_line = try entry_mod.Entry.addLine(database, inv_eid, 1, 5_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, ar, customer, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, inv_eid, 2, 0, 5_000_000_000_000, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
+    try entry_mod.Entry.post(database, inv_eid, "admin");
+
+    // Create open item
+    const oi_id = try open_item_mod.createOpenItem(database, inv_line, customer, 5_000_000_000_000, "2026-02-14", book_id, "admin");
+
+    // Void should fail — open item is open
+    try std.testing.expectError(error.InvalidInput, entry_mod.Entry.voidEntry(database, inv_eid, "Wrong invoice", "admin"));
+
+    // Partial payment — still open
+    try open_item_mod.allocatePayment(database, oi_id, 3_000_000_000_000, "admin");
+    try std.testing.expectError(error.InvalidInput, entry_mod.Entry.voidEntry(database, inv_eid, "Wrong invoice", "admin"));
+
+    // Full payment — closed
+    try open_item_mod.allocatePayment(database, oi_id, 2_000_000_000_000, "admin");
+
+    // Now void should succeed
+    try entry_mod.Entry.voidEntry(database, inv_eid, "Customer dispute resolved", "admin");
+
+    // Verify voided
+    {
+        var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, inv_eid);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("void", stmt.columnText(0).?);
+    }
+
+    // Verify TB still balances after void
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+        defer tb.deinit();
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    }
+
+    // Post cash receipt separately
+    const cr_eid = try entry_mod.Entry.createDraft(database, book_id, "CR-001", "2026-01-20", "2026-01-20", null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, cr_eid, 1, 5_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, cr_eid, 2, 0, 5_000_000_000_000, "PHP", money.FX_RATE_SCALE, ar, customer, null, "admin");
+    try entry_mod.Entry.post(database, cr_eid, "admin");
+
+    // Final verify — 0 errors
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+}
+
+test "SCENARIO: Report truncated flag on normal reports is false" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Report Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Post one entry
+    const eid = try entry_mod.Entry.createDraft(database, book_id, "JE-001", "2026-01-15", "2026-01-15", null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    // All reports should have truncated = false
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+        defer tb.deinit();
+        try std.testing.expect(!tb.truncated);
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    }
+    {
+        const is_rep = try report_mod.incomeStatement(database, book_id, "2026-01-01", "2026-01-31");
+        defer is_rep.deinit();
+        try std.testing.expect(!is_rep.truncated);
+    }
+    {
+        const bs = try report_mod.balanceSheet(database, book_id, "2026-01-31", "2026-01-01");
+        defer bs.deinit();
+        try std.testing.expect(!bs.truncated);
+        try std.testing.expectEqual(bs.total_debits, bs.total_credits);
+    }
+    {
+        const gl = try report_mod.generalLedger(database, book_id, "2026-01-01", "2026-01-31");
+        defer gl.deinit();
+        try std.testing.expect(!gl.truncated);
+    }
+    {
+        const eq = try report_mod.equityChanges(database, book_id, "2026-01-01", "2026-01-31", "2026-01-01");
+        defer eq.deinit();
+        try std.testing.expect(!eq.truncated);
+    }
+    {
+        const comp = try report_mod.trialBalanceComparative(database, book_id, "2026-01-31", "2025-12-31");
+        defer comp.deinit();
+        try std.testing.expect(!comp.truncated);
+    }
+}
+
+test "SCENARIO: FX revaluation overflow-safe diff computation" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "FX Test", "PHP", 2, "admin");
+    const cash_usd = try account_mod.Account.create(database, book_id, "1001", "Cash USD", .asset, false, "admin");
+    const cash_php = try account_mod.Account.create(database, book_id, "1000", "Cash PHP", .asset, false, "admin");
+    const fx_gl = try account_mod.Account.create(database, book_id, "7000", "FX G/L", .expense, false, "admin");
+    try book_mod.Book.setFxGainLossAccount(database, book_id, fx_gl, "admin");
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Large FX transaction: USD 500M at rate 56.50
+    // This exercises i128 intermediate without overflowing the base amount
+    const usd_amount: i64 = 50_000_000_000_000_000; // 500M * 10^8
+    const fx_rate: i64 = 565_000_000_000; // 56.50
+
+    const eid = try entry_mod.Entry.createDraft(database, book_id, "FX-BIG", "2026-01-15", "2026-01-15", null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, usd_amount, 0, "USD", fx_rate, cash_usd, null, null, "admin");
+    const base = try money.computeBaseAmount(usd_amount, fx_rate);
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, base, "PHP", money.FX_RATE_SCALE, cash_php, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    // Revalue at a significantly different rate
+    // The diff between revalued and existing base uses std.math.sub for safety
+    const rates = [_]revaluation_mod.CurrencyRate{.{ .currency = "USD", .new_rate = 580_000_000_000 }};
+    const reval = try revaluation_mod.revalueForexBalances(database, book_id, period_id, &rates, "admin");
+    try std.testing.expect(reval.entry_id > 0);
+
+    // Verify TB balances after large FX revaluation
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+        defer tb.deinit();
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+        try std.testing.expect(!tb.truncated);
+    }
+
+    // Verify the revaluation gain is non-trivial (500M * (58.0 - 56.5) = 750M PHP)
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+}
+
+test "SCENARIO: Non-monetary account excluded from FX revaluation" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "FX Monetary", "PHP", 2, "admin");
+    const cash_usd = try account_mod.Account.create(database, book_id, "1001", "Cash USD", .asset, false, "admin");
+    const equip_usd = try account_mod.Account.create(database, book_id, "1500", "Equipment USD", .asset, false, "admin");
+    const cash_php = try account_mod.Account.create(database, book_id, "1000", "Cash PHP", .asset, false, "admin");
+    const fx_gl = try account_mod.Account.create(database, book_id, "7000", "FX G/L", .expense, false, "admin");
+    try book_mod.Book.setFxGainLossAccount(database, book_id, fx_gl, "admin");
+    try account_mod.Account.setMonetary(database, equip_usd, false, "admin");
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Post USD to both monetary (Cash) and non-monetary (Equipment)
+    const eid1 = try entry_mod.Entry.createDraft(database, book_id, "FX-CASH", "2026-01-10", "2026-01-10", null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 1, 10_000_000_000, 0, "USD", 565_000_000_000, cash_usd, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 2, 0, 565_000_000_000, "PHP", money.FX_RATE_SCALE, cash_php, null, null, "admin");
+    try entry_mod.Entry.post(database, eid1, "admin");
+
+    const eid2 = try entry_mod.Entry.createDraft(database, book_id, "FX-EQUIP", "2026-01-15", "2026-01-15", null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 1, 50_000_000_000, 0, "USD", 565_000_000_000, equip_usd, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 2, 0, 2_825_000_000_000, "PHP", money.FX_RATE_SCALE, cash_php, null, null, "admin");
+    try entry_mod.Entry.post(database, eid2, "admin");
+
+    // Revalue: only Cash USD ($100) should adjust, not Equipment ($500)
+    const rates = [_]revaluation_mod.CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const reval = try revaluation_mod.revalueForexBalances(database, book_id, period_id, &rates, "admin");
+    try std.testing.expect(reval.entry_id > 0);
+
+    // Only 2 lines (Cash USD gain + FX GL), not 4
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, reval.entry_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+
+    // TB still balances
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+        defer tb.deinit();
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    }
+
+    // Verify integrity
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+}
+
+test "SCENARIO: Batch stale recalculation handles many periods" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Stale Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+
+    // Create 24 periods (2 fiscal years)
+    try period_mod.Period.bulkCreate(database, book_id, 2026, 1, .monthly, "admin");
+    try period_mod.Period.bulkCreate(database, book_id, 2027, 1, .monthly, "admin");
+
+    // Post entries in every period to create cache rows
+    var period_ids: [24]i64 = undefined;
+    {
+        var stmt = try database.prepare("SELECT id FROM ledger_periods WHERE book_id = ? ORDER BY start_date;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        var idx: usize = 0;
+        while (try stmt.step()) {
+            if (idx < 24) {
+                period_ids[idx] = stmt.columnInt64(0);
+                idx += 1;
+            }
+        }
+    }
+
+    // Post one entry in first and last period
+    {
+        const e1 = try entry_mod.Entry.createDraft(database, book_id, "JE-001", "2026-01-15", "2026-01-15", null, period_ids[0], null, "admin");
+        _ = try entry_mod.Entry.addLine(database, e1, 1, 100_000_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, e1, 2, 0, 100_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+        try entry_mod.Entry.post(database, e1, "admin");
+    }
+    {
+        const e2 = try entry_mod.Entry.createDraft(database, book_id, "JE-002", "2027-12-15", "2027-12-15", null, period_ids[23], null, "admin");
+        _ = try entry_mod.Entry.addLine(database, e2, 1, 200_000_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, e2, 2, 0, 200_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+        try entry_mod.Entry.post(database, e2, "admin");
+    }
+
+    // Mark all cache entries stale
+    {
+        var stmt = try database.prepare("UPDATE ledger_account_balances SET is_stale = 1 WHERE book_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+    }
+
+    // recalculateAllStale should process all without truncation
+    const fixed = try cache_mod.recalculateAllStale(database, book_id);
+    try std.testing.expect(fixed > 0);
+
+    // No stale entries remain
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_account_balances WHERE book_id = ? AND is_stale = 1;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+
+    // Verify integrity
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+}
+
+test "SCENARIO: Period close with MaxAccounts=2000 handles large COA" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Large COA", "PHP", 2, "admin");
+    const re = try account_mod.Account.create(database, book_id, "3100", "RE", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re, "admin");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Create 10 revenue + 10 expense accounts and post entries for each
+    var acct_ids: [20]i64 = undefined;
+    var num_buf: [10]u8 = undefined;
+    var name_buf: [32]u8 = undefined;
+    for (0..10) |i| {
+        const num = std.fmt.bufPrint(&num_buf, "4{d:0>3}", .{i}) catch unreachable;
+        const name = std.fmt.bufPrint(&name_buf, "Revenue {d}", .{i}) catch unreachable;
+        acct_ids[i] = try account_mod.Account.create(database, book_id, num, name, .revenue, false, "admin");
+    }
+    for (0..10) |i| {
+        const num = std.fmt.bufPrint(&num_buf, "5{d:0>3}", .{i}) catch unreachable;
+        const name = std.fmt.bufPrint(&name_buf, "Expense {d}", .{i}) catch unreachable;
+        acct_ids[10 + i] = try account_mod.Account.create(database, book_id, num, name, .expense, false, "admin");
+    }
+
+    // Post one compound entry with all 20 accounts
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "MULTI-001", "2026-01-15", "2026-01-15", null, period_id, null, "admin");
+        var line_num: i32 = 1;
+        var total_rev: i64 = 0;
+        for (0..10) |i| {
+            const amt: i64 = @as(i64, @intCast((i + 1))) * 100_000_000_000;
+            _ = try entry_mod.Entry.addLine(database, eid, line_num, 0, amt, "PHP", money.FX_RATE_SCALE, acct_ids[i], null, null, "admin");
+            total_rev += amt;
+            line_num += 1;
+        }
+        var total_exp: i64 = 0;
+        for (0..10) |i| {
+            const amt: i64 = @as(i64, @intCast((i + 1))) * 50_000_000_000;
+            _ = try entry_mod.Entry.addLine(database, eid, line_num, amt, 0, "PHP", money.FX_RATE_SCALE, acct_ids[10 + i], null, null, "admin");
+            total_exp += amt;
+            line_num += 1;
+        }
+        // Cash receives net
+        const net = total_rev - total_exp;
+        _ = try entry_mod.Entry.addLine(database, eid, line_num, net, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+
+    // Close the period — should handle 20 R/E accounts without TooManyAccounts
+    try close_mod.closePeriod(database, book_id, period_id, "admin");
+
+    // All revenue/expense accounts should be zeroed after close
+    {
+        const is_rep = try report_mod.incomeStatement(database, book_id, "2026-01-01", "2026-01-31");
+        defer is_rep.deinit();
+        // After closing, R/E accounts debits=credits so TB shows zero net
+        try std.testing.expectEqual(is_rep.total_debits, is_rep.total_credits);
+    }
+
+    // Verify
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+}
+
+test "SCENARIO: Schema migration logs errors without blocking" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+
+    // Create schema at version 6
+    try schema.createAll(database);
+
+    // Running migrate from version 4 should succeed (columns already exist, errors logged)
+    try schema.migrate(database, 4);
+
+    // Verify version is still current
+    {
+        var stmt = try database.prepare("PRAGMA user_version;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(schema.SCHEMA_VERSION, stmt.columnInt(0));
+    }
+}

@@ -2,6 +2,8 @@ const std = @import("std");
 const db = @import("db.zig");
 const cache = @import("cache.zig");
 
+pub const MAX_REPORT_ROWS: usize = 10_000;
+
 fn ensureFreshCache(database: db.Database, book_id: i64, sql: [*:0]const u8, binds: anytype) !void {
     var stmt = try database.prepare(sql);
     defer stmt.finalize();
@@ -16,9 +18,12 @@ fn ensureFreshCache(database: db.Database, book_id: i64, sql: [*:0]const u8, bin
     var period_ids: [200]i64 = undefined;
     var count: usize = 0;
     while (try stmt.step()) {
-        if (count >= period_ids.len) break;
         period_ids[count] = stmt.columnInt64(0);
         count += 1;
+        if (count >= period_ids.len) {
+            _ = try cache.recalculateStale(database, book_id, period_ids[0..count]);
+            count = 0;
+        }
     }
     if (count > 0) {
         _ = try cache.recalculateStale(database, book_id, period_ids[0..count]);
@@ -43,6 +48,7 @@ pub const ReportResult = struct {
     total_debits: i64,
     total_credits: i64,
     decimal_places: u8,
+    truncated: bool = false,
 
     pub fn deinit(self: *ReportResult) void {
         self.arena.deinit();
@@ -80,6 +86,7 @@ pub const LedgerResult = struct {
     total_debits: i64,
     total_credits: i64,
     decimal_places: u8,
+    truncated: bool = false,
 
     pub fn deinit(self: *LedgerResult) void {
         self.arena.deinit();
@@ -110,6 +117,7 @@ pub const ComparativeReportResult = struct {
     current_total_credits: i64,
     prior_total_debits: i64,
     prior_total_credits: i64,
+    truncated: bool = false,
 
     pub fn deinit(self: *ComparativeReportResult) void {
         self.arena.deinit();
@@ -134,6 +142,7 @@ pub const EquityResult = struct {
     net_income: i64,
     total_opening: i64,
     total_closing: i64,
+    truncated: bool = false,
 
     pub fn deinit(self: *EquityResult) void {
         self.arena.deinit();
@@ -201,8 +210,10 @@ fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, 
         total_debits = std.math.add(i64, total_debits, row.debit_amount) catch return error.AmountOverflow;
         total_credits = std.math.add(i64, total_credits, row.credit_amount) catch return error.AmountOverflow;
         try rows.append(allocator, row);
+        if (rows.items.len >= MAX_REPORT_ROWS) break;
     }
 
+    result.truncated = rows.items.len >= MAX_REPORT_ROWS;
     result.rows = try rows.toOwnedSlice(allocator);
     result.opening_balance = 0;
     result.closing_balance = running;
@@ -264,8 +275,10 @@ fn buildReportResult(database: db.Database, sql: [*:0]const u8, binds: anytype) 
         total_debits = std.math.add(i64, total_debits, row.debit_balance) catch return error.AmountOverflow;
         total_credits = std.math.add(i64, total_credits, row.credit_balance) catch return error.AmountOverflow;
         try rows.append(allocator, row);
+        if (rows.items.len >= MAX_REPORT_ROWS) break;
     }
 
+    result.truncated = rows.items.len >= MAX_REPORT_ROWS;
     result.rows = try rows.toOwnedSlice(allocator);
     result.total_debits = total_debits;
     result.total_credits = total_credits;
@@ -489,8 +502,10 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
         total_debits = std.math.add(i64, total_debits, row.debit_balance) catch return error.AmountOverflow;
         total_credits = std.math.add(i64, total_credits, row.credit_balance) catch return error.AmountOverflow;
         try rows.append(allocator, row);
+        if (rows.items.len >= MAX_REPORT_ROWS) break;
     }
 
+    result.truncated = rows.items.len >= MAX_REPORT_ROWS;
     result.rows = try rows.toOwnedSlice(allocator);
     result.total_debits = total_debits;
     result.total_credits = total_credits;
@@ -671,9 +686,11 @@ fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeR
         comp_row.variance_credit = std.math.sub(i64, comp_row.current_credit, comp_row.prior_credit) catch return error.AmountOverflow;
 
         try rows.append(allocator, comp_row);
+        if (rows.items.len >= MAX_REPORT_ROWS) break;
     }
 
     for (prior.rows) |prow| {
+        if (rows.items.len >= MAX_REPORT_ROWS) break;
         if (used_prior.get(prow.account_id) == null) {
             var comp_row = std.mem.zeroes(ComparativeReportRow);
             comp_row.account_id = prow.account_id;
@@ -691,6 +708,7 @@ fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeR
         }
     }
 
+    result.truncated = rows.items.len >= MAX_REPORT_ROWS;
     result.rows = try rows.toOwnedSlice(allocator);
     result.current_total_debits = current.total_debits;
     result.current_total_credits = current.total_credits;
@@ -810,6 +828,7 @@ pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8
         total_closing = std.math.add(i64, total_closing, row.closing_balance) catch return error.AmountOverflow;
 
         try rows.append(allocator, row);
+        if (rows.items.len >= MAX_REPORT_ROWS) break;
     }
 
     var net_income: i64 = 0;
@@ -843,6 +862,7 @@ pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8
         }
     }
 
+    result.truncated = rows.items.len >= MAX_REPORT_ROWS;
     result.rows = try rows.toOwnedSlice(allocator);
     result.net_income = net_income;
     result.total_opening = total_opening;
@@ -2438,4 +2458,39 @@ test "equity changes: nonexistent book returns NotFound" {
 
     const result = equityChanges(database, 999, "2026-01-01", "2026-01-31", "2026-01-01");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "truncated flag is false for small result sets" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 2 }});
+
+    const tb = try trialBalance(database, 1, "2026-01-31");
+    defer tb.deinit();
+    try std.testing.expect(!tb.truncated);
+
+    const is = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
+    defer is.deinit();
+    try std.testing.expect(!is.truncated);
+
+    const gl = try generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer gl.deinit();
+    try std.testing.expect(!gl.truncated);
+
+    const al = try accountLedger(database, 1, 1, "2026-01-01", "2026-01-31");
+    defer al.deinit();
+    try std.testing.expect(!al.truncated);
+
+    const jr = try journalRegister(database, 1, "2026-01-01", "2026-01-31");
+    defer jr.deinit();
+    try std.testing.expect(!jr.truncated);
+
+    const eq = try equityChanges(database, 1, "2026-01-01", "2026-01-31", "2026-01-01");
+    defer eq.deinit();
+    try std.testing.expect(!eq.truncated);
+}
+
+test "MAX_REPORT_ROWS constant is 10000" {
+    try std.testing.expectEqual(@as(usize, 10_000), MAX_REPORT_ROWS);
 }

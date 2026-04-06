@@ -217,6 +217,10 @@ pub export fn ledger_create_draft(handle: ?*LedgerDB, book_id: i64, document_num
 
 pub export fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, counterparty_id: i64, description: ?[*:0]const u8, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return -1;
+    if (counterparty_id < 0) {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    }
     const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;
     const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
     return heft.entry.Entry.addLine(h.sqlite, entry_id, line_number, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, cp, desc, std.mem.span(performed_by)) catch |err| {
@@ -677,6 +681,15 @@ pub export fn ledger_update_account_name(handle: ?*LedgerDB, account_id: i64, ne
     return true;
 }
 
+pub export fn ledger_set_account_monetary(handle: ?*LedgerDB, account_id: i64, is_monetary: i32, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.account.Account.setMonetary(h.sqlite, account_id, is_monetary != 0, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 pub export fn ledger_update_classification_name(handle: ?*LedgerDB, classification_id: i64, new_name: [*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.classification.Classification.updateName(h.sqlite, classification_id, std.mem.span(new_name), std.mem.span(performed_by)) catch |err| {
@@ -1068,6 +1081,10 @@ pub export fn ledger_aged_subledger(handle: ?*LedgerDB, book_id: i64, group_id: 
 
 pub export fn ledger_edit_line_full(handle: ?*LedgerDB, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, counterparty_id: i64, description: ?[*:0]const u8, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
+    if (counterparty_id < 0) {
+        setError(mapError(error.InvalidInput));
+        return false;
+    }
     const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;
     const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
     heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, cp, desc, std.mem.span(performed_by)) catch |err| {
@@ -2198,6 +2215,17 @@ test "C ABI: ledger_update_account_name" {
     }
 }
 
+test "C ABI: ledger_set_account_monetary" {
+    defer cleanupTestFile("test-cabi-monetary.ledger");
+    const handle = ledger_open("test-cabi-monetary.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1500", "Equipment", "asset", 0, "admin");
+        try std.testing.expect(ledger_set_account_monetary(h, 1, 0, "admin"));
+    }
+}
+
 test "C ABI: ledger_delete_node" {
     defer cleanupTestFile("test-cabi-delnode.ledger");
     const handle = ledger_open("test-cabi-delnode.ledger");
@@ -2312,6 +2340,7 @@ test "C ABI: null handle returns -1 for all query exports" {
 test "C ABI: null handle returns false for all CRUD exports" {
     try std.testing.expect(!ledger_update_book_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_update_account_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_set_account_monetary(null, 1, 0, "admin"));
     try std.testing.expect(!ledger_update_classification_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_update_node_label(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_delete_node(null, 1, "admin"));

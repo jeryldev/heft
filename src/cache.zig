@@ -69,23 +69,29 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
 }
 
 pub fn recalculateAllStale(database: db.Database, book_id: i64) !u32 {
-    var period_stmt = try database.prepare(
-        \\SELECT DISTINCT period_id FROM ledger_account_balances
-        \\WHERE book_id = ? AND is_stale = 1;
-    );
-    defer period_stmt.finalize();
-    try period_stmt.bindInt(1, book_id);
+    var total_fixed: u32 = 0;
 
-    var period_ids: [200]i64 = undefined; // Max 200 stale periods per recalculation. Silent truncation if exceeded.
-    var period_count: usize = 0;
-    while (try period_stmt.step()) {
-        if (period_count >= period_ids.len) break;
-        period_ids[period_count] = period_stmt.columnInt64(0);
-        period_count += 1;
+    while (true) {
+        var period_stmt = try database.prepare(
+            \\SELECT DISTINCT period_id FROM ledger_account_balances
+            \\WHERE book_id = ? AND is_stale = 1
+            \\LIMIT 200;
+        );
+        defer period_stmt.finalize();
+        try period_stmt.bindInt(1, book_id);
+
+        var period_ids: [200]i64 = undefined;
+        var period_count: usize = 0;
+        while (try period_stmt.step()) {
+            period_ids[period_count] = period_stmt.columnInt64(0);
+            period_count += 1;
+        }
+
+        if (period_count == 0) break;
+        total_fixed += try recalculateStale(database, book_id, period_ids[0..period_count]);
     }
 
-    if (period_count == 0) return 0;
-    return try recalculateStale(database, book_id, period_ids[0..period_count]);
+    return total_fixed;
 }
 
 // ── Tests ───────────────────────────────────────────────────────

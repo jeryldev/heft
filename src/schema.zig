@@ -14,15 +14,19 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
     errdefer if (owns_txn) database.rollback();
 
     if (from_version < 5) {
-        database.exec("ALTER TABLE ledger_audit_log ADD COLUMN hash_chain TEXT;") catch {};
-        database.exec("ALTER TABLE ledger_dimension_values ADD COLUMN parent_value_id INTEGER REFERENCES ledger_dimension_values(id);") catch {};
+        database.exec("ALTER TABLE ledger_audit_log ADD COLUMN hash_chain TEXT;") catch |err| {
+            std.log.debug("migrate v5: hash_chain column: {s} (expected if exists)", .{@errorName(err)});
+        };
+        database.exec("ALTER TABLE ledger_dimension_values ADD COLUMN parent_value_id INTEGER REFERENCES ledger_dimension_values(id);") catch |err| {
+            std.log.debug("migrate v5: parent_value_id column: {s} (expected if exists)", .{@errorName(err)});
+        };
     }
 
     if (from_version < 6) {
@@ -41,11 +45,21 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
             \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
             \\  UNIQUE (entry_line_id)
             \\);
-        ) catch {};
+        ) catch |err| {
+            std.log.debug("migrate v6: open_items table: {s}", .{@errorName(err)});
+        };
         database.exec(
             \\CREATE INDEX IF NOT EXISTS idx_open_items_counterparty
             \\  ON ledger_open_items (counterparty_id, status, due_date);
-        ) catch {};
+        ) catch |err| {
+            std.log.debug("migrate v6: open_items index: {s}", .{@errorName(err)});
+        };
+    }
+
+    if (from_version < 7) {
+        database.exec("ALTER TABLE ledger_accounts ADD COLUMN is_monetary INTEGER NOT NULL DEFAULT 1 CHECK (is_monetary IN (0, 1));") catch |err| {
+            std.log.debug("migrate v7: is_monetary column: {s} (expected if exists)", .{@errorName(err)});
+        };
     }
 
     const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
@@ -117,6 +131,8 @@ const tables = [_][*:0]const u8{
     \\    CHECK (normal_balance IN ('debit', 'credit')),
     \\  is_contra INTEGER NOT NULL DEFAULT 0
     \\    CHECK (is_contra IN (0, 1)),
+    \\  is_monetary INTEGER NOT NULL DEFAULT 1
+    \\    CHECK (is_monetary IN (0, 1)),
     \\  status TEXT NOT NULL DEFAULT 'active'
     \\    CHECK (status IN ('active', 'inactive', 'archived')),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),

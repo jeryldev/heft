@@ -217,6 +217,55 @@ pub const Account = struct {
 
         if (owns_txn) try database.commit();
     }
+
+    pub fn setMonetary(database: db.Database, account_id: i64, is_monetary: bool, performed_by: []const u8) !void {
+        var acct_book_id: i64 = 0;
+        var old_value: i64 = 0;
+
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT is_monetary, book_id FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            old_value = stmt.columnInt64(0);
+            acct_book_id = stmt.columnInt64(1);
+        }
+
+        {
+            const book_mod = @import("book.zig");
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, acct_book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            const bstatus = book_mod.BookStatus.fromString(bs_stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (bstatus == .archived) return error.BookArchived;
+        }
+
+        const new_value: i64 = if (is_monetary) 1 else 0;
+        if (old_value == new_value) {
+            if (owns_txn) try database.commit();
+            return;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_accounts SET is_monetary = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, new_value);
+            try stmt.bindInt(2, account_id);
+            _ = try stmt.step();
+        }
+
+        const old_str = if (old_value == 1) "1" else "0";
+        const new_str = if (is_monetary) "1" else "0";
+        try audit.log(database, "account", account_id, "update", "is_monetary", old_str, new_str, performed_by, acct_book_id);
+
+        if (owns_txn) try database.commit();
+    }
 };
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -572,4 +621,85 @@ test "updateName rejects archived account" {
     try Account.updateStatus(database, 1, .archived, "admin");
     const result = Account.updateName(database, 1, "New", "admin");
     try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setMonetary: default is monetary (1)" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    var stmt = try database.prepare("SELECT is_monetary FROM ledger_accounts WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setMonetary: set to non-monetary" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Equipment", .asset, false, "admin");
+    try Account.setMonetary(database, 1, false, "admin");
+
+    var stmt = try database.prepare("SELECT is_monetary FROM ledger_accounts WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+}
+
+test "setMonetary: audit log created" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Equipment", .asset, false, "admin");
+    try Account.setMonetary(database, 1, false, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT field_changed, old_value, new_value FROM ledger_audit_log
+        \\WHERE entity_type = 'account' AND entity_id = 1 AND action = 'update'
+        \\  AND field_changed = 'is_monetary';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expect(std.mem.eql(u8, stmt.columnText(0).?, "is_monetary"));
+    try std.testing.expect(std.mem.eql(u8, stmt.columnText(1).?, "1"));
+    try std.testing.expect(std.mem.eql(u8, stmt.columnText(2).?, "0"));
+}
+
+test "setMonetary: no-op when already same value" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try Account.setMonetary(database, 1, true, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'account' AND entity_id = 1 AND field_changed = 'is_monetary';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "setMonetary: rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    {
+        var stmt = try database.prepare("UPDATE ledger_books SET status = 'archived' WHERE id = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+    }
+    const result = Account.setMonetary(database, 1, false, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setMonetary: rejects nonexistent account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Account.setMonetary(database, 999, false, "admin");
+    try std.testing.expectError(error.NotFound, result);
 }

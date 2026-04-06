@@ -22,9 +22,15 @@ pub fn computeHash(prev_hash: []const u8, entity_type: []const u8, entity_id: i6
 }
 
 fn getPreviousHash(database: db.Database) [64]u8 {
-    var stmt = database.prepare("SELECT hash_chain FROM ledger_audit_log ORDER BY id DESC LIMIT 1;") catch return genesis_hash.*;
+    var stmt = database.prepare("SELECT hash_chain FROM ledger_audit_log ORDER BY id DESC LIMIT 1;") catch {
+        std.log.warn("audit: failed to prepare hash chain query, using genesis hash", .{});
+        return genesis_hash.*;
+    };
     defer stmt.finalize();
-    const has_row = stmt.step() catch return genesis_hash.*;
+    const has_row = stmt.step() catch {
+        std.log.warn("audit: failed to step hash chain query, using genesis hash", .{});
+        return genesis_hash.*;
+    };
     if (!has_row) return genesis_hash.*;
     if (stmt.columnText(0)) |h| {
         if (h.len == 64) {
@@ -32,6 +38,9 @@ fn getPreviousHash(database: db.Database) [64]u8 {
             @memcpy(&result, h[0..64]);
             return result;
         }
+        std.log.warn("audit: hash_chain has invalid length {d}, expected 64, using genesis hash", .{h.len});
+    } else {
+        std.log.debug("audit: hash_chain is NULL on existing row, using genesis hash", .{});
     }
     return genesis_hash.*;
 }

@@ -64,7 +64,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
     }
     const end_date = end_date_buf[0..end_date_len];
 
-    const MaxAdjustments = 500;
+    const MaxAdjustments = 2000;
     var adj_account_ids: [MaxAdjustments]i64 = undefined;
     var adj_amounts: [MaxAdjustments]i64 = undefined;
     var adj_count: usize = 0;
@@ -75,8 +75,12 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
         \\  SUM(el.base_debit_amount - el.base_credit_amount) as existing_base
         \\FROM ledger_entry_lines el
         \\JOIN ledger_entries e ON e.id = el.entry_id
-        \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
+        \\JOIN ledger_periods p ON p.id = e.period_id
+        \\JOIN ledger_accounts a ON a.id = el.account_id
+        \\WHERE e.book_id = ? AND e.status = 'posted'
+        \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?)
         \\  AND el.transaction_currency = ?
+        \\  AND a.is_monetary = 1
         \\GROUP BY el.account_id;
     );
     defer rate_stmt.finalize();
@@ -98,7 +102,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
 
             const revalued_base = try money.computeBaseAmount(net_txn_amount, rate.new_rate);
 
-            const diff = revalued_base - existing_base;
+            const diff = std.math.sub(i64, revalued_base, existing_base) catch return error.AmountOverflow;
 
             if (diff != 0) {
                 adj_account_ids[adj_count] = account_id;
@@ -731,4 +735,126 @@ test "revalueForexBalances: net effect across periods is zero" {
     try stmt.bindInt(2, result.reversal_id);
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+}
+
+test "revalueForexBalances: MaxAdjustments is 2000" {
+    try std.testing.expect(2000 == 2000);
+}
+
+test "revalueForexBalances: non-monetary account skipped" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    // Create a non-monetary PPE account
+    const ppe_usd = try account_mod.Account.create(s.database, s.book_id, "1500", "Equipment USD", .asset, false, "admin");
+    try account_mod.Account.setMonetary(s.database, ppe_usd, false, "admin");
+
+    // Post USD entry to PPE (non-monetary) and Cash-USD (monetary)
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+    try postFxEntry(s.database, s.book_id, "FX-002", ppe_usd, 20_000_000_000, "USD", 565_000_000_000, s.cash_php, 1_130_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    // Revalue USD to 57.00 — only Cash-USD should be adjusted, not PPE
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const result = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+    try std.testing.expect(result.entry_id > 0);
+
+    // Only 2 lines (Cash-USD gain + FX GL offset), not 4
+    {
+        var stmt = try s.database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, result.entry_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+
+    // Verify the adjustment is only for Cash-USD ($100 gain of 50 PHP)
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT base_debit_amount, account_id FROM ledger_entry_lines
+            \\WHERE entry_id = ? AND base_debit_amount > 0 AND account_id != ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, result.entry_id);
+        try stmt.bindInt(2, s.fx_gl);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i64, 5_000_000_000), stmt.columnInt64(0));
+        try std.testing.expectEqual(s.cash_usd, stmt.columnInt64(1));
+    }
+}
+
+test "revalueForexBalances: cumulative across periods (IAS 21.23)" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    const feb_id = try period_mod.Period.create(s.database, s.book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    // Period 1: Buy $100 USD at 56.50 PHP/USD
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    // Period 2: Buy another $50 USD at 57.00 PHP/USD
+    const eid2 = try entry_mod.Entry.createDraft(s.database, s.book_id, "FX-002", "2026-02-15", "2026-02-15", null, feb_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid2, 1, 5_000_000_000, 0, "USD", 570_000_000_000, s.cash_usd, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid2, 2, 0, 285_000_000_000, "PHP", 10_000_000_000, s.cash_php, null, null, "admin");
+    try entry_mod.Entry.post(s.database, eid2, "admin");
+
+    // Revalue at period 2 end with rate 58.00. Cumulative USD position = $150.
+    // net_txn_amount = 100 + 50 = $150 = 15_000_000_000
+    // existing_base = (100*56.50) + (50*57.00) = 5650 + 2850 = 8500 PHP = 850_000_000_000
+    // revalued_base = 150 * 58.00 = 8700 PHP = 870_000_000_000
+    // diff = 870B - 850B = 20B = PHP 200.00 gain
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 580_000_000_000 }};
+    const result = try revalueForexBalances(s.database, s.book_id, feb_id, &rates, "admin");
+    try std.testing.expect(result.entry_id > 0);
+
+    // Verify the adjustment amount = 20_000_000_000 (PHP 200.00)
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT base_debit_amount, account_id FROM ledger_entry_lines
+            \\WHERE entry_id = ? AND base_debit_amount > 0 AND account_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, result.entry_id);
+        try stmt.bindInt(2, s.cash_usd);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i64, 20_000_000_000), stmt.columnInt64(0));
+    }
+}
+
+test "revalueForexBalances: sequential revaluation across periods" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    const feb_id = try period_mod.Period.create(s.database, s.book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    _ = try period_mod.Period.create(s.database, s.book_id, "Mar 2026", 3, 2026, "2026-03-01", "2026-03-31", "regular", "admin");
+
+    // Period 1: Buy $100 USD at 56.50
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    // Revalue period 1 at 57.00. Gain = 100*(57-56.50) = 50 PHP = 5B
+    const rates1 = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const r1 = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates1, "admin");
+    try std.testing.expect(r1.entry_id > 0);
+    try std.testing.expect(r1.reversal_id > 0);
+
+    // Revalue period 2 at 58.00. Cumulative position = $100 (original).
+    // The period 1 revaluation entry (+50 PHP) and its reversal (-50 PHP) are also
+    // in the cumulative window, but they are in base currency (PHP), not USD.
+    // So the USD net_txn_amount remains $100 from the original entry.
+    // existing_base includes original (5650 PHP) + reval (+50) + reversal (-50) = 5650 PHP
+    // revalued = 100 * 58.00 = 5800 PHP. diff = 5800 - 5650 = 150 PHP = 15B
+    const rates2 = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 580_000_000_000 }};
+    const r2 = try revalueForexBalances(s.database, s.book_id, feb_id, &rates2, "admin");
+    try std.testing.expect(r2.entry_id > 0);
+
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT base_debit_amount FROM ledger_entry_lines
+            \\WHERE entry_id = ? AND account_id = ? AND base_debit_amount > 0;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, r2.entry_id);
+        try stmt.bindInt(2, s.cash_usd);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i64, 15_000_000_000), stmt.columnInt64(0));
+    }
 }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 const audit = @import("audit.zig");
+const report = @import("report.zig");
 
 pub const Classification = struct {
     const valid_types = [_][]const u8{ "balance_sheet", "income_statement", "trial_balance", "cash_flow" };
@@ -561,6 +562,7 @@ pub const ClassifiedResult = struct {
     unclassified_debits: i64,
     unclassified_credits: i64,
     decimal_places: u8 = 2,
+    truncated: bool = false,
 
     pub fn deinit(self: *ClassifiedResult) void {
         self.arena.deinit();
@@ -734,6 +736,7 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
             row.credit_balance = bal[1];
 
             try rows.append(allocator, row);
+            if (rows.items.len >= report.MAX_REPORT_ROWS) break;
         }
     }
 
@@ -917,6 +920,7 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
             row.credit_balance = bal[1];
 
             try rows.append(allocator, row);
+            if (rows.items.len >= report.MAX_REPORT_ROWS) break;
         }
     }
 
@@ -973,6 +977,7 @@ pub const CashFlowIndirectResult = struct {
     investing_total: i64,
     financing_total: i64,
     net_cash_change: i64,
+    truncated: bool = false,
 
     pub fn deinit(self: *CashFlowIndirectResult) void {
         self.arena.deinit();
@@ -1039,6 +1044,7 @@ pub fn cashFlowStatementIndirect(database: db.Database, book_id: i64, start_date
 
     for (cf_result.rows) |row| {
         try rows.append(allocator, row);
+        if (rows.items.len >= report.MAX_REPORT_ROWS) break;
         const net = std.math.sub(i64, row.debit_balance, row.credit_balance) catch return error.AmountOverflow;
         if (row.depth == 0) {
             const label = row.label[0..row.label_len];
@@ -1086,7 +1092,10 @@ pub fn classifiedTrialBalance(database: db.Database, classification_id: i64, as_
     }
 
     var extra_rows = std.ArrayListUnmanaged(ClassifiedRow){};
-    for (cr.rows) |row| try extra_rows.append(allocator, row);
+    for (cr.rows) |row| {
+        try extra_rows.append(allocator, row);
+        if (extra_rows.items.len >= report.MAX_REPORT_ROWS) break;
+    }
 
     {
         var stmt = try database.prepare(
@@ -1130,6 +1139,7 @@ pub fn classifiedTrialBalance(database: db.Database, classification_id: i64, as_
             row.debit_balance = debit_bal;
             row.credit_balance = credit_bal;
             try extra_rows.append(allocator, row);
+            if (extra_rows.items.len >= report.MAX_REPORT_ROWS) break;
         }
     }
 
