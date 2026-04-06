@@ -3,17 +3,33 @@
  * Copyright (C) 2026 Jeryl Donato Estopace
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * C API header. All functions are thread-unsafe — one handle per thread.
- * SQLite compiled with SQLITE_THREADSAFE=0 (no mutex overhead).
+ * Thread safety:
+ *   NOT thread-safe. One LedgerDB handle per thread. Do not share handles
+ *   across threads. SQLite compiled with SQLITE_THREADSAFE=0 (no mutexes).
+ *   If you need concurrent access, use one handle per thread with separate
+ *   .ledger files, or serialize access with an external mutex.
  *
- * Error handling: functions returning i64 return -1 on error.
- * Functions returning bool return false on error.
- * Functions returning pointers return NULL on error.
- * Call ledger_last_error() for the error code after any failure.
+ * Error handling:
+ *   Functions returning int64_t return -1 on error.
+ *   Functions returning bool return false on error.
+ *   Functions returning pointers return NULL on error.
+ *   Call ledger_last_error() after any failure for the error code.
  *
- * Memory: all amounts are INTEGER scaled by 10^8 (10000.50 = 1000050000000).
- * FX rates are INTEGER scaled by 10^10 (1.0 = 10000000000).
- * Dates are ISO 8601 strings "YYYY-MM-DD". Timestamps are UTC "YYYY-MM-DDTHH:MM:SSZ".
+ * Buffer functions (ledger_list_*, ledger_get_*, ledger_export_*):
+ *   Write JSON or CSV into a caller-provided buffer.
+ *   Return the number of bytes written (NOT null-terminated).
+ *   Return -1 if the buffer is too small or on error.
+ *   Caller must use the returned length to slice the buffer.
+ *
+ * Report functions (ledger_trial_balance, ledger_balance_sheet, etc.):
+ *   Return heap-allocated result pointers. Caller MUST free with the
+ *   matching ledger_free_* function or memory will leak.
+ *
+ * Numeric conventions:
+ *   Amounts:  int64_t scaled by 10^8  (10,000.50 = 1000050000000)
+ *   FX rates: int64_t scaled by 10^10 (1.0 = 10000000000)
+ *   Dates:    "YYYY-MM-DD" (10 chars, NOT null-terminated in buffers)
+ *   Timestamps: "YYYY-MM-DDTHH:MM:SSZ" (UTC)
  */
 
 #ifndef HEFT_H
@@ -25,6 +41,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Engine limits (static allocation bounds) */
+#define HEFT_MAX_REPORT_ROWS   50000  /* max rows in any report result */
+#define HEFT_MAX_ACCOUNTS      2000   /* max accounts per close/revalue operation */
+#define HEFT_AMOUNT_SCALE      100000000LL      /* 10^8: multiply to convert decimal to int */
+#define HEFT_FX_RATE_SCALE     10000000000LL    /* 10^10: multiply to convert FX rate to int */
+#define HEFT_SCHEMA_VERSION    9
 
 /* Opaque handle — one per .ledger file */
 typedef struct LedgerDB LedgerDB;

@@ -643,11 +643,10 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
                 }
 
                 const allocator = result.arena.allocator();
-                const old_rows = result.rows;
-                const new_rows = try allocator.alloc(ReportRow, old_rows.len + 1);
-                @memcpy(new_rows[0..old_rows.len], old_rows);
-                new_rows[old_rows.len] = ni_row;
-                result.rows = new_rows;
+                var rows_list = std.ArrayListUnmanaged(ReportRow){};
+                try rows_list.appendSlice(allocator, result.rows);
+                try rows_list.append(allocator, ni_row);
+                result.rows = try rows_list.toOwnedSlice(allocator);
             }
         }
     }
