@@ -14,7 +14,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
@@ -23,6 +23,29 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
     if (from_version < 5) {
         database.exec("ALTER TABLE ledger_audit_log ADD COLUMN hash_chain TEXT;") catch {};
         database.exec("ALTER TABLE ledger_dimension_values ADD COLUMN parent_value_id INTEGER REFERENCES ledger_dimension_values(id);") catch {};
+    }
+
+    if (from_version < 6) {
+        database.exec(
+            \\CREATE TABLE IF NOT EXISTS ledger_open_items (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  entry_line_id INTEGER NOT NULL REFERENCES ledger_entry_lines(id),
+            \\  counterparty_id INTEGER NOT NULL REFERENCES ledger_subledger_accounts(id),
+            \\  original_amount INTEGER NOT NULL CHECK (original_amount > 0),
+            \\  remaining_amount INTEGER NOT NULL CHECK (remaining_amount >= 0),
+            \\  due_date TEXT CHECK (due_date IS NULL OR length(due_date) = 10),
+            \\  status TEXT NOT NULL DEFAULT 'open'
+            \\    CHECK (status IN ('open', 'partial', 'closed')),
+            \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+            \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            \\  UNIQUE (entry_line_id)
+            \\);
+        ) catch {};
+        database.exec(
+            \\CREATE INDEX IF NOT EXISTS idx_open_items_counterparty
+            \\  ON ledger_open_items (counterparty_id, status, due_date);
+        ) catch {};
     }
 
     const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
@@ -406,6 +429,21 @@ const tables = [_][*:0]const u8{
     \\  hash_chain TEXT
     \\);
     ,
+    \\CREATE TABLE IF NOT EXISTS ledger_open_items (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  entry_line_id INTEGER NOT NULL REFERENCES ledger_entry_lines(id),
+    \\  counterparty_id INTEGER NOT NULL REFERENCES ledger_subledger_accounts(id),
+    \\  original_amount INTEGER NOT NULL CHECK (original_amount > 0),
+    \\  remaining_amount INTEGER NOT NULL CHECK (remaining_amount >= 0),
+    \\  due_date TEXT CHECK (due_date IS NULL OR length(due_date) = 10),
+    \\  status TEXT NOT NULL DEFAULT 'open'
+    \\    CHECK (status IN ('open', 'partial', 'closed')),
+    \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+    \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  UNIQUE (entry_line_id)
+    \\);
+    ,
 };
 
 // ── Indexes (13) ────────────────────────────────────────────────
@@ -464,6 +502,10 @@ const indexes = [_][*:0]const u8{
     // Dimension queries: find lines by dimension value
     \\CREATE INDEX IF NOT EXISTS idx_line_dimensions_value
     \\  ON ledger_line_dimensions (dimension_value_id);
+    ,
+    // Open items: counterparty aging by due date
+    \\CREATE INDEX IF NOT EXISTS idx_open_items_counterparty
+    \\  ON ledger_open_items (counterparty_id, status, due_date);
     ,
 };
 
@@ -528,7 +570,7 @@ const triggers = [_][*:0]const u8{
 
 // ── Tests ───────────────────────────────────────────────────────
 
-test "createAll creates 16 tables" {
+test "createAll creates 17 tables" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -538,10 +580,10 @@ test "createAll creates 16 tables" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 16), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 17), stmt.columnInt(0));
 }
 
-test "createAll creates 13 indexes" {
+test "createAll creates 14 indexes" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -551,7 +593,7 @@ test "createAll creates 13 indexes" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 13), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 14), stmt.columnInt(0));
 }
 
 test "createAll creates transaction history view" {
