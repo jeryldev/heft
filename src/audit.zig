@@ -9,9 +9,12 @@ pub const insert_sql: [*:0]const u8 =
 
 pub const genesis_hash = "0000000000000000000000000000000000000000000000000000000000000000";
 
-pub fn computeHash(prev_hash: []const u8, entity_type: []const u8, entity_id: i64, action: []const u8) [64]u8 {
+pub fn computeHash(prev_hash: []const u8, book_id: i64, entity_type: []const u8, entity_id: i64, action: []const u8) [64]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(prev_hash);
+    var book_buf: [20]u8 = undefined;
+    const book_str = std.fmt.bufPrint(&book_buf, "{d}", .{book_id}) catch unreachable;
+    hasher.update(book_str);
     hasher.update(entity_type);
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{entity_id}) catch unreachable;
@@ -21,12 +24,16 @@ pub fn computeHash(prev_hash: []const u8, entity_type: []const u8, entity_id: i6
     return std.fmt.bytesToHex(digest, .lower);
 }
 
-fn getPreviousHash(database: db.Database) [64]u8 {
-    var stmt = database.prepare("SELECT hash_chain FROM ledger_audit_log ORDER BY id DESC LIMIT 1;") catch {
+fn getPreviousHash(database: db.Database, book_id: i64) [64]u8 {
+    var stmt = database.prepare("SELECT hash_chain FROM ledger_audit_log WHERE book_id = ? ORDER BY id DESC LIMIT 1;") catch {
         std.log.warn("audit: failed to prepare hash chain query, using genesis hash", .{});
         return genesis_hash.*;
     };
     defer stmt.finalize();
+    stmt.bindInt(1, book_id) catch {
+        std.log.warn("audit: failed to bind book_id for hash chain query, using genesis hash", .{});
+        return genesis_hash.*;
+    };
     const has_row = stmt.step() catch {
         std.log.warn("audit: failed to step hash chain query, using genesis hash", .{});
         return genesis_hash.*;
@@ -46,8 +53,8 @@ fn getPreviousHash(database: db.Database) [64]u8 {
 }
 
 fn bindAndStep(database: db.Database, stmt: *db.Statement, entity_type: []const u8, entity_id: i64, action: []const u8, field_changed: ?[]const u8, old_value: ?[]const u8, new_value: ?[]const u8, performed_by: []const u8, book_id: i64) !void {
-    const prev_hash = getPreviousHash(database);
-    const hash = computeHash(&prev_hash, entity_type, entity_id, action);
+    const prev_hash = getPreviousHash(database, book_id);
+    const hash = computeHash(&prev_hash, book_id, entity_type, entity_id, action);
     try stmt.bindText(1, entity_type);
     try stmt.bindInt(2, entity_id);
     try stmt.bindText(3, action);
@@ -328,16 +335,45 @@ test "hash chain populated on every audit insert" {
     try std.testing.expect(!std.mem.eql(u8, &h1_copy, h2));
 }
 
-test "hash chain links from genesis hash" {
+test "hash chain links from genesis hash with book_id" {
     const database = try setupTestDb();
     defer database.close();
-    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
     try log(database, "book", 1, "create", null, null, null, "admin", 1);
     var stmt = try database.prepare("SELECT hash_chain FROM ledger_audit_log WHERE id = 1;");
     defer stmt.finalize();
     _ = try stmt.step();
     var h1_buf: [64]u8 = undefined;
     @memcpy(&h1_buf, stmt.columnText(0).?[0..64]);
-    const expected = computeHash(genesis_hash, "book", 1, "create");
+    const expected = computeHash(genesis_hash, 1, "book", 1, "create");
     try std.testing.expect(std.mem.eql(u8, &h1_buf, &expected));
+}
+
+test "per-book hash chain independence" {
+    const database = try setupTestDb();
+    defer database.close();
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Book 2', 'USD');");
+
+    try log(database, "book", 1, "create", null, null, null, "admin", 1);
+    try log(database, "book", 2, "create", null, null, null, "admin", 2);
+    try log(database, "book", 1, "update", "name", "Old", "New", "admin", 1);
+
+    var stmt = try database.prepare("SELECT hash_chain FROM ledger_audit_log WHERE book_id = 1 ORDER BY id;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    var h1: [64]u8 = undefined;
+    @memcpy(&h1, stmt.columnText(0).?[0..64]);
+    _ = try stmt.step();
+    var h3: [64]u8 = undefined;
+    @memcpy(&h3, stmt.columnText(0).?[0..64]);
+
+    const expected_h3 = computeHash(&h1, 1, "book", 1, "update");
+    try std.testing.expect(std.mem.eql(u8, &h3, &expected_h3));
+
+    var stmt2 = try database.prepare("SELECT hash_chain FROM ledger_audit_log WHERE book_id = 2 ORDER BY id;");
+    defer stmt2.finalize();
+    _ = try stmt2.step();
+    var h2: [64]u8 = undefined;
+    @memcpy(&h2, stmt2.columnText(0).?[0..64]);
+    const expected_h2 = computeHash(genesis_hash, 2, "book", 2, "create");
+    try std.testing.expect(std.mem.eql(u8, &h2, &expected_h2));
 }

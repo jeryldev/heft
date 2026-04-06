@@ -3,7 +3,7 @@ const db = @import("db.zig");
 const cache = @import("cache.zig");
 const book_mod = @import("book.zig");
 
-pub const MAX_REPORT_ROWS: usize = 10_000;
+pub const MAX_REPORT_ROWS: usize = 50_000;
 
 fn ensureFreshCache(database: db.Database, book_id: i64, sql: [*:0]const u8, binds: anytype) !void {
     var stmt = try database.prepare(sql);
@@ -2505,6 +2505,6 @@ test "truncated flag is false for small result sets" {
     try std.testing.expect(!eq.truncated);
 }
 
-test "MAX_REPORT_ROWS constant is 10000" {
-    try std.testing.expectEqual(@as(usize, 10_000), MAX_REPORT_ROWS);
+test "MAX_REPORT_ROWS constant is 50000" {
+    try std.testing.expectEqual(@as(usize, 50_000), MAX_REPORT_ROWS);
 }
