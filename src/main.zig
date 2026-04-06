@@ -1405,6 +1405,66 @@ pub export fn ledger_transition_budget(handle: ?*LedgerDB, budget_id: i64, targe
     return true;
 }
 
+// ── Open Item Wrappers ─────────────────────────────────────────
+
+pub export fn ledger_create_open_item(handle: ?*LedgerDB, entry_line_id: i64, counterparty_id: i64, original_amount: i64, due_date: ?[*:0]const u8, book_id: i64, performed_by: [*:0]const u8) i64 {
+    const h = handle orelse return -1;
+    const dd: ?[]const u8 = if (due_date) |d| std.mem.span(d) else null;
+    return heft.open_item.createOpenItem(h.sqlite, entry_line_id, counterparty_id, original_amount, dd, book_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+}
+
+pub export fn ledger_allocate_payment(handle: ?*LedgerDB, open_item_id: i64, amount: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.open_item.allocatePayment(h.sqlite, open_item_id, amount, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_list_open_items(handle: ?*LedgerDB, counterparty_id: i64, include_closed: bool, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.open_item.listOpenItems(h.sqlite, counterparty_id, include_closed, safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
+pub export fn ledger_cash_flow_indirect(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, classification_id: i64) ?*heft.classification.CashFlowIndirectResult {
+    const h = handle orelse return null;
+    return heft.classification.cashFlowStatementIndirect(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), classification_id) catch null;
+}
+
+pub export fn ledger_free_cash_flow_indirect(result: ?*heft.classification.CashFlowIndirectResult) void {
+    if (result) |r| r.deinit();
+}
+
+pub export fn ledger_classified_trial_balance(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
+    const h = handle orelse return null;
+    return heft.classification.classifiedTrialBalance(h.sqlite, classification_id, std.mem.span(as_of_date)) catch null;
+}
+
+pub export fn ledger_dimension_summary_rollup(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return -1;
+    const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
+        setError(mapError(error.InvalidInput));
+        return -1;
+    };
+    const result = heft.dimension.dimensionSummaryRollup(h.sqlite, book_id, dimension_id, std.mem.span(start_date), std.mem.span(end_date), safeBuf(buf, buf_len) orelse return -1, fmt) catch |err| {
+        setError(mapError(err));
+        return -1;
+    };
+    return safeIntCast(result.len);
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 fn cleanupTestFile(name: [*:0]const u8) void {

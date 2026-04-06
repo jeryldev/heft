@@ -560,6 +560,7 @@ pub const ClassifiedResult = struct {
     total_credits: i64,
     unclassified_debits: i64,
     unclassified_credits: i64,
+    decimal_places: u8 = 2,
 
     pub fn deinit(self: *ClassifiedResult) void {
         self.arena.deinit();
@@ -773,6 +774,14 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
     result.total_credits = classified_total_credits;
     result.unclassified_debits = all_total_debits - classified_total_debits;
     result.unclassified_credits = all_total_credits - classified_total_credits;
+    {
+        var dp_stmt = try database.prepare("SELECT decimal_places FROM ledger_books WHERE id = ?;");
+        defer dp_stmt.finalize();
+        try dp_stmt.bindInt(1, book_id);
+        _ = try dp_stmt.step();
+        const dp = dp_stmt.columnInt(0);
+        result.decimal_places = if (dp >= 0 and dp <= 8) @intCast(dp) else 2;
+    }
     return result;
 }
 
@@ -945,6 +954,14 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
     result.total_credits = classified_total_credits;
     result.unclassified_debits = all_total_debits - classified_total_debits;
     result.unclassified_credits = all_total_credits - classified_total_credits;
+    {
+        var dp_stmt = try database.prepare("SELECT decimal_places FROM ledger_books WHERE id = ?;");
+        defer dp_stmt.finalize();
+        try dp_stmt.bindInt(1, book_id);
+        _ = try dp_stmt.step();
+        const dp = dp_stmt.columnInt(0);
+        result.decimal_places = if (dp >= 0 and dp <= 8) @intCast(dp) else 2;
+    }
     return result;
 }
 

@@ -314,6 +314,24 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         if (stmt.columnInt(0) > 0) result.warnings += 1;
     }
 
+    // Check 13: Period date continuity — detect gaps in fiscal year coverage
+    {
+        var stmt = try database.prepare(
+            \\SELECT p1.end_date, p2.start_date
+            \\FROM ledger_periods p1
+            \\JOIN ledger_periods p2 ON p2.book_id = p1.book_id
+            \\  AND p2.year = p1.year AND p2.period_number = p1.period_number + 1
+            \\  AND p2.period_type = 'regular' AND p1.period_type = 'regular'
+            \\WHERE p1.book_id = ?
+            \\  AND date(p2.start_date) > date(p1.end_date, '+1 day');
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        while (try stmt.step()) {
+            result.warnings += 1;
+        }
+    }
+
     return result;
 }
 

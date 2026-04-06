@@ -18,6 +18,8 @@ const export_mod = @import("export.zig");
 const query_mod = @import("query.zig");
 const describe_mod = @import("describe.zig");
 const batch_mod = @import("batch.zig");
+const open_item_mod = @import("open_item.zig");
+const money = @import("money.zig");
 
 fn findReportRow(rows: []const report_mod.ReportRow, account_id: i64) ?report_mod.ReportRow {
     for (rows) |row| {
@@ -869,6 +871,19 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
     // Create FY2027 periods
     try period_mod.Period.bulkCreate(database, book_id, 2027, 1, .monthly, "controller");
 
+    var period_ids_2027: [12]i64 = undefined;
+    {
+        var stmt = try database.prepare("SELECT id FROM ledger_periods WHERE book_id = ? AND year = 2027 ORDER BY period_number ASC;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        var idx: usize = 0;
+        while (try stmt.step()) : (idx += 1) {
+            if (idx < 12) period_ids_2027[idx] = stmt.columnInt64(0);
+        }
+    }
+
+    const customer_id = customer_abc;
+
     // Verify BS accounts carry forward (cumulative query includes all prior periods)
     {
         const bs_2027 = try report_mod.balanceSheet(database, book_id, "2027-01-31", "2027-01-01");
@@ -884,13 +899,193 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         try std.testing.expectEqual(@as(i64, 0), is_2027.total_credits);
     }
 
-    // Final assertion: the audit trail has many entries
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 9: OPEN ITEM MANAGEMENT (AR invoice-payment lifecycle)
+    // ═══════════════════════════════════════════════════════════════
+
+    // Post a FY2027 invoice: Debit AR 50,000, Credit Revenue 50,000
+    {
+        const inv_eid = try entry_mod.Entry.createDraft(database, book_id, "INV-2027-001", "2027-01-20", "2027-01-20", null, period_ids_2027[0], null, "accountant");
+        const inv_line = try entry_mod.Entry.addLine(database, inv_eid, 1, 5_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, ar, customer_id, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, inv_eid, 2, 0, 5_000_000_000_000, "PHP", money.FX_RATE_SCALE, revenue, null, null, "accountant");
+        try entry_mod.Entry.post(database, inv_eid, "accountant");
+
+        // Create open item for the invoice (due in 30 days)
+        const oi_id = try open_item_mod.createOpenItem(database, inv_line, customer_id, 5_000_000_000_000, "2027-02-19", book_id, "accountant");
+        try std.testing.expect(oi_id > 0);
+
+        // Partial payment: 30,000 of 50,000
+        try open_item_mod.allocatePayment(database, oi_id, 3_000_000_000_000, "accountant");
+
+        // Verify partial status
+        {
+            var stmt = try database.prepare("SELECT status, remaining_amount FROM ledger_open_items WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, oi_id);
+            _ = try stmt.step();
+            try std.testing.expectEqualStrings("partial", stmt.columnText(0).?);
+            try std.testing.expectEqual(@as(i64, 2_000_000_000_000), stmt.columnInt64(1));
+        }
+
+        // Full payment of remaining
+        try open_item_mod.allocatePayment(database, oi_id, 2_000_000_000_000, "accountant");
+
+        // Verify closed status
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_open_items WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, oi_id);
+            _ = try stmt.step();
+            try std.testing.expectEqualStrings("closed", stmt.columnText(0).?);
+        }
+
+        // List open items — closed should not appear
+        {
+            var oi_buf: [4096]u8 = undefined;
+            const oi_list = try open_item_mod.listOpenItems(database, customer_id, false, &oi_buf, .json);
+            try std.testing.expect(std.mem.indexOf(u8, oi_list, "\"items\":[]") != null);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 10: CLASSIFIED TRIAL BALANCE
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        const tb_cls = try classification_mod.Classification.create(database, book_id, "Statutory TB", "trial_balance", "controller");
+        const tb_assets = try classification_mod.ClassificationNode.addGroup(database, tb_cls, "Assets", null, 0, "controller");
+        _ = try classification_mod.ClassificationNode.addAccount(database, tb_cls, cash, tb_assets, 0, "controller");
+        _ = try classification_mod.ClassificationNode.addAccount(database, tb_cls, ar, tb_assets, 1, "controller");
+
+        const ctb = try classification_mod.classifiedTrialBalance(database, tb_cls, "2027-01-31");
+        defer ctb.deinit();
+
+        // Should have classified rows + unclassified rows for accounts not in the tree
+        try std.testing.expect(ctb.rows.len > 3);
+        var has_unclassified = false;
+        for (ctb.rows) |row| {
+            if (row.depth == -1) { has_unclassified = true; break; }
+        }
+        try std.testing.expect(has_unclassified);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 11: DIMENSION HIERARCHY ROLL-UP
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        const cc_dim = try dimension_mod.Dimension.create(database, book_id, "Cost Centers", .cost_center, "controller");
+        const cc_parent = try dimension_mod.DimensionValue.create(database, cc_dim, "CC-100", "Sales", "controller");
+        const cc_child = try dimension_mod.DimensionValue.createWithParent(database, cc_dim, "CC-101", "Sales East", cc_parent, "controller");
+
+        // Post entry in FY2027 and tag with child cost center
+        const cc_eid = try entry_mod.Entry.createDraft(database, book_id, "CC-TEST", "2027-01-25", "2027-01-25", null, period_ids_2027[0], null, "accountant");
+        const cc_line1 = try entry_mod.Entry.addLine(database, cc_eid, 1, 100_000_000_000, 0, "PHP", money.FX_RATE_SCALE, salaries, null, null, "accountant");
+        _ = try entry_mod.Entry.addLine(database, cc_eid, 2, 0, 100_000_000_000, "PHP", money.FX_RATE_SCALE, cash, null, null, "accountant");
+        try dimension_mod.LineDimension.assign(database, cc_line1, cc_child, "accountant");
+        try entry_mod.Entry.post(database, cc_eid, "accountant");
+
+        // Roll-up summary should show parent with accumulated child values
+        var cc_buf: [4096]u8 = undefined;
+        const cc_csv = try dimension_mod.dimensionSummaryRollup(database, book_id, cc_dim, "2027-01-01", "2027-01-31", &cc_buf, .csv);
+        try std.testing.expect(std.mem.indexOf(u8, cc_csv, "CC-100") != null);
+        try std.testing.expect(std.mem.indexOf(u8, cc_csv, "CC-101") != null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 12: BUDGET TRANSITION LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        const fy27_budget = try budget_mod.Budget.create(database, book_id, "FY2027 Operating Budget", 2027, "controller");
+        _ = try budget_mod.BudgetLine.set(database, fy27_budget, revenue, period_ids_2027[0], 10_000_000_000_000, "controller");
+        _ = try budget_mod.BudgetLine.set(database, fy27_budget, salaries, period_ids_2027[0], 3_000_000_000_000, "controller");
+        try budget_mod.Budget.transition(database, fy27_budget, .approved, "controller");
+
+        // Cannot modify approved budget
+        const mod_result = budget_mod.BudgetLine.set(database, fy27_budget, revenue, period_ids_2027[0], 999, "controller");
+        try std.testing.expectError(error.InvalidTransition, mod_result);
+
+        // Budget vs actual
+        var bva_buf: [8192]u8 = undefined;
+        const bva = try budget_mod.budgetVsActual(database, fy27_budget, "2027-01-01", "2027-01-31", &bva_buf, .csv);
+        try std.testing.expect(std.mem.indexOf(u8, bva, "4000") != null);
+
+        try budget_mod.Budget.transition(database, fy27_budget, .closed, "controller");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 13: EXPORT FORMATTED AMOUNTS
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        // Trial balance should have formatted decimals
+        const tb = try report_mod.trialBalance(database, book_id, "2027-01-31");
+        defer tb.deinit();
+        var tb_buf: [16384]u8 = undefined;
+        const tb_csv = try export_mod.reportToCsv(tb, &tb_buf);
+        // Should contain decimal amounts like "50000.00" not raw integers
+        try std.testing.expect(std.mem.indexOf(u8, tb_csv, ".") != null);
+        try std.testing.expect(std.mem.indexOf(u8, tb_csv, "00000000000") == null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 14: CASH FLOW STATEMENT (INDIRECT METHOD)
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        const cf_cls = try classification_mod.Classification.create(database, book_id, "Cash Flow FY2027", "cash_flow", "controller");
+        const op_g = try classification_mod.ClassificationNode.addGroup(database, cf_cls, "Operating Activities", null, 0, "controller");
+        _ = try classification_mod.ClassificationNode.addAccount(database, cf_cls, ar, op_g, 0, "controller");
+        const inv_g = try classification_mod.ClassificationNode.addGroup(database, cf_cls, "Investing Activities", null, 1, "controller");
+        _ = try classification_mod.ClassificationNode.addAccount(database, cf_cls, equipment, inv_g, 0, "controller");
+        _ = try classification_mod.ClassificationNode.addGroup(database, cf_cls, "Financing Activities", null, 2, "controller");
+
+        const cf = try classification_mod.cashFlowStatementIndirect(database, book_id, "2027-01-01", "2027-01-31", cf_cls);
+        defer cf.deinit();
+        // Net income should reflect FY2027 revenue minus expenses
+        try std.testing.expect(cf.adjustments.len > 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 15: HASH CHAIN AUDIT VERIFICATION
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        // Verify audit log hash chain is populated
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE book_id = ? AND hash_chain IS NOT NULL;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const hashed_count = stmt.columnInt(0);
+        try std.testing.expect(hashed_count > 50);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 16: FINAL VERIFICATION
+    // ═══════════════════════════════════════════════════════════════
+
+    _ = try cache_mod.recalculateAllStale(database, book_id);
+    {
+        const v = try verify_mod.verify(database, book_id);
+        try std.testing.expectEqual(@as(u32, 0), v.errors);
+    }
+
+    // Describe schema includes PRAGMA info
+    {
+        var desc_buf: [32768]u8 = undefined;
+        const desc = try describe_mod.describeSchema(database, &desc_buf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, desc, "\"foreign_keys\":true") != null);
+        try std.testing.expect(std.mem.indexOf(u8, desc, "\"journal_mode\":") != null);
+    }
+
+    // Audit trail is extensive
     {
         var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_audit_log WHERE book_id = ?;");
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
         _ = try stmt.step();
         const audit_count = stmt.columnInt(0);
-        try std.testing.expect(audit_count > 30);
+        try std.testing.expect(audit_count > 50);
     }
 }

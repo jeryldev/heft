@@ -371,10 +371,17 @@ pub fn classifiedResultToCsv(result: *classification_mod.ClassifiedResult, buf: 
         const mid1 = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.depth}) catch return error.InvalidInput;
         pos += mid1.len;
         pos += try csvField(buf[pos..], row.label[0..row.label_len]);
-        const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{
-            row.account_id, row.debit_balance, row.credit_balance,
-        }) catch return error.InvalidInput;
-        pos += nums.len;
+        const dp = result.decimal_places;
+        const aid = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.account_id}) catch return error.InvalidInput;
+        pos += aid.len;
+        pos += fmtAmount(buf[pos..], row.debit_balance, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.credit_balance, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = '\n';
+        pos += 1;
     }
 
     return buf[0..pos];
@@ -383,10 +390,31 @@ pub fn classifiedResultToCsv(result: *classification_mod.ClassifiedResult, buf: 
 pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf: []u8) ![]u8 {
     var pos: usize = 0;
 
-    const open = std.fmt.bufPrint(buf[pos..], "{{\"total_debits\":{d},\"total_credits\":{d},\"unclassified_debits\":{d},\"unclassified_credits\":{d},\"rows\":[", .{
-        result.total_debits, result.total_credits, result.unclassified_debits, result.unclassified_credits,
-    }) catch return error.InvalidInput;
-    pos += open.len;
+    const dp = result.decimal_places;
+    const hdr = "{\"total_debits\":\"";
+    if (pos + hdr.len > buf.len) return error.InvalidInput;
+    @memcpy(buf[pos .. pos + hdr.len], hdr);
+    pos += hdr.len;
+    pos += fmtAmount(buf[pos..], result.total_debits, dp);
+    const hdr2 = "\",\"total_credits\":\"";
+    if (pos + hdr2.len > buf.len) return error.InvalidInput;
+    @memcpy(buf[pos .. pos + hdr2.len], hdr2);
+    pos += hdr2.len;
+    pos += fmtAmount(buf[pos..], result.total_credits, dp);
+    const hdr3 = "\",\"unclassified_debits\":\"";
+    if (pos + hdr3.len > buf.len) return error.InvalidInput;
+    @memcpy(buf[pos .. pos + hdr3.len], hdr3);
+    pos += hdr3.len;
+    pos += fmtAmount(buf[pos..], result.unclassified_debits, dp);
+    const hdr4 = "\",\"unclassified_credits\":\"";
+    if (pos + hdr4.len > buf.len) return error.InvalidInput;
+    @memcpy(buf[pos .. pos + hdr4.len], hdr4);
+    pos += hdr4.len;
+    pos += fmtAmount(buf[pos..], result.unclassified_credits, dp);
+    const hdr5 = "\",\"rows\":[";
+    if (pos + hdr5.len > buf.len) return error.InvalidInput;
+    @memcpy(buf[pos .. pos + hdr5.len], hdr5);
+    pos += hdr5.len;
 
     for (result.rows, 0..) |row, i| {
         if (i > 0) {
@@ -402,10 +430,18 @@ pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf:
         const mid1 = std.fmt.bufPrint(buf[pos..], "\",\"depth\":{d},\"label\":\"", .{row.depth}) catch return error.InvalidInput;
         pos += mid1.len;
         pos += try jsonString(buf[pos..], row.label[0..row.label_len]);
-        const nums = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":{d},\"credit\":{d}}}", .{
-            row.account_id, row.debit_balance, row.credit_balance,
-        }) catch return error.InvalidInput;
-        pos += nums.len;
+        const acct_part = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":\"", .{row.account_id}) catch return error.InvalidInput;
+        pos += acct_part.len;
+        pos += fmtAmount(buf[pos..], row.debit_balance, dp);
+        const cr_part = "\",\"credit\":\"";
+        if (pos + cr_part.len > buf.len) return error.InvalidInput;
+        @memcpy(buf[pos .. pos + cr_part.len], cr_part);
+        pos += cr_part.len;
+        pos += fmtAmount(buf[pos..], row.credit_balance, dp);
+        const close_row = "\"}";
+        if (pos + close_row.len > buf.len) return error.InvalidInput;
+        @memcpy(buf[pos .. pos + close_row.len], close_row);
+        pos += close_row.len;
     }
 
     const close = "]}";
