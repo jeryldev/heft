@@ -1062,10 +1062,270 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PHASE 16: FINAL VERIFICATION
+    // PHASE 16: BOOK MANAGEMENT, ADJUSTMENT PERIOD, COMPARATIVE REPORTS
     // ═══════════════════════════════════════════════════════════════
 
-    _ = try cache_mod.recalculateAllStale(database, book_id);
+    // Book.updateName
+    try book_mod.Book.updateName(database, book_id, "Acme Corp PH (Renamed)", "controller");
+
+    // Period.create (individual adjustment period)
+    _ = try period_mod.Period.create(database, book_id, "Adj FY2026", 13, 2026, "2026-12-01", "2026-12-31", "adjustment", "controller");
+
+    // Period.transitionWithReason (close a FY2027 period, reopen with reason, re-close)
+    try period_mod.Period.transition(database, period_ids_2027[1], .soft_closed, "controller");
+    try period_mod.Period.transition(database, period_ids_2027[1], .closed, "controller");
+    try period_mod.Period.transitionWithReason(database, period_ids_2027[1], .open, "Late invoice discovered by BIR audit", "controller");
+    try period_mod.Period.transition(database, period_ids_2027[1], .soft_closed, "controller");
+    try period_mod.Period.transition(database, period_ids_2027[1], .closed, "controller");
+
+    // Comparative reports (FY2027 Jan vs FY2026 Jan)
+    {
+        const tb_comp = try report_mod.trialBalanceComparative(database, book_id, "2027-01-31", "2026-01-31");
+        defer tb_comp.deinit();
+        try std.testing.expect(tb_comp.rows.len > 0);
+    }
+    {
+        const bs_comp = try report_mod.balanceSheetComparative(database, book_id, "2027-01-31", "2026-12-31", "2027-01-01");
+        defer bs_comp.deinit();
+        try std.testing.expect(bs_comp.rows.len > 0);
+    }
+    {
+        const tbm_comp = try report_mod.trialBalanceMovementComparative(database, book_id, "2027-01-01", "2027-01-31", "2026-01-01", "2026-01-31");
+        defer tbm_comp.deinit();
+        try std.testing.expect(tbm_comp.rows.len > 0);
+    }
+
+    // Parsers (utility functions)
+    {
+        var rates_buf: [10]revaluation_mod.CurrencyRate = undefined;
+        const rcount = try revaluation_mod.parseRatesJson("[{\"currency\":\"USD\",\"rate\":570000000000}]", &rates_buf);
+        try std.testing.expectEqual(@as(usize, 1), rcount);
+        try std.testing.expect(std.mem.eql(u8, rates_buf[0].currency, "USD"));
+    }
+    {
+        var ids_buf: [1000]i64 = undefined;
+        const icount = try batch_mod.parseIdArray("[10,20,30]", &ids_buf);
+        try std.testing.expectEqual(@as(usize, 3), icount);
+        try std.testing.expectEqual(@as(i64, 20), ids_buf[1]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 17: CRUD QUERY COVERAGE
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        var qbuf: [16384]u8 = undefined;
+
+        // listBooks
+        const lb = try query_mod.listBooks(database, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, lb, "Renamed") != null);
+
+        // getAccount
+        const ga = try query_mod.getAccount(database, cash, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, ga, "1000") != null);
+
+        // listAccounts
+        const la = try query_mod.listAccounts(database, book_id, null, null, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, la, "Cash") != null);
+
+        // getPeriod
+        const gp = try query_mod.getPeriod(database, period_ids_2027[0], &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, gp, "2027") != null);
+
+        // listPeriods
+        const lp = try query_mod.listPeriods(database, book_id, null, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(lp.len > 50);
+
+        // listEntries
+        const le = try query_mod.listEntries(database, book_id, null, null, null, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, le, "posted") != null);
+
+        // getEntry (use ob_entry from Phase 1 — entry_id=1 is the opening balance)
+        const ge = try query_mod.getEntry(database, 1, book_id, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, ge, "OB-001") != null);
+
+        // listEntryLines
+        const ll = try query_mod.listEntryLines(database, 1, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, ll, "\"debit\":") != null);
+
+        // listAuditLog (small page to fit in buffer)
+        const al = try query_mod.listAuditLog(database, book_id, null, null, null, null, .asc, 5, 0, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, al, "create") != null);
+
+        // getClassification
+        const gc = try query_mod.getClassification(database, bs_class, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, gc, "balance_sheet") != null);
+
+        // listClassifications
+        const lc = try query_mod.listClassifications(database, book_id, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(lc.len > 10);
+
+        // getSubledgerGroup
+        const gsg = try query_mod.getSubledgerGroup(database, ar_group, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, gsg, "AR Customers") != null);
+
+        // listSubledgerGroups
+        const lsg = try query_mod.listSubledgerGroups(database, book_id, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, lsg, "AR") != null);
+
+        // getSubledgerAccount
+        const gsa = try query_mod.getSubledgerAccount(database, customer_abc, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, gsa, "ABC") != null);
+
+        // listSubledgerAccounts
+        const lsa = try query_mod.listSubledgerAccounts(database, book_id, null, null, .asc, 100, 0, &qbuf, .json);
+        try std.testing.expect(std.mem.indexOf(u8, lsa, "C001") != null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 18: EXPORT COVERAGE
+    // ═══════════════════════════════════════════════════════════════
+
+    {
+        var ebuf: [32768]u8 = undefined;
+
+        // reportToJson
+        {
+            const tb = try report_mod.trialBalance(database, book_id, "2027-01-31");
+            defer tb.deinit();
+            const json = try export_mod.reportToJson(tb, &ebuf);
+            try std.testing.expect(std.mem.indexOf(u8, json, "total_debits") != null);
+        }
+
+        // ledgerResultToCsv
+        {
+            const gl = try report_mod.generalLedger(database, book_id, "2027-01-01", "2027-01-31");
+            defer gl.deinit();
+            const csv = try export_mod.ledgerResultToCsv(gl, &ebuf);
+            try std.testing.expect(std.mem.indexOf(u8, csv, "posting_date") != null);
+        }
+
+        // ledgerResultToJson
+        {
+            const gl = try report_mod.generalLedger(database, book_id, "2027-01-01", "2027-01-31");
+            defer gl.deinit();
+            const json = try export_mod.ledgerResultToJson(gl, &ebuf);
+            try std.testing.expect(std.mem.indexOf(u8, json, "opening_balance") != null);
+        }
+
+        // classifiedResultToCsv
+        {
+            const cr = try classification_mod.classifiedReport(database, bs_class, "2027-01-31");
+            defer cr.deinit();
+            const csv = try export_mod.classifiedResultToCsv(cr, &ebuf);
+            try std.testing.expect(std.mem.indexOf(u8, csv, "node_type") != null);
+        }
+
+        // classifiedResultToJson
+        {
+            const cr = try classification_mod.classifiedReport(database, bs_class, "2027-01-31");
+            defer cr.deinit();
+            const json = try export_mod.classifiedResultToJson(cr, &ebuf);
+            try std.testing.expect(std.mem.indexOf(u8, json, "total_debits") != null);
+        }
+
+        // exportChartOfAccounts
+        {
+            const coa = try export_mod.exportChartOfAccounts(database, book_id, &ebuf, .json);
+            try std.testing.expect(std.mem.indexOf(u8, coa, "1000") != null);
+        }
+
+        // exportJournalEntries (narrow date range to fit buffer)
+        {
+            const je = try export_mod.exportJournalEntries(database, book_id, "2027-01-01", "2027-01-31", &ebuf, .json);
+            try std.testing.expect(std.mem.indexOf(u8, je, "document_number") != null);
+        }
+
+        // exportAuditTrail (narrow date range to fit buffer)
+        {
+            const at = try export_mod.exportAuditTrail(database, book_id, "2027-01-01", "2027-01-31", &ebuf, .json);
+            try std.testing.expect(at.len > 10);
+        }
+
+        // exportPeriods
+        {
+            const ep = try export_mod.exportPeriods(database, book_id, &ebuf, .json);
+            try std.testing.expect(std.mem.indexOf(u8, ep, "2026") != null);
+        }
+
+        // exportSubledger
+        {
+            const sl = try export_mod.exportSubledger(database, book_id, &ebuf, .json);
+            try std.testing.expect(std.mem.indexOf(u8, sl, "AR Customers") != null);
+        }
+
+        // exportBookMetadata
+        {
+            const bm = try export_mod.exportBookMetadata(database, book_id, &ebuf, .json);
+            try std.testing.expect(std.mem.indexOf(u8, bm, "PHP") != null);
+        }
+
+        // csvField (utility)
+        {
+            var small: [50]u8 = undefined;
+            const len = try export_mod.csvField(&small, "hello, world");
+            try std.testing.expect(small[0] == '"');
+            _ = len;
+        }
+
+        // jsonString (utility)
+        {
+            var small: [50]u8 = undefined;
+            const len = try export_mod.jsonString(&small, "tab\there");
+            const result = small[0..len];
+            try std.testing.expect(std.mem.indexOf(u8, result, "\\t") != null);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 19: CLEANUP, DELETE, AND ARCHIVE
+    // ═══════════════════════════════════════════════════════════════
+
+    // ClassificationNode.delete — remove a node from cash flow classification
+    {
+        const temp_cls = try classification_mod.Classification.create(database, book_id, "Temp Classification", "trial_balance", "controller");
+        const temp_node = try classification_mod.ClassificationNode.addGroup(database, temp_cls, "Temp Group", null, 0, "controller");
+        try classification_mod.ClassificationNode.delete(database, temp_node, "controller");
+
+        // Classification.delete — delete the temp classification entirely
+        try classification_mod.Classification.delete(database, temp_cls, "controller");
+    }
+
+    // SubledgerAccount.delete + SubledgerGroup.delete
+    {
+        const temp_group = try subledger_mod.SubledgerGroup.create(database, book_id, "Temp SL Group", "customer", 99, ar, null, null, "controller");
+        const temp_sl_acct = try subledger_mod.SubledgerAccount.create(database, book_id, "TEMP-001", "Temp Customer", "customer", temp_group, "controller");
+        try subledger_mod.SubledgerAccount.delete(database, temp_sl_acct, "controller");
+        try subledger_mod.SubledgerGroup.delete(database, temp_group, "controller");
+    }
+
+    // Close all open/soft_closed periods for archival
+    {
+        // FY2027 (period_ids_2027[1] already closed from Phase 16)
+        var i: usize = 0;
+        while (i < 12) : (i += 1) {
+            if (i == 1) continue;
+            try period_mod.Period.transition(database, period_ids_2027[i], .soft_closed, "controller");
+            try period_mod.Period.transition(database, period_ids_2027[i], .closed, "controller");
+        }
+        // Close any remaining open periods (adjustment period 13)
+        var stmt = try database.prepare("SELECT id FROM ledger_periods WHERE book_id = ? AND status IN ('open', 'soft_closed');");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        while (try stmt.step()) {
+            const pid = stmt.columnInt64(0);
+            period_mod.Period.transition(database, pid, .soft_closed, "controller") catch {};
+            period_mod.Period.transition(database, pid, .closed, "controller") catch {};
+        }
+    }
+
+    // Book.archive — terminal operation, must be last
+    try book_mod.Book.archive(database, book_id, "controller");
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 20: FINAL VERIFICATION
+    // ═══════════════════════════════════════════════════════════════
+
     {
         const v = try verify_mod.verify(database, book_id);
         try std.testing.expectEqual(@as(u32, 0), v.errors);
@@ -1086,6 +1346,15 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         try stmt.bindInt(1, book_id);
         _ = try stmt.step();
         const audit_count = stmt.columnInt(0);
-        try std.testing.expect(audit_count > 50);
+        try std.testing.expect(audit_count > 80);
+    }
+
+    // Book is archived
+    {
+        var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("archived", stmt.columnText(0).?);
     }
 }
