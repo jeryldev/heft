@@ -354,6 +354,15 @@ pub export fn ledger_set_fy_start_month(handle: ?*LedgerDB, book_id: i64, month:
     return true;
 }
 
+pub export fn ledger_translate_report(source: ?*heft.report.ReportResult, closing_rate: i64, average_rate: i64) ?*heft.report.ReportResult {
+    const src = source orelse return null;
+    const rates = heft.report.TranslationRates{
+        .closing_rate = closing_rate,
+        .average_rate = average_rate,
+    };
+    return heft.report.translateReportResult(src, rates) catch return null;
+}
+
 pub export fn ledger_general_ledger(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
     const h = handle orelse return null;
     return heft.report.generalLedger(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date)) catch |err| {
@@ -2298,6 +2307,30 @@ test "C ABI: ledger_balance_sheet_auto" {
     }
 }
 
+test "C ABI: ledger_translate_report" {
+    defer cleanupTestFile("test-cabi-translate.ledger");
+    const handle = ledger_open("test-cabi-translate.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, 1, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        const eid = ledger_create_draft(h, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+        _ = ledger_add_line(h, eid, 1, 5650_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+        _ = ledger_add_line(h, eid, 2, 0, 5650_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin");
+        _ = ledger_post_entry(h, eid, "admin");
+        const tb = heft.report.trialBalance(h.sqlite, 1, "2026-01-31") catch unreachable;
+        defer tb.deinit();
+        const translated = ledger_translate_report(tb, 180_000_000, 175_000_000);
+        try std.testing.expect(translated != null);
+        if (translated) |t| {
+            defer t.deinit();
+            try std.testing.expectEqual(tb.rows.len, t.rows.len);
+        }
+    }
+}
+
 test "C ABI: ledger_delete_node" {
     defer cleanupTestFile("test-cabi-delnode.ledger");
     const handle = ledger_open("test-cabi-delnode.ledger");
@@ -2416,6 +2449,7 @@ test "C ABI: null handle returns false for all CRUD exports" {
     try std.testing.expect(!ledger_set_account_monetary(null, 1, 0, "admin"));
     try std.testing.expect(!ledger_set_fy_start_month(null, 1, 4, "admin"));
     try std.testing.expect(ledger_balance_sheet_auto(null, 1, "2026-01-31") == null);
+    try std.testing.expect(ledger_translate_report(null, 10_000_000_000, 10_000_000_000) == null);
     try std.testing.expect(!ledger_update_classification_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_update_node_label(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_delete_node(null, 1, "admin"));

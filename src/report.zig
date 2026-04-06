@@ -2551,6 +2551,32 @@ test "MAX_REPORT_ROWS constant is 50000" {
     try std.testing.expectEqual(@as(usize, 50_000), MAX_REPORT_ROWS);
 }
 
+test "balanceSheetAuto: derives fy_start_date from book config" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+
+    const bs_auto = try balanceSheetAuto(database, 1, "2026-01-31");
+    defer bs_auto.deinit();
+
+    const bs_manual = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    defer bs_manual.deinit();
+
+    try std.testing.expectEqual(bs_manual.total_debits, bs_auto.total_debits);
+    try std.testing.expectEqual(bs_manual.total_credits, bs_auto.total_credits);
+    try std.testing.expectEqual(bs_auto.total_debits, bs_auto.total_credits);
+}
+
+test "balanceSheetAuto: nonexistent book returns NotFound" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = balanceSheetAuto(database, 999, "2026-01-31");
+    try std.testing.expectError(error.NotFound, result);
+}
+
 test "translateReportResult: BS accounts use closing rate, IS accounts use average rate" {
     const database = try setupTestDb();
     defer database.close();
