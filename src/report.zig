@@ -42,6 +42,7 @@ pub const ReportResult = struct {
     rows: []ReportRow,
     total_debits: i64,
     total_credits: i64,
+    decimal_places: u8,
 
     pub fn deinit(self: *ReportResult) void {
         self.arena.deinit();
@@ -78,6 +79,7 @@ pub const LedgerResult = struct {
     closing_balance: i64,
     total_debits: i64,
     total_credits: i64,
+    decimal_places: u8,
 
     pub fn deinit(self: *LedgerResult) void {
         self.arena.deinit();
@@ -293,7 +295,9 @@ const al_sql: [*:0]const u8 =
 
 pub fn generalLedger(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
     try verifyBookExists(database, book_id);
-    return buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, .none);
+    const result = try buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, .none);
+    result.decimal_places = try getDecimalPlaces(database, book_id);
+    return result;
 }
 
 pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
@@ -342,7 +346,6 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
 
     const result = try buildLedgerResult(database, al_sql, .{ book_id, account_id, start_date, end_date }, mode);
 
-    // Adjust opening balance and running balances
     result.opening_balance = opening;
     if (opening != 0) {
         for (result.rows) |*row| {
@@ -350,6 +353,7 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
         }
         result.closing_balance = std.math.add(i64, result.closing_balance, opening) catch return error.AmountOverflow;
     }
+    result.decimal_places = try getDecimalPlaces(database, book_id);
 
     return result;
 }
@@ -366,7 +370,9 @@ const jr_sql: [*:0]const u8 =
 
 pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
     try verifyBookExists(database, book_id);
-    return buildLedgerResult(database, jr_sql, .{ book_id, start_date, end_date }, .none);
+    const result = try buildLedgerResult(database, jr_sql, .{ book_id, start_date, end_date }, .none);
+    result.decimal_places = try getDecimalPlaces(database, book_id);
+    return result;
 }
 
 fn verifyBookExists(database: db.Database, book_id: i64) !void {
@@ -375,6 +381,15 @@ fn verifyBookExists(database: db.Database, book_id: i64) !void {
     try stmt.bindInt(1, book_id);
     _ = try stmt.step();
     if (stmt.columnInt(0) == 0) return error.NotFound;
+}
+
+fn getDecimalPlaces(database: db.Database, book_id: i64) !u8 {
+    var stmt = try database.prepare("SELECT decimal_places FROM ledger_books WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    _ = try stmt.step();
+    const dp = stmt.columnInt(0);
+    return if (dp >= 0 and dp <= 8) @intCast(dp) else 2;
 }
 
 fn copyText(dest: []u8, src: ?[]const u8) usize {
@@ -402,7 +417,9 @@ pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8)
         \\JOIN ledger_periods p ON p.id = ab.period_id
         \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
     , .{ book_id, as_of_date });
-    return buildReportResult(database, tb_sql, .{ book_id, as_of_date });
+    const result = try buildReportResult(database, tb_sql, .{ book_id, as_of_date });
+    result.decimal_places = try getDecimalPlaces(database, book_id);
+    return result;
 }
 
 const is_sql: [*:0]const u8 =
@@ -477,6 +494,7 @@ pub fn incomeStatement(database: db.Database, book_id: i64, start_date: []const 
     result.rows = try rows.toOwnedSlice(allocator);
     result.total_debits = total_debits;
     result.total_credits = total_credits;
+    result.decimal_places = try getDecimalPlaces(database, book_id);
     return result;
 }
 
@@ -498,7 +516,9 @@ pub fn trialBalanceMovement(database: db.Database, book_id: i64, start_date: []c
         \\JOIN ledger_periods p ON p.id = ab.period_id
         \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ? AND ab.is_stale = 1;
     , .{ book_id, start_date, end_date });
-    return buildReportResult(database, tbm_sql, .{ book_id, start_date, end_date });
+    const result = try buildReportResult(database, tbm_sql, .{ book_id, start_date, end_date });
+    result.decimal_places = try getDecimalPlaces(database, book_id);
+    return result;
 }
 
 const bs_sql: [*:0]const u8 =
@@ -609,6 +629,7 @@ pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8,
         result.total_debits = std.math.add(i64, result.total_debits, abs_ni) catch return error.AmountOverflow;
     }
 
+    result.decimal_places = try getDecimalPlaces(database, book_id);
     return result;
 }
 

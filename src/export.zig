@@ -3,7 +3,14 @@ const report_mod = @import("report.zig");
 const classification_mod = @import("classification.zig");
 const db_mod = @import("db.zig");
 
+const money = @import("money.zig");
+
 pub const ExportFormat = enum { csv, json };
+
+fn fmtAmount(dest: []u8, amount: i64, dp: u8) usize {
+    const result = money.formatDecimal(dest, amount, dp) catch return 0;
+    return result.len;
+}
 
 pub fn csvField(dest: []u8, src: []const u8) !usize {
     var needs_quoting = false;
@@ -133,10 +140,17 @@ pub fn reportToCsv(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], acct_type);
-        const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{
-            row.debit_balance, row.credit_balance,
-        }) catch return error.InvalidInput;
-        pos += nums.len;
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.debit_balance, result.decimal_places);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.credit_balance, result.decimal_places);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = '\n';
+        pos += 1;
     }
 
     return buf[0..pos];
@@ -151,16 +165,19 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
     @memcpy(buf[pos .. pos + open.len], open);
     pos += open.len;
 
-    const td = std.fmt.bufPrint(buf[pos..], "{d}", .{result.total_debits}) catch return error.InvalidInput;
-    pos += td.len;
-
-    const mid = ",\"total_credits\":";
+    const dp = result.decimal_places;
+    if (pos >= buf.len) return error.InvalidInput;
+    buf[pos] = '"';
+    pos += 1;
+    pos += fmtAmount(buf[pos..], result.total_debits, dp);
+    const mid = "\",\"total_credits\":\"";
     if (pos + mid.len > buf.len) return error.InvalidInput;
     @memcpy(buf[pos .. pos + mid.len], mid);
     pos += mid.len;
-
-    const tc = std.fmt.bufPrint(buf[pos..], "{d}", .{result.total_credits}) catch return error.InvalidInput;
-    pos += tc.len;
+    pos += fmtAmount(buf[pos..], result.total_credits, dp);
+    if (pos >= buf.len) return error.InvalidInput;
+    buf[pos] = '"';
+    pos += 1;
 
     const arr_open = ",\"rows\":[";
     if (pos + arr_open.len > buf.len) return error.InvalidInput;
@@ -192,10 +209,20 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         @memcpy(buf[pos .. pos + p3.len], p3);
         pos += p3.len;
         pos += try jsonString(buf[pos..], acct_type);
-        const nums = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d}}}", .{
-            row.debit_balance, row.credit_balance,
-        }) catch return error.InvalidInput;
-        pos += nums.len;
+        const p4 = "\",\"debit\":\"";
+        if (pos + p4.len > buf.len) return error.InvalidInput;
+        @memcpy(buf[pos .. pos + p4.len], p4);
+        pos += p4.len;
+        pos += fmtAmount(buf[pos..], row.debit_balance, dp);
+        const p5 = "\",\"credit\":\"";
+        if (pos + p5.len > buf.len) return error.InvalidInput;
+        @memcpy(buf[pos .. pos + p5.len], p5);
+        pos += p5.len;
+        pos += fmtAmount(buf[pos..], row.credit_balance, dp);
+        const p6 = "\"}";
+        if (pos + p6.len > buf.len) return error.InvalidInput;
+        @memcpy(buf[pos .. pos + p6.len], p6);
+        pos += p6.len;
     }
 
     const close = "]}";
@@ -234,15 +261,38 @@ pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.account_name[0..row.account_name_len]);
-        const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},", .{
-            row.debit_amount, row.credit_amount, row.running_balance,
-        }) catch return error.InvalidInput;
-        pos += nums.len;
+        const dp = result.decimal_places;
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.debit_amount, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.credit_amount, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.running_balance, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
         pos += try csvField(buf[pos..], row.transaction_currency[0..row.transaction_currency_len]);
-        const txn_nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{
-            row.transaction_debit, row.transaction_credit, row.fx_rate,
-        }) catch return error.InvalidInput;
-        pos += txn_nums.len;
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.transaction_debit, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.transaction_credit, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = ',';
+        pos += 1;
+        pos += fmtAmount(buf[pos..], row.fx_rate, dp);
+        if (pos >= buf.len) return error.InvalidInput;
+        buf[pos] = '\n';
+        pos += 1;
     }
 
     return buf[0..pos];
@@ -1098,7 +1148,6 @@ const book_mod = @import("book.zig");
 const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
-const money = @import("money.zig");
 const subledger_mod = @import("subledger.zig");
 
 fn setupAndPost() !struct { database: db.Database, result: *report_mod.ReportResult } {
@@ -2253,4 +2302,50 @@ test "jsonString: escapes control character" {
     const input = [_]u8{ 'a', 0x01, 'b' };
     const len = try jsonString(&buf, &input);
     try std.testing.expectEqualStrings("a\\u0001b", buf[0..len]);
+}
+
+test "reportToCsv outputs formatted decimal amounts" {
+    const s = try setupAndPost();
+    defer {
+        s.result.deinit();
+        s.database.close();
+    }
+    var buf: [8192]u8 = undefined;
+    const csv = try reportToCsv(s.result, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "1000.00") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "100000000000") == null);
+}
+
+test "reportToJson outputs formatted decimal amounts" {
+    const s = try setupAndPost();
+    defer {
+        s.result.deinit();
+        s.database.close();
+    }
+    var buf: [8192]u8 = undefined;
+    const json = try reportToJson(s.result, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"1000.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "100000000000") == null);
+}
+
+test "ledgerResultToCsv outputs formatted decimal amounts" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+    _ = try book_mod.Book.create(database, "Test", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, 1, "4000", "Revenue", .revenue, false, "admin");
+    _ = try period_mod.Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 100_000_000_000, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 100_000_000_000, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    const result = try report_mod.generalLedger(database, 1, "2026-01-01", "2026-01-31");
+    defer result.deinit();
+    var buf: [16384]u8 = undefined;
+    const csv = try ledgerResultToCsv(result, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "1000.00") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "100000000000") == null);
 }
