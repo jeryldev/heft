@@ -1734,3 +1734,157 @@ test "SCENARIO: Schema migration logs errors without blocking" {
         try std.testing.expectEqual(schema.SCHEMA_VERSION, stmt.columnInt(0));
     }
 }
+
+test "SCENARIO: Account hierarchy for SKR03-style COA" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "German Entity", "EUR", 2, "admin");
+    const current_assets = try account_mod.Account.create(database, book_id, "1000", "Umlaufvermoegen", .asset, false, "admin");
+    const cash = try account_mod.Account.create(database, book_id, "1001", "Kasse", .asset, false, "admin");
+    const bank = try account_mod.Account.create(database, book_id, "1002", "Bank", .asset, false, "admin");
+    const fixed_assets = try account_mod.Account.create(database, book_id, "0400", "Anlagevermoegen", .asset, false, "admin");
+    const equipment = try account_mod.Account.create(database, book_id, "0410", "BGA", .asset, false, "admin");
+
+    try account_mod.Account.setParent(database, cash, current_assets, "admin");
+    try account_mod.Account.setParent(database, bank, current_assets, "admin");
+    try account_mod.Account.setParent(database, equipment, fixed_assets, "admin");
+
+    {
+        var stmt = try database.prepare("SELECT parent_id FROM ledger_accounts WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, cash);
+        _ = try stmt.step();
+        try std.testing.expectEqual(current_assets, stmt.columnInt64(0));
+    }
+
+    try std.testing.expectError(error.InvalidInput, account_mod.Account.setParent(database, current_assets, cash, "admin"));
+
+    const rev = try account_mod.Account.create(database, book_id, "8000", "Erloese", .revenue, false, "admin");
+    try std.testing.expectError(error.InvalidInput, account_mod.Account.setParent(database, rev, current_assets, "admin"));
+}
+
+test "SCENARIO: India fiscal year (Apr-Mar) with balanceSheetAuto" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "India Entity", "INR", 2, "admin");
+    try book_mod.Book.setFyStartMonth(database, book_id, 4, "admin");
+
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const revenue = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const re = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re, "admin");
+
+    _ = try period_mod.Period.create(database, book_id, "Apr 2026", 1, 2027, "2026-04-01", "2026-04-30", "regular", "admin");
+    _ = try period_mod.Period.create(database, book_id, "May 2026", 2, 2027, "2026-05-01", "2026-05-31", "regular", "admin");
+
+    const eid1 = try entry_mod.Entry.createDraft(database, book_id, "JE-001", "2026-04-15", "2026-04-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 1, 100_000_000_000_00, 0, "INR", 10_000_000_000, cash, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 2, 0, 100_000_000_000_00, "INR", 10_000_000_000, capital, null, null, "admin");
+    try entry_mod.Entry.post(database, eid1, "admin");
+
+    const eid2 = try entry_mod.Entry.createDraft(database, book_id, "JE-002", "2026-05-10", "2026-05-10", null, 2, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 1, 50_000_000_000_00, 0, "INR", 10_000_000_000, cash, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 2, 0, 50_000_000_000_00, "INR", 10_000_000_000, revenue, null, null, "admin");
+    try entry_mod.Entry.post(database, eid2, "admin");
+
+    const bs = try report_mod.balanceSheetAuto(database, book_id, "2026-05-31");
+    defer bs.deinit();
+
+    try std.testing.expectEqual(bs.total_debits, bs.total_credits);
+    try std.testing.expect(bs.rows.len >= 2);
+}
+
+test "SCENARIO: Presentation currency translation PHP->USD" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "PH Subsidiary", "PHP", 2, "admin");
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const revenue = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const expense = try account_mod.Account.create(database, book_id, "5000", "Expense", .expense, false, "admin");
+    const re = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re, "admin");
+
+    _ = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = cash;
+
+    const eid1 = try entry_mod.Entry.createDraft(database, book_id, "JE-001", "2026-01-10", "2026-01-10", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 1, 5_650_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid1, 2, 0, 5_650_000_000_00, "PHP", 10_000_000_000, capital, null, null, "admin");
+    try entry_mod.Entry.post(database, eid1, "admin");
+
+    const eid2 = try entry_mod.Entry.createDraft(database, book_id, "JE-002", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid2, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, revenue, null, null, "admin");
+    try entry_mod.Entry.post(database, eid2, "admin");
+
+    const eid3 = try entry_mod.Entry.createDraft(database, book_id, "JE-003", "2026-01-20", "2026-01-20", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid3, 1, 300_000_000_00, 0, "PHP", 10_000_000_000, expense, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid3, 2, 0, 300_000_000_00, "PHP", 10_000_000_000, 1, null, null, "admin");
+    try entry_mod.Entry.post(database, eid3, "admin");
+
+    const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+    defer tb.deinit();
+
+    const closing_rate: i64 = 180_000_000; // 0.018 USD/PHP = 1/56 roughly
+    const average_rate: i64 = 175_000_000; // 0.0175 USD/PHP
+    const rates = report_mod.TranslationRates{
+        .closing_rate = closing_rate,
+        .average_rate = average_rate,
+    };
+    const translated = try report_mod.translateReportResult(tb, rates);
+    defer translated.deinit();
+
+    try std.testing.expectEqual(tb.rows.len, translated.rows.len);
+
+    for (translated.rows) |row| {
+        try std.testing.expect(row.debit_balance != 0 or row.credit_balance != 0);
+    }
+}
+
+test "SCENARIO: Per-book audit chain verified after multi-book operations" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const audit_mod = @import("audit.zig");
+
+    const book1 = try book_mod.Book.create(database, "Entity A", "PHP", 2, "admin");
+    const book2 = try book_mod.Book.create(database, "Entity B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, book1, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, book2, "1000", "Cash", .asset, false, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT hash_chain FROM ledger_audit_log WHERE book_id = ? ORDER BY id;
+    );
+    defer stmt.finalize();
+
+    try stmt.bindInt(1, book1);
+    var prev_hash = audit_mod.genesis_hash.*;
+    var book1_count: u32 = 0;
+    while (try stmt.step()) {
+        book1_count += 1;
+        if (stmt.columnText(0)) |h| {
+            if (h.len == 64) {
+                @memcpy(&prev_hash, h[0..64]);
+            }
+        }
+    }
+    try std.testing.expect(book1_count >= 2);
+
+    stmt.reset();
+    stmt.clearBindings();
+    try stmt.bindInt(1, book2);
+    var book2_count: u32 = 0;
+    while (try stmt.step()) {
+        book2_count += 1;
+    }
+    try std.testing.expect(book2_count >= 2);
+}

@@ -2253,6 +2253,51 @@ test "C ABI: ledger_set_account_monetary" {
     }
 }
 
+test "C ABI: ledger_set_account_parent" {
+    defer cleanupTestFile("test-cabi-parent.ledger");
+    const handle = ledger_open("test-cabi-parent.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Current Assets", "asset", 0, "admin");
+        _ = ledger_create_account(h, 1, "1001", "Cash", "asset", 0, "admin");
+        try std.testing.expect(ledger_set_account_parent(h, 2, 1, "admin"));
+        try std.testing.expect(ledger_set_account_parent(h, 2, 0, "admin"));
+    }
+}
+
+test "C ABI: ledger_set_fy_start_month" {
+    defer cleanupTestFile("test-cabi-fy.ledger");
+    const handle = ledger_open("test-cabi-fy.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "India", "INR", 2, "admin");
+        try std.testing.expect(ledger_set_fy_start_month(h, 1, 4, "admin"));
+    }
+}
+
+test "C ABI: ledger_balance_sheet_auto" {
+    defer cleanupTestFile("test-cabi-bsauto.ledger");
+    const handle = ledger_open("test-cabi-bsauto.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_account(h, 1, "3000", "Capital", "equity", 0, "admin");
+        _ = ledger_create_period(h, 1, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        const eid = ledger_create_draft(h, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+        try std.testing.expect(ledger_add_line(h, eid, 1, 1000_000_000_00, 0, "PHP", 10_000_000_000, 1, 0, null, "admin") > 0);
+        try std.testing.expect(ledger_add_line(h, eid, 2, 0, 1000_000_000_00, "PHP", 10_000_000_000, 2, 0, null, "admin") > 0);
+        try std.testing.expect(ledger_post_entry(h, eid, "admin"));
+        const result = ledger_balance_sheet_auto(h, 1, "2026-01-31");
+        try std.testing.expect(result != null);
+        if (result) |r| {
+            defer r.deinit();
+            try std.testing.expectEqual(r.total_debits, r.total_credits);
+        }
+    }
+}
+
 test "C ABI: ledger_delete_node" {
     defer cleanupTestFile("test-cabi-delnode.ledger");
     const handle = ledger_open("test-cabi-delnode.ledger");
