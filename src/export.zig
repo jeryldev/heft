@@ -211,7 +211,7 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
 pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
     var pos: usize = 0;
 
-    const header = "posting_date,document_number,description,account_number,account_name,debit_amount,credit_amount,running_balance\n";
+    const header = "posting_date,document_number,description,account_number,account_name,debit_amount,credit_amount,running_balance,transaction_currency,transaction_debit,transaction_credit,fx_rate\n";
     if (pos + header.len > buf.len) return error.InvalidInput;
     @memcpy(buf[pos .. pos + header.len], header);
     pos += header.len;
@@ -234,10 +234,15 @@ pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.account_name[0..row.account_name_len]);
-        const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{
+        const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},", .{
             row.debit_amount, row.credit_amount, row.running_balance,
         }) catch return error.InvalidInput;
         pos += nums.len;
+        pos += try csvField(buf[pos..], row.transaction_currency[0..row.transaction_currency_len]);
+        const txn_nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{
+            row.transaction_debit, row.transaction_credit, row.fx_rate,
+        }) catch return error.InvalidInput;
+        pos += txn_nums.len;
     }
 
     return buf[0..pos];
@@ -282,8 +287,13 @@ pub fn ledgerResultToJson(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
         @memcpy(buf[pos .. pos + p5.len], p5);
         pos += p5.len;
         pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
-        const nums = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"running_balance\":{d}}}", .{
-            row.debit_amount, row.credit_amount, row.running_balance,
+        const p6 = "\",\"transaction_currency\":\"";
+        if (pos + p6.len > buf.len) return error.InvalidInput;
+        @memcpy(buf[pos .. pos + p6.len], p6);
+        pos += p6.len;
+        pos += try jsonString(buf[pos..], row.transaction_currency[0..row.transaction_currency_len]);
+        const nums = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"running_balance\":{d},\"transaction_debit\":{d},\"transaction_credit\":{d},\"fx_rate\":{d}}}", .{
+            row.debit_amount, row.credit_amount, row.running_balance, row.transaction_debit, row.transaction_credit, row.fx_rate,
         }) catch return error.InvalidInput;
         pos += nums.len;
     }

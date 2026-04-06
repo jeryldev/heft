@@ -64,6 +64,11 @@ pub const TransactionRow = struct {
     debit_amount: i64,
     credit_amount: i64,
     running_balance: i64,
+    transaction_currency: [4]u8,
+    transaction_currency_len: usize,
+    transaction_debit: i64,
+    transaction_credit: i64,
+    fx_rate: i64,
 };
 
 pub const LedgerResult = struct {
@@ -170,6 +175,10 @@ fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, 
         row.account_name_len = copyText(&row.account_name, stmt.columnText(5));
         row.debit_amount = stmt.columnInt64(6);
         row.credit_amount = stmt.columnInt64(7);
+        row.transaction_currency_len = copyText(&row.transaction_currency, stmt.columnText(8));
+        row.transaction_debit = stmt.columnInt64(9);
+        row.transaction_credit = stmt.columnInt64(10);
+        row.fx_rate = stmt.columnInt64(11);
 
         switch (running_mode) {
             .debit_normal => {
@@ -264,7 +273,8 @@ fn buildReportResult(database: db.Database, sql: [*:0]const u8, binds: anytype) 
 const gl_sql: [*:0]const u8 =
     \\SELECT th.posting_date, th.document_number,
     \\  th.entry_description, th.account_id, th.account_number,
-    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount,
+    \\  th.transaction_currency, th.debit_amount, th.credit_amount, th.fx_rate
     \\FROM ledger_transaction_history th
     \\WHERE th.book_id = ? AND th.posting_date >= ? AND th.posting_date <= ?
     \\ORDER BY th.posting_date, th.line_id;
@@ -273,7 +283,8 @@ const gl_sql: [*:0]const u8 =
 const al_sql: [*:0]const u8 =
     \\SELECT th.posting_date, th.document_number,
     \\  th.entry_description, th.account_id, th.account_number,
-    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount,
+    \\  th.transaction_currency, th.debit_amount, th.credit_amount, th.fx_rate
     \\FROM ledger_transaction_history th
     \\WHERE th.book_id = ? AND th.account_id = ?
     \\  AND th.posting_date >= ? AND th.posting_date <= ?
@@ -346,7 +357,8 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
 const jr_sql: [*:0]const u8 =
     \\SELECT th.posting_date, th.document_number,
     \\  th.entry_description, th.account_id, th.account_number,
-    \\  th.account_name, th.base_debit_amount, th.base_credit_amount
+    \\  th.account_name, th.base_debit_amount, th.base_credit_amount,
+    \\  th.transaction_currency, th.debit_amount, th.credit_amount, th.fx_rate
     \\FROM ledger_transaction_history th
     \\WHERE th.book_id = ? AND th.posting_date >= ? AND th.posting_date <= ?
     \\ORDER BY th.document_number, th.line_id;
