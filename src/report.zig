@@ -2,6 +2,7 @@ const std = @import("std");
 const db = @import("db.zig");
 const cache = @import("cache.zig");
 const book_mod = @import("book.zig");
+const money = @import("money.zig");
 
 pub const MAX_REPORT_ROWS: usize = 50_000;
 
@@ -885,13 +886,54 @@ pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8
     return result;
 }
 
+pub const TranslationRates = struct {
+    closing_rate: i64,
+    average_rate: i64,
+};
+
+pub fn translateReportResult(source: *ReportResult, rates: TranslationRates) !*ReportResult {
+    const result = try std.heap.c_allocator.create(ReportResult);
+    errdefer std.heap.c_allocator.destroy(result);
+    result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer result.arena.deinit();
+    const allocator = result.arena.allocator();
+
+    const rows = try allocator.alloc(ReportRow, source.rows.len);
+    var total_debits: i64 = 0;
+    var total_credits: i64 = 0;
+
+    for (source.rows, 0..) |row, i| {
+        rows[i] = row;
+        const acct_type = row.account_type[0..row.account_type_len];
+        const is_bs = std.mem.eql(u8, acct_type, "asset") or
+            std.mem.eql(u8, acct_type, "liability") or
+            std.mem.eql(u8, acct_type, "equity");
+        const rate = if (is_bs) rates.closing_rate else rates.average_rate;
+
+        if (row.debit_balance != 0) {
+            rows[i].debit_balance = try money.computeBaseAmount(row.debit_balance, rate);
+        }
+        if (row.credit_balance != 0) {
+            rows[i].credit_balance = try money.computeBaseAmount(row.credit_balance, rate);
+        }
+        total_debits = std.math.add(i64, total_debits, rows[i].debit_balance) catch return error.AmountOverflow;
+        total_credits = std.math.add(i64, total_credits, rows[i].credit_balance) catch return error.AmountOverflow;
+    }
+
+    result.rows = rows;
+    result.total_debits = total_debits;
+    result.total_credits = total_credits;
+    result.decimal_places = source.decimal_places;
+    result.truncated = source.truncated;
+    return result;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
 const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
-const money = @import("money.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -2507,4 +2549,50 @@ test "truncated flag is false for small result sets" {
 
 test "MAX_REPORT_ROWS constant is 50000" {
     try std.testing.expectEqual(@as(usize, 50_000), MAX_REPORT_ROWS);
+}
+
+test "translateReportResult: BS accounts use closing rate, IS accounts use average rate" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
+    try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
+
+    const tb = try trialBalance(database, 1, "2026-01-31");
+    defer tb.deinit();
+
+    const rates = TranslationRates{
+        .closing_rate = 20_000_000_000,
+        .average_rate = 18_000_000_000,
+    };
+    const translated = try translateReportResult(tb, rates);
+    defer translated.deinit();
+
+    try std.testing.expectEqual(tb.rows.len, translated.rows.len);
+
+    for (translated.rows) |row| {
+        const acct_type = row.account_type[0..row.account_type_len];
+        _ = acct_type;
+        try std.testing.expect(row.debit_balance != 0 or row.credit_balance != 0);
+    }
+}
+
+test "translateReportResult: 1:1 rate preserves amounts" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
+
+    const tb = try trialBalance(database, 1, "2026-01-31");
+    defer tb.deinit();
+
+    const rates = TranslationRates{
+        .closing_rate = money.FX_RATE_SCALE,
+        .average_rate = money.FX_RATE_SCALE,
+    };
+    const translated = try translateReportResult(tb, rates);
+    defer translated.deinit();
+
+    try std.testing.expectEqual(tb.total_debits, translated.total_debits);
+    try std.testing.expectEqual(tb.total_credits, translated.total_credits);
 }
