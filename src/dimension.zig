@@ -415,6 +415,130 @@ pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, 
     return buf[0..pos];
 }
 
+pub fn dimensionSummaryRollup(database: db.Database, book_id: i64, dimension_id: i64, start_date: []const u8, end_date: []const u8, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const DimEntry = struct { code: []const u8, label: []const u8, parent_id: i64, debits: i64, credits: i64 };
+    var entries = std.AutoHashMapUnmanaged(i64, DimEntry){};
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT dv.id, dv.code, dv.label, COALESCE(dv.parent_value_id, 0),
+            \\  COALESCE(SUM(el.base_debit_amount), 0),
+            \\  COALESCE(SUM(el.base_credit_amount), 0)
+            \\FROM ledger_dimension_values dv
+            \\LEFT JOIN ledger_line_dimensions ld ON ld.dimension_value_id = dv.id
+            \\LEFT JOIN ledger_entry_lines el ON el.id = ld.line_id
+            \\LEFT JOIN ledger_entries e ON e.id = el.entry_id
+            \\  AND e.status = 'posted' AND e.book_id = ?
+            \\  AND e.posting_date >= ? AND e.posting_date <= ?
+            \\WHERE dv.dimension_id = ?
+            \\GROUP BY dv.id
+            \\ORDER BY dv.code ASC;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, start_date);
+        try stmt.bindText(3, end_date);
+        try stmt.bindInt(4, dimension_id);
+
+        while (try stmt.step()) {
+            const id = stmt.columnInt64(0);
+            const code_src = stmt.columnText(1) orelse "";
+            const label_src = stmt.columnText(2) orelse "";
+            const code_copy = try allocator.dupe(u8, code_src);
+            const label_copy = try allocator.dupe(u8, label_src);
+            try entries.put(allocator, id, .{
+                .code = code_copy,
+                .label = label_copy,
+                .parent_id = stmt.columnInt64(3),
+                .debits = stmt.columnInt64(4),
+                .credits = stmt.columnInt64(5),
+            });
+        }
+    }
+
+    var roll_keys = std.ArrayListUnmanaged(i64){};
+    var it = entries.iterator();
+    while (it.next()) |kv| try roll_keys.append(allocator, kv.key_ptr.*);
+
+    for (roll_keys.items) |id| {
+        const e = entries.get(id) orelse continue;
+        if (e.parent_id == 0) continue;
+        if (e.debits == 0 and e.credits == 0) continue;
+        var pid = e.parent_id;
+        var depth: u32 = 0;
+        while (pid != 0 and depth < 20) : (depth += 1) {
+            if (entries.getPtr(pid)) |parent| {
+                parent.debits = std.math.add(i64, parent.debits, e.debits) catch break;
+                parent.credits = std.math.add(i64, parent.credits, e.credits) catch break;
+                pid = parent.parent_id;
+            } else break;
+        }
+    }
+
+    var sorted_keys = std.ArrayListUnmanaged(i64){};
+    var it2 = entries.iterator();
+    while (it2.next()) |kv| try sorted_keys.append(allocator, kv.key_ptr.*);
+    std.mem.sort(i64, sorted_keys.items, {}, std.sort.asc(i64));
+
+    var pos: usize = 0;
+    switch (format) {
+        .csv => {
+            const header = "code,label,total_debits,total_credits,net\n";
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + header.len], header);
+            pos += header.len;
+
+            for (sorted_keys.items) |id| {
+                const e = entries.get(id) orelse continue;
+                pos += try export_mod.csvField(buf[pos..], e.code);
+                if (pos >= buf.len) return error.BufferTooSmall;
+                buf[pos] = ',';
+                pos += 1;
+                pos += try export_mod.csvField(buf[pos..], e.label);
+                const net = std.math.sub(i64, e.debits, e.credits) catch return error.AmountOverflow;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{ e.debits, e.credits, net }) catch return error.BufferTooSmall;
+                pos += nums.len;
+            }
+        },
+        .json => {
+            const open = "{\"values\":[";
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + open.len], open);
+            pos += open.len;
+
+            var first = true;
+            for (sorted_keys.items) |id| {
+                const e = entries.get(id) orelse continue;
+                if (!first) {
+                    if (pos >= buf.len) return error.BufferTooSmall;
+                    buf[pos] = ',';
+                    pos += 1;
+                }
+                first = false;
+                const pre = std.fmt.bufPrint(buf[pos..], "{{\"code\":\"", .{}) catch return error.BufferTooSmall;
+                pos += pre.len;
+                pos += try export_mod.jsonString(buf[pos..], e.code);
+                const mid1 = std.fmt.bufPrint(buf[pos..], "\",\"label\":\"", .{}) catch return error.BufferTooSmall;
+                pos += mid1.len;
+                pos += try export_mod.jsonString(buf[pos..], e.label);
+                const net = std.math.sub(i64, e.debits, e.credits) catch return error.AmountOverflow;
+                const rest = std.fmt.bufPrint(buf[pos..], "\",\"total_debits\":{d},\"total_credits\":{d},\"net\":{d}}}", .{ e.debits, e.credits, net }) catch return error.BufferTooSmall;
+                pos += rest.len;
+            }
+
+            const close = "]}";
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + close.len], close);
+            pos += close.len;
+        },
+    }
+    return buf[0..pos];
+}
+
 pub fn listDimensions(database: db.Database, book_id: i64, type_filter: ?[]const u8, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
     var pos: usize = 0;
 
@@ -1054,4 +1178,43 @@ test "create dimension value with parent from different dimension rejected" {
     const parent = try DimensionValue.create(database, dim1, "DEP-001", "Engineering", "admin");
     const result = DimensionValue.createWithParent(database, dim2, "PRJ-001", "Alpha", parent, "admin");
     try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "dimensionSummaryRollup aggregates child values to parent" {
+    const database = try setupFullDb();
+    defer database.close();
+    const dim_id = try Dimension.create(database, 1, "Cost Centers", .cost_center, "admin");
+    const parent_val = try DimensionValue.create(database, dim_id, "CC-100", "Sales", "admin");
+    const child1 = try DimensionValue.createWithParent(database, dim_id, "CC-101", "Sales East", parent_val, "admin");
+    const child2 = try DimensionValue.createWithParent(database, dim_id, "CC-102", "Sales West", parent_val, "admin");
+
+    // Post an entry and tag lines with child dimension values
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-CC", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, eid, 1, 100_000_000_000, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    const line2 = try entry_mod.Entry.addLine(database, eid, 2, 0, 100_000_000_000, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try LineDimension.assign(database, line1, child1, "admin");
+    try LineDimension.assign(database, line2, child2, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const csv = try dimensionSummaryRollup(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .csv);
+
+    // Parent CC-100 should have rolled-up totals from both children
+    try std.testing.expect(std.mem.indexOf(u8, csv, "CC-100") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "CC-101") != null);
+    try std.testing.expect(std.mem.indexOf(u8, csv, "CC-102") != null);
+}
+
+test "dimensionSummaryRollup flat dimension same as dimensionSummary" {
+    const database = try setupTestDb();
+    defer database.close();
+    const dim_id = try Dimension.create(database, 1, "Projects", .project, "admin");
+    _ = try DimensionValue.create(database, dim_id, "PRJ-A", "Alpha", "admin");
+    _ = try DimensionValue.create(database, dim_id, "PRJ-B", "Beta", "admin");
+
+    var buf1: [4096]u8 = undefined;
+    const flat = try dimensionSummary(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf1, .csv);
+    var buf2: [4096]u8 = undefined;
+    const rollup = try dimensionSummaryRollup(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf2, .csv);
+    try std.testing.expectEqualStrings(flat, rollup);
 }

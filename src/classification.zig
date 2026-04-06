@@ -1044,6 +1044,82 @@ pub fn cashFlowStatementIndirect(database: db.Database, book_id: i64, start_date
     return result;
 }
 
+pub fn classifiedTrialBalance(database: db.Database, classification_id: i64, as_of_date: []const u8) !*ClassifiedResult {
+    const cr = try classifiedReport(database, classification_id, as_of_date);
+    errdefer cr.deinit();
+
+    if (cr.unclassified_debits == 0 and cr.unclassified_credits == 0) return cr;
+
+    var book_id: i64 = 0;
+    {
+        var stmt = try database.prepare("SELECT book_id FROM ledger_classifications WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, classification_id);
+        _ = try stmt.step();
+        book_id = stmt.columnInt64(0);
+    }
+
+    const allocator = cr.arena.allocator();
+
+    var classified_ids = std.AutoHashMapUnmanaged(i64, void){};
+    for (cr.rows) |row| {
+        if (row.account_id > 0) {
+            try classified_ids.put(allocator, row.account_id, {});
+        }
+    }
+
+    var extra_rows = std.ArrayListUnmanaged(ClassifiedRow){};
+    for (cr.rows) |row| try extra_rows.append(allocator, row);
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT a.id, a.number, a.normal_balance, SUM(ab.debit_sum), SUM(ab.credit_sum)
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ? AND p.end_date <= ?
+            \\GROUP BY a.id;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, as_of_date);
+
+        while (try stmt.step()) {
+            const acct_id = stmt.columnInt64(0);
+            if (classified_ids.get(acct_id) != null) continue;
+
+            const normal = stmt.columnText(2).?;
+            const debit_sum = stmt.columnInt64(3);
+            const credit_sum = stmt.columnInt64(4);
+
+            var debit_bal: i64 = 0;
+            var credit_bal: i64 = 0;
+            if (std.mem.eql(u8, normal, "debit")) {
+                debit_bal = debit_sum - credit_sum;
+                if (debit_bal < 0) { credit_bal = -debit_bal; debit_bal = 0; }
+            } else {
+                credit_bal = credit_sum - debit_sum;
+                if (credit_bal < 0) { debit_bal = -credit_bal; credit_bal = 0; }
+            }
+
+            if (debit_bal == 0 and credit_bal == 0) continue;
+
+            var row: ClassifiedRow = std.mem.zeroes(ClassifiedRow);
+            row.account_id = acct_id;
+            row.depth = -1;
+            const num = stmt.columnText(1) orelse "";
+            row.label_len = copyText(&row.label, num);
+            row.node_type_len = copyText(&row.node_type, "unclassified");
+            row.debit_balance = debit_bal;
+            row.credit_balance = credit_bal;
+            try extra_rows.append(allocator, row);
+        }
+    }
+
+    cr.rows = try extra_rows.toOwnedSlice(allocator);
+    return cr;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
@@ -2305,4 +2381,56 @@ test "cashFlowStatementIndirect computes net income and activity totals" {
 
     try std.testing.expectEqual(@as(i64, 500_000_000_000), result.net_income);
     try std.testing.expect(result.adjustments.len > 0);
+}
+
+test "classifiedTrialBalance includes unclassified accounts" {
+    const database = try setupTestDb();
+    defer database.close();
+    // setupTestDb creates accounts 1-8 and period 1
+    // Post entry: Debit Cash(1) 1000, Credit Revenue(7) 1000
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 100_000_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 100_000_000_000, "PHP", money.FX_RATE_SCALE, 7, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    // Create a classification with only Cash classified
+    const cls_id = try Classification.create(database, 1, "Partial TB", "trial_balance", "admin");
+    const group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, group, 0, "admin");
+
+    const result = try classifiedTrialBalance(database, cls_id, "2026-01-31");
+    defer result.deinit();
+
+    // Should have at least 2 rows: the classified Cash group+account AND the unclassified Revenue
+    try std.testing.expect(result.rows.len >= 3);
+    var found_unclassified = false;
+    for (result.rows) |row| {
+        if (row.depth == -1) {
+            found_unclassified = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_unclassified);
+}
+
+test "classifiedTrialBalance with all accounts classified has no unclassified" {
+    const database = try setupTestDb();
+    defer database.close();
+    const eid = try entry_mod.Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 1, 100_000_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 100_000_000_000, "PHP", money.FX_RATE_SCALE, 7, null, null, "admin");
+    try entry_mod.Entry.post(database, eid, "admin");
+
+    const cls_id = try Classification.create(database, 1, "Full TB", "trial_balance", "admin");
+    const a_group = try ClassificationNode.addGroup(database, cls_id, "Assets", null, 0, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 1, a_group, 0, "admin");
+    const r_group = try ClassificationNode.addGroup(database, cls_id, "Revenue", null, 1, "admin");
+    _ = try ClassificationNode.addAccount(database, cls_id, 7, r_group, 0, "admin");
+
+    const result = try classifiedTrialBalance(database, cls_id, "2026-01-31");
+    defer result.deinit();
+
+    for (result.rows) |row| {
+        try std.testing.expect(row.depth != -1);
+    }
 }
