@@ -266,6 +266,82 @@ pub const Account = struct {
 
         if (owns_txn) try database.commit();
     }
+
+    pub fn setParent(database: db.Database, account_id: i64, parent_id: ?i64, performed_by: []const u8) !void {
+        var acct_book_id: i64 = 0;
+        var acct_type_buf: [16]u8 = undefined;
+        var acct_type_len: usize = 0;
+        var old_parent: i64 = 0;
+
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT account_type, book_id, COALESCE(parent_id, 0) FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const at = stmt.columnText(0).?;
+            acct_type_len = @min(at.len, acct_type_buf.len);
+            @memcpy(acct_type_buf[0..acct_type_len], at[0..acct_type_len]);
+            acct_book_id = stmt.columnInt64(1);
+            old_parent = stmt.columnInt64(2);
+        }
+
+        {
+            const book_mod = @import("book.zig");
+            var bs_stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer bs_stmt.finalize();
+            try bs_stmt.bindInt(1, acct_book_id);
+            const has_row = try bs_stmt.step();
+            if (!has_row) return error.NotFound;
+            const bstatus = book_mod.BookStatus.fromString(bs_stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (bstatus == .archived) return error.BookArchived;
+        }
+
+        if (parent_id) |pid| {
+            if (pid == account_id) return error.InvalidInput;
+
+            var stmt = try database.prepare("SELECT account_type, book_id FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, pid);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const parent_type = stmt.columnText(0).?;
+            if (!std.mem.eql(u8, parent_type, acct_type_buf[0..acct_type_len])) return error.InvalidInput;
+            if (stmt.columnInt64(1) != acct_book_id) return error.InvalidInput;
+
+            var walk_id: i64 = pid;
+            var depth: u32 = 0;
+            while (depth < 10) : (depth += 1) {
+                var walk_stmt = try database.prepare("SELECT COALESCE(parent_id, 0) FROM ledger_accounts WHERE id = ?;");
+                defer walk_stmt.finalize();
+                try walk_stmt.bindInt(1, walk_id);
+                _ = try walk_stmt.step();
+                walk_id = walk_stmt.columnInt64(0);
+                if (walk_id == 0) break;
+                if (walk_id == account_id) return error.InvalidInput;
+            }
+            if (depth >= 10) return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_accounts SET parent_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            if (parent_id) |pid| try stmt.bindInt(1, pid) else try stmt.bindNull(1);
+            try stmt.bindInt(2, account_id);
+            _ = try stmt.step();
+        }
+
+        var old_buf: [20]u8 = undefined;
+        var new_buf: [20]u8 = undefined;
+        const old_str: ?[]const u8 = if (old_parent != 0) std.fmt.bufPrint(&old_buf, "{d}", .{old_parent}) catch unreachable else null;
+        const new_str: ?[]const u8 = if (parent_id) |pid| std.fmt.bufPrint(&new_buf, "{d}", .{pid}) catch unreachable else null;
+        try audit.log(database, "account", account_id, "update", "parent_id", old_str, new_str, performed_by, acct_book_id);
+
+        if (owns_txn) try database.commit();
+    }
 };
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -702,4 +778,93 @@ test "setMonetary: rejects nonexistent account" {
 
     const result = Account.setMonetary(database, 999, false, "admin");
     try std.testing.expectError(error.NotFound, result);
+}
+
+test "setParent: valid parent-child same type" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const parent = try Account.create(database, 1, "1000", "Current Assets", .asset, false, "admin");
+    const child = try Account.create(database, 1, "1001", "Cash", .asset, false, "admin");
+    try Account.setParent(database, child, parent, "admin");
+
+    var stmt = try database.prepare("SELECT parent_id FROM ledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, child);
+    _ = try stmt.step();
+    try std.testing.expectEqual(parent, stmt.columnInt64(0));
+}
+
+test "setParent: rejects cross-type parent" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const asset = try Account.create(database, 1, "1000", "Assets", .asset, false, "admin");
+    const liability = try Account.create(database, 1, "2000", "AP", .liability, false, "admin");
+    try std.testing.expectError(error.InvalidInput, Account.setParent(database, liability, asset, "admin"));
+}
+
+test "setParent: rejects self-reference" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const acct = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    try std.testing.expectError(error.InvalidInput, Account.setParent(database, acct, acct, "admin"));
+}
+
+test "setParent: rejects circular reference" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const a = try Account.create(database, 1, "1000", "A", .asset, false, "admin");
+    const b = try Account.create(database, 1, "1001", "B", .asset, false, "admin");
+    const c = try Account.create(database, 1, "1002", "C", .asset, false, "admin");
+    try Account.setParent(database, b, a, "admin");
+    try Account.setParent(database, c, b, "admin");
+    try std.testing.expectError(error.InvalidInput, Account.setParent(database, a, c, "admin"));
+}
+
+test "setParent: clear parent with null" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const parent = try Account.create(database, 1, "1000", "Assets", .asset, false, "admin");
+    const child = try Account.create(database, 1, "1001", "Cash", .asset, false, "admin");
+    try Account.setParent(database, child, parent, "admin");
+    try Account.setParent(database, child, null, "admin");
+
+    var stmt = try database.prepare("SELECT parent_id FROM ledger_accounts WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, child);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
+}
+
+test "setParent: rejects cross-book parent" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_mod = @import("book.zig");
+    const book2 = try book_mod.Book.create(database, "Book 2", "USD", 2, "admin");
+    const acct1 = try Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+    const acct2 = try Account.create(database, book2, "1000", "Cash", .asset, false, "admin");
+    try std.testing.expectError(error.InvalidInput, Account.setParent(database, acct1, acct2, "admin"));
+}
+
+test "setParent: audit trail created" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const parent = try Account.create(database, 1, "1000", "Assets", .asset, false, "admin");
+    const child = try Account.create(database, 1, "1001", "Cash", .asset, false, "admin");
+    try Account.setParent(database, child, parent, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT field_changed FROM ledger_audit_log
+        \\WHERE entity_type = 'account' AND entity_id = ? AND field_changed = 'parent_id';
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, child);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("parent_id", stmt.columnText(0).?);
 }

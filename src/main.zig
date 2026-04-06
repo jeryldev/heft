@@ -698,6 +698,16 @@ pub export fn ledger_update_account_name(handle: ?*LedgerDB, account_id: i64, ne
     return true;
 }
 
+pub export fn ledger_set_account_parent(handle: ?*LedgerDB, account_id: i64, parent_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const pid: ?i64 = if (parent_id > 0) parent_id else null;
+    heft.account.Account.setParent(h.sqlite, account_id, pid, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 pub export fn ledger_set_account_monetary(handle: ?*LedgerDB, account_id: i64, is_monetary: i32, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.account.Account.setMonetary(h.sqlite, account_id, is_monetary != 0, std.mem.span(performed_by)) catch |err| {
@@ -2357,6 +2367,7 @@ test "C ABI: null handle returns -1 for all query exports" {
 test "C ABI: null handle returns false for all CRUD exports" {
     try std.testing.expect(!ledger_update_book_name(null, 1, "X", "admin"));
     try std.testing.expect(!ledger_update_account_name(null, 1, "X", "admin"));
+    try std.testing.expect(!ledger_set_account_parent(null, 1, 2, "admin"));
     try std.testing.expect(!ledger_set_account_monetary(null, 1, 0, "admin"));
     try std.testing.expect(!ledger_set_fy_start_month(null, 1, 4, "admin"));
     try std.testing.expect(ledger_balance_sheet_auto(null, 1, "2026-01-31") == null);

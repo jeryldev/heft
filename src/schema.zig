@@ -14,7 +14,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
@@ -65,6 +65,12 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
     if (from_version < 8) {
         database.exec("ALTER TABLE ledger_books ADD COLUMN fy_start_month INTEGER NOT NULL DEFAULT 1 CHECK (fy_start_month BETWEEN 1 AND 12);") catch |err| {
             std.log.debug("migrate v8: fy_start_month column: {s} (expected if exists)", .{@errorName(err)});
+        };
+    }
+
+    if (from_version < 9) {
+        database.exec("ALTER TABLE ledger_accounts ADD COLUMN parent_id INTEGER REFERENCES ledger_accounts(id);") catch |err| {
+            std.log.debug("migrate v9: parent_id column: {s} (expected if exists)", .{@errorName(err)});
         };
     }
 
@@ -141,6 +147,7 @@ const tables = [_][*:0]const u8{
     \\    CHECK (is_contra IN (0, 1)),
     \\  is_monetary INTEGER NOT NULL DEFAULT 1
     \\    CHECK (is_monetary IN (0, 1)),
+    \\  parent_id INTEGER REFERENCES ledger_accounts(id),
     \\  status TEXT NOT NULL DEFAULT 'active'
     \\    CHECK (status IN ('active', 'inactive', 'archived')),
     \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
