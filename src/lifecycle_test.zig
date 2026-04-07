@@ -703,6 +703,16 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
     // PHASE 6: YEAR-END CLOSE
     // ═══════════════════════════════════════════════════════════════
 
+    // Sprint F (#6): clear the suspense balance parked in section 1.9 before
+    // closing — closePeriod now refuses non-zero suspense at period-end.
+    // Reclassify the 100 PHP from suspense to rent expense.
+    {
+        const e = try entry_mod.Entry.createDraft(database, book_id, "RECLASS-SUSP-001", "2026-01-31", "2026-01-31", "Clear suspense to rent", period_ids[0], null, "controller");
+        _ = try entry_mod.Entry.addLine(database, e, 1, 100_000_000_00, 0, "PHP", 10_000_000_000, rent, null, null, "controller");
+        _ = try entry_mod.Entry.addLine(database, e, 2, 0, 100_000_000_00, "PHP", 10_000_000_000, suspense, null, null, "controller");
+        try entry_mod.Entry.post(database, e, "controller");
+    }
+
     // Close January and February with closing entries (zeroes R/E accounts -> RE)
     try close_mod.closePeriod(database, book_id, period_ids[0], "controller");
     try close_mod.closePeriod(database, book_id, period_ids[1], "controller");

@@ -688,6 +688,7 @@ fn setError(code: i32) void {
 // 30 = approval required, 31 = too many accounts,
 // 32 = period not in balance, 33 = no next period, 34 = cannot reopen cascade,
 // 35 = equity allocation required, 36 = equity allocation total invalid,
+// 37 = suspense account not clear,
 // 90-94 = sqlite errors (open, exec, prepare, step, bind),
 // 99 = unknown
 
@@ -729,6 +730,7 @@ fn mapError(err: anyerror) i32 {
         error.CannotReopenCascade => 34,
         error.EquityAllocationRequired => 35,
         error.EquityAllocationTotalInvalid => 36,
+        error.SuspenseNotClear => 37,
         error.SqliteOpenFailed => 90,
         error.SqliteExecFailed => 91,
         error.SqlitePrepareFailed => 92,

@@ -95,6 +95,35 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         if (stmt.columnInt64(0) != stmt.columnInt64(1)) return error.PeriodNotInBalance;
     }
 
+    // Sprint F (#6): if a suspense account is designated, refuse close while
+    // it carries any non-zero cumulative balance. Unresolved suspense items
+    // are a control failure — they must be reclassified before period-end.
+    {
+        var susp_id: i64 = 0;
+        {
+            var stmt = try database.prepare("SELECT COALESCE(suspense_account_id, 0) FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            _ = try stmt.step();
+            susp_id = stmt.columnInt64(0);
+        }
+        if (susp_id > 0) {
+            var stmt = try database.prepare(
+                \\SELECT COALESCE(SUM(debit_sum) - SUM(credit_sum), 0)
+                \\FROM ledger_account_balances ab
+                \\JOIN ledger_periods p ON p.id = ab.period_id
+                \\WHERE ab.book_id = ? AND ab.account_id = ?
+                \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?);
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            try stmt.bindInt(2, susp_id);
+            try stmt.bindInt(3, period_id);
+            _ = try stmt.step();
+            if (stmt.columnInt64(0) != 0) return error.SuspenseNotClear;
+        }
+    }
+
     const MaxAccounts = 2000;
     var account_ids: [MaxAccounts]i64 = undefined;
     var debit_sums: [MaxAccounts]i64 = undefined;
@@ -894,6 +923,35 @@ test "closePeriod: zero rev/exp period still generates opening entry for next pe
     // still receive an opening entry bringing forward Cash and RE balances.
     const opening = try findOpeningEntry(s.database, s.book_id, period2_id);
     try std.testing.expect(opening != null);
+}
+
+test "closePeriod: rejects when suspense account has non-zero balance" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    // Designate a suspense account and post an entry that parks a balance there.
+    const suspense_id = try account_mod.Account.create(s.database, s.book_id, "1999", "Suspense", .asset, false, "admin");
+    try book_mod.Book.setSuspenseAccount(s.database, s.book_id, suspense_id, "admin");
+
+    try postTestEntry(s.database, s.book_id, "SUSP-001", suspense_id, 1_000_000_000_00, s.cash_id, 1_000_000_000_00, s.period_id);
+
+    // Close must refuse: unresolved suspense items are a control failure.
+    const result = closePeriod(s.database, s.book_id, s.period_id, "admin");
+    try std.testing.expectError(error.SuspenseNotClear, result);
+}
+
+test "closePeriod: accepts when suspense account has zero balance" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const suspense_id = try account_mod.Account.create(s.database, s.book_id, "1999", "Suspense", .asset, false, "admin");
+    try book_mod.Book.setSuspenseAccount(s.database, s.book_id, suspense_id, "admin");
+
+    // Park then clear: suspense ends at zero, close should succeed.
+    try postTestEntry(s.database, s.book_id, "SUSP-001", suspense_id, 1_000_000_000_00, s.cash_id, 1_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "SUSP-002", s.cash_id, 1_000_000_000_00, suspense_id, 1_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
 }
 
 test "closePeriod: rejects when cache trial balance is out of balance" {
