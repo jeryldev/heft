@@ -330,7 +330,7 @@ test "CHAR corp: Jan Balance Sheet after close" {
     try postYear1Transactions(s);
     try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
 
-    const bs = try report_mod.balanceSheet(s.database, s.book_id, "2026-01-31", "2026-01-01");
+    const bs = try report_mod.balanceSheetWithProjectedRE(s.database, s.book_id, "2026-01-31", "2026-01-01");
     defer bs.deinit();
 
     // Cash 72k
@@ -497,7 +497,7 @@ test "CHAR corp: Year-end Balance Sheet after all 3 months closed" {
     try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
     try close_mod.closePeriod(s.database, s.book_id, s.periods[2], "admin");
 
-    const bs = try report_mod.balanceSheet(s.database, s.book_id, "2026-03-31", "2026-01-01");
+    const bs = try report_mod.balanceSheetWithProjectedRE(s.database, s.book_id, "2026-03-31", "2026-01-01");
     defer bs.deinit();
 
     // Assets: Cash 91k + AR 20k + Equipment 30k = 141k
@@ -646,7 +646,7 @@ test "CHAR sole: Mar BS has Owner's Capital 141k (no separate RE)" {
     try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
     try close_mod.closePeriod(s.database, s.book_id, s.periods[2], "admin");
 
-    const bs = try report_mod.balanceSheet(s.database, s.book_id, "2026-03-31", "2026-01-01");
+    const bs = try report_mod.balanceSheetWithProjectedRE(s.database, s.book_id, "2026-03-31", "2026-01-01");
     defer bs.deinit();
 
     // Owner's Capital = 100k initial + 17k + 15k + 9k = 141k (everything flows to one account)
@@ -793,7 +793,7 @@ test "CHAR part: BS after Jan close balances with partner capital" {
     try postPartnershipYear1(s);
     try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
 
-    const bs = try report_mod.balanceSheet(s.database, s.book_id, "2026-01-31", "2026-01-01");
+    const bs = try report_mod.balanceSheetWithProjectedRE(s.database, s.book_id, "2026-01-31", "2026-01-01");
     defer bs.deinit();
 
     // Assets: Cash (100 - 8 = 92) + AR 15 = 107k

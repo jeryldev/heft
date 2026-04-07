@@ -562,6 +562,32 @@ const bs_sql: [*:0]const u8 =
 ;
 
 pub fn balanceSheetAuto(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
+    try verifyBookExists(database, book_id);
+    try ensureFreshCache(database, book_id,
+        \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
+        \\JOIN ledger_periods p ON p.id = ab.period_id
+        \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
+    , .{ book_id, as_of_date });
+    const result = try buildReportResult(database, bs_sql, .{ book_id, as_of_date });
+    errdefer result.deinit();
+    result.decimal_places = try getDecimalPlaces(database, book_id);
+    return result;
+}
+
+/// Sprint D.6: Plain balance sheet that returns only real A/L/E rows.
+/// Per Rule 1, every line must correspond to a posted journal entry.
+/// Mid-period balance sheets against unclosed periods will NOT balance
+/// (A != L+E) — call closePeriod first to materialize closing entries.
+pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
+    return balanceSheetAuto(database, book_id, as_of_date);
+}
+
+/// Convenience for callers (typically interim management reporting) who
+/// want a self-balancing balance sheet without first closing the period.
+/// Synthesizes a "current period earnings" row from rev/exp net activity
+/// and injects it into the equity totals. Does NOT mutate state — purely
+/// presentation-layer projection.
+pub fn balanceSheetAutoWithProjectedRE(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {
     var fy_month: i32 = 1;
     {
         var stmt = try database.prepare("SELECT fy_start_month FROM ledger_books WHERE id = ?;");
@@ -572,10 +598,10 @@ pub fn balanceSheetAuto(database: db.Database, book_id: i64, as_of_date: []const
         fy_month = stmt.columnInt(0);
     }
     const fy_start = book_mod.Book.getFyStartDate(as_of_date, fy_month);
-    return balanceSheet(database, book_id, as_of_date, &fy_start);
+    return balanceSheetWithProjectedRE(database, book_id, as_of_date, &fy_start);
 }
 
-pub fn balanceSheet(database: db.Database, book_id: i64, as_of_date: []const u8, fy_start_date: []const u8) !*ReportResult {
+pub fn balanceSheetWithProjectedRE(database: db.Database, book_id: i64, as_of_date: []const u8, fy_start_date: []const u8) !*ReportResult {
     try verifyBookExists(database, book_id);
     try ensureFreshCache(database, book_id,
         \\SELECT DISTINCT ab.period_id FROM ledger_account_balances ab
@@ -749,9 +775,9 @@ pub fn incomeStatementComparative(database: db.Database, book_id: i64, cur_start
 }
 
 pub fn balanceSheetComparative(database: db.Database, book_id: i64, current_date: []const u8, prior_date: []const u8, fy_start: []const u8) !*ComparativeReportResult {
-    const current = try balanceSheet(database, book_id, current_date, fy_start);
+    const current = try balanceSheetWithProjectedRE(database, book_id, current_date, fy_start);
     defer current.deinit();
-    const prior = try balanceSheet(database, book_id, prior_date, fy_start);
+    const prior = try balanceSheetWithProjectedRE(database, book_id, prior_date, fy_start);
     defer prior.deinit();
     return mergeComparative(current, prior);
 }
@@ -1114,7 +1140,7 @@ test "balance sheet: assets equal liabilities plus equity" {
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
     try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 5 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 2 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // A = L + E (with net income injected)
@@ -1134,7 +1160,7 @@ test "balance sheet: includes net income from revenue minus expenses" {
     try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // Balance sheet should only have A/L/E rows (not R/E)
@@ -1146,7 +1172,7 @@ test "balance sheet: empty book" {
     const database = try setupTestDb();
     defer database.close();
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     try std.testing.expectEqual(@as(i64, 0), result.total_debits);
@@ -1301,7 +1327,7 @@ test "BS: net loss (expenses > revenue) goes to debit side" {
     // Expenses 8000 (loss of 6000)
     try postEntry(database, "JE-003", "2026-01-20", 1, &.{.{ .amount = 8_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 8_000_000_000_00, .account_id = 3 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // Should still balance (A = L + E - net loss)
@@ -1329,7 +1355,7 @@ test "reports work on archived book (read-only)" {
     const is = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
     defer is.deinit();
 
-    const bs = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const bs = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer bs.deinit();
     try std.testing.expectEqual(bs.total_debits, bs.total_credits);
 }
@@ -1624,7 +1650,7 @@ test "all 10 account types: realistic entries flow through cache, view, and repo
     try std.testing.expect(net_income > 0);
 
     // === BALANCE SHEET ===
-    const bs = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const bs = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer bs.deinit();
 
     // Must balance: A = L + E (with net income)
@@ -1748,7 +1774,7 @@ test "all entry statuses x account types: correct representation everywhere" {
     try std.testing.expectEqual(@as(i64, 100_000_000_000), net_income);
 
     // === BALANCE SHEET ===
-    const bs = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const bs = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer bs.deinit();
 
     try std.testing.expectEqual(bs.total_debits, bs.total_credits);
@@ -2074,7 +2100,7 @@ test "BS: contra asset (accumulated depreciation) appears on credit side" {
     // Depreciation: Debit COGS (id=6), Credit Accum Dep (id=2, contra asset)
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 2 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // Find Accum Depreciation in BS rows
@@ -2177,7 +2203,7 @@ test "BS: net income injection — revenue and expense flow into equity side" {
     // Expense
     try postEntry(database, "JE-003", "2026-01-15", 1, &.{.{ .amount = 3_000_000_000_00, .account_id = 6 }}, &.{.{ .amount = 3_000_000_000_00, .account_id = 1 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // BS rows only contain A/L/E (no revenue/expense rows)
@@ -2208,7 +2234,7 @@ test "BS: net income row appears when RE account designated" {
     try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 600_000_000_00, .account_id = 5 }}, &.{.{ .amount = 600_000_000_00, .account_id = 1 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // Find the synthetic net income row (RE account_id = 3)
@@ -2237,7 +2263,7 @@ test "BS: no net income row when RE not designated" {
     try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 1_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_000_000_000_00, .account_id = 4 }});
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 600_000_000_00, .account_id = 5 }}, &.{.{ .amount = 600_000_000_00, .account_id = 1 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // Without RE designation: Cash (asset) only — no synthetic row
@@ -2256,7 +2282,7 @@ test "BS: net loss shows as debit" {
     try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 300_000_000_00, .account_id = 1 }}, &.{.{ .amount = 300_000_000_00, .account_id = 4 }});
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 500_000_000_00, .account_id = 5 }}, &.{.{ .amount = 500_000_000_00, .account_id = 1 }});
 
-    const result = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const result = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     // Find the synthetic net loss row
@@ -2557,10 +2583,10 @@ test "balanceSheetAuto: derives fy_start_date from book config" {
     try postEntry(database, "JE-001", "2026-01-10", 1, &.{.{ .amount = 10_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 10_000_000_000_00, .account_id = 3 }});
     try postEntry(database, "JE-002", "2026-01-15", 1, &.{.{ .amount = 5_000_000_000_00, .account_id = 1 }}, &.{.{ .amount = 5_000_000_000_00, .account_id = 4 }});
 
-    const bs_auto = try balanceSheetAuto(database, 1, "2026-01-31");
+    const bs_auto = try balanceSheetAutoWithProjectedRE(database, 1, "2026-01-31");
     defer bs_auto.deinit();
 
-    const bs_manual = try balanceSheet(database, 1, "2026-01-31", "2026-01-01");
+    const bs_manual = try balanceSheetWithProjectedRE(database, 1, "2026-01-31", "2026-01-01");
     defer bs_manual.deinit();
 
     try std.testing.expectEqual(bs_manual.total_debits, bs_auto.total_debits);

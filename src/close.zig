@@ -1196,7 +1196,7 @@ test "closePeriod: balance sheet shows correct RE after close" {
     try closePeriod(s.database, s.book_id, s.period_id, "admin");
 
     const report_mod = @import("report.zig");
-    const result = try report_mod.balanceSheet(s.database, s.book_id, "2026-01-31", "2026-01-01");
+    const result = try report_mod.balanceSheetWithProjectedRE(s.database, s.book_id, "2026-01-31", "2026-01-01");
     defer result.deinit();
 
     var re_credit: i64 = 0;

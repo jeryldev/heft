@@ -356,7 +356,7 @@ pub export fn ledger_trial_balance_movement(handle: ?*LedgerDB, book_id: i64, st
 
 pub export fn ledger_balance_sheet(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, fy_start_date: [*:0]const u8) ?*heft.report.ReportResult {
     const h = handle orelse return null;
-    return heft.report.balanceSheet(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch |err| {
+    return heft.report.balanceSheetWithProjectedRE(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(fy_start_date)) catch |err| {
         setError(mapError(err));
         return null;
     };

@@ -440,7 +440,7 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
 
     // Balance Sheet
     {
-        const bs = try report_mod.balanceSheet(database, book_id, "2026-01-31", "2026-01-01");
+        const bs = try report_mod.balanceSheetWithProjectedRE(database, book_id, "2026-01-31", "2026-01-01");
         defer bs.deinit();
         try std.testing.expectEqual(bs.total_debits, bs.total_credits);
     }
@@ -761,7 +761,7 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
 
     // Balance sheet after close
     {
-        const bs_final = try report_mod.balanceSheet(database, book_id, "2026-12-31", "2026-01-01");
+        const bs_final = try report_mod.balanceSheetWithProjectedRE(database, book_id, "2026-12-31", "2026-01-01");
         defer bs_final.deinit();
         try std.testing.expectEqual(bs_final.total_debits, bs_final.total_credits);
 
@@ -890,7 +890,7 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
 
     // Verify BS accounts carry forward (cumulative query includes all prior periods)
     {
-        const bs_2027 = try report_mod.balanceSheet(database, book_id, "2027-01-31", "2027-01-01");
+        const bs_2027 = try report_mod.balanceSheetWithProjectedRE(database, book_id, "2027-01-31", "2027-01-01");
         defer bs_2027.deinit();
         try std.testing.expectEqual(bs_2027.total_debits, bs_2027.total_credits);
     }
@@ -1461,7 +1461,7 @@ test "SCENARIO: Report truncated flag on normal reports is false" {
         try std.testing.expect(!is_rep.truncated);
     }
     {
-        const bs = try report_mod.balanceSheet(database, book_id, "2026-01-31", "2026-01-01");
+        const bs = try report_mod.balanceSheetWithProjectedRE(database, book_id, "2026-01-31", "2026-01-01");
         defer bs.deinit();
         try std.testing.expect(!bs.truncated);
         try std.testing.expectEqual(bs.total_debits, bs.total_credits);
@@ -1796,7 +1796,7 @@ test "SCENARIO: India fiscal year (Apr-Mar) with balanceSheetAuto" {
     _ = try entry_mod.Entry.addLine(database, eid2, 2, 0, 50_000_000_000_00, "INR", 10_000_000_000, revenue, null, null, "admin");
     try entry_mod.Entry.post(database, eid2, "admin");
 
-    const bs = try report_mod.balanceSheetAuto(database, book_id, "2026-05-31");
+    const bs = try report_mod.balanceSheetAutoWithProjectedRE(database, book_id, "2026-05-31");
     defer bs.deinit();
 
     try std.testing.expectEqual(bs.total_debits, bs.total_credits);
