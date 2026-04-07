@@ -325,9 +325,15 @@ pub const Book = struct {
     }
 
     /// Designate the current year earnings account. Must be a non-contra
-    /// equity account. When set, period close posts net income here first
-    /// instead of directly to retained earnings. Year-end close rolls this
-    /// account into retained earnings (implemented in Sprint A.5).
+    /// equity account. This is an APPLICATION-MANAGED designated account:
+    /// the engine does not post to it automatically. Applications that want
+    /// interim YTD net income to appear as a real account balance (rather
+    /// than rely on the synthesized row from balanceSheetWithProjectedRE)
+    /// can maintain this account themselves via normal journal entries,
+    /// reversing at year-end into retained_earnings as part of their own
+    /// close workflow. The engine stores the designation so the application
+    /// can query which account plays this role per Rule 16 (engine provides
+    /// primitives, application composes).
     pub fn setCurrentYearEarningsAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
