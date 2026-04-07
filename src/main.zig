@@ -669,6 +669,8 @@ fn setError(code: i32) void {
 // 26 = retained earnings account required, 27 = fx gain/loss account required,
 // 28 = opening balance account required, 29 = income summary account required,
 // 30 = approval required, 31 = too many accounts,
+// 32 = period not in balance, 33 = no next period, 34 = cannot reopen cascade,
+// 35 = equity allocation required, 36 = equity allocation total invalid,
 // 90-94 = sqlite errors (open, exec, prepare, step, bind),
 // 99 = unknown
 
@@ -706,6 +708,10 @@ fn mapError(err: anyerror) i32 {
         error.ApprovalRequired => 30,
         error.TooManyAccounts => 31,
         error.PeriodNotInBalance => 32,
+        error.NoNextPeriod => 33,
+        error.CannotReopenCascade => 34,
+        error.EquityAllocationRequired => 35,
+        error.EquityAllocationTotalInvalid => 36,
         error.SqliteOpenFailed => 90,
         error.SqliteExecFailed => 91,
         error.SqlitePrepareFailed => 92,
