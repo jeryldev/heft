@@ -549,6 +549,7 @@ fn allocatedClose(
             const wide = @as(i128, net_income) * @as(i128, pct);
             const quot = @divTrunc(wide, 10000);
             if (quot > std.math.maxInt(i64) or quot < std.math.minInt(i64)) return error.AmountOverflow;
+            // quot was just range-checked against i64 bounds — @intCast cannot panic.
             share = @intCast(quot);
             allocated_so_far = std.math.add(i64, allocated_so_far, share) catch return error.AmountOverflow;
         }

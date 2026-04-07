@@ -384,7 +384,7 @@ pub const Period = struct {
 
             const start_date = std.fmt.bufPrint(&start_buf, "{d:0>4}-{d:0>2}-01", .{ first_year, first_month }) catch unreachable;
             const end_date = std.fmt.bufPrint(&end_buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ end_year, end_month, end_day }) catch unreachable;
-            const period_name = std.fmt.bufPrint(&name_buf, "P{d} FY{d}", .{ period_num, @as(u32, @intCast(fiscal_year)) }) catch unreachable;
+            const period_name = std.fmt.bufPrint(&name_buf, "P{d} FY{d}", .{ period_num, fiscal_year }) catch unreachable;
 
             try insert_stmt.bindText(1, period_name);
             try insert_stmt.bindInt(2, @intCast(period_num));

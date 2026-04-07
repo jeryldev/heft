@@ -155,6 +155,10 @@ pub const EquityResult = struct {
 const RunningMode = enum { none, debit_normal, credit_normal };
 
 fn buildLedgerResult(database: db.Database, sql: [*:0]const u8, binds: anytype, running_mode: RunningMode) !*LedgerResult {
+    // errdefer order matters: handlers execute LIFO. The arena.deinit must run
+    // BEFORE c_allocator.destroy(result) so that arena memory is freed while
+    // the result struct still exists. This is achieved by registering the
+    // destroy errdefer first (executes last) and the arena.deinit second.
     const result = try std.heap.c_allocator.create(LedgerResult);
     errdefer std.heap.c_allocator.destroy(result);
     result.arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);

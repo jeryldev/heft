@@ -330,6 +330,23 @@ pub export fn ledger_edit_line(handle: ?*LedgerDB, line_id: i64, debit_amount: i
     return true;
 }
 
+// ── Report exports — OWNERSHIP CONTRACT ───────────────────────────
+//
+// All ledger_* functions in this section that return a non-null pointer
+// transfer ownership of the returned struct to the C caller. The caller
+// MUST eventually call the matching free function or the memory leaks:
+//
+//   ReportResult            -> ledger_free_result
+//   LedgerResult            -> ledger_free_ledger_result
+//   ComparativeReportResult -> ledger_free_comparative_result
+//
+// A null return means an error occurred — call ledger_last_error() to
+// retrieve the error code. Null returns NEVER need freeing.
+//
+// The returned structs are opaque from C: access fields via the
+// ledger_result_* / ledger_ledger_result_* / ledger_comparative_result_*
+// accessor exports below. Do not dereference the pointer directly.
+
 pub export fn ledger_trial_balance(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8) ?*heft.report.ReportResult {
     const h = handle orelse return null;
     return heft.report.trialBalance(h.sqlite, book_id, std.mem.span(as_of_date)) catch |err| {
@@ -726,7 +743,9 @@ fn mapError(err: anyerror) i32 {
 fn safeBuf(buf: ?[*]u8, buf_len: i32) ?[]u8 {
     const b = buf orelse return null;
     if (buf_len <= 0) return null;
-    return b[0..@intCast(buf_len)];
+    // buf_len is provably > 0 here, so the @intCast to usize cannot panic.
+    const len: usize = @intCast(buf_len);
+    return b[0..len];
 }
 
 fn safeIntCast(val: usize) i32 {
