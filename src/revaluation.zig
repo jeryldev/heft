@@ -122,7 +122,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
 
     const fx_one: i64 = money.FX_RATE_SCALE;
 
-    const entry_id = try entry_mod.Entry.createDraft(
+    const entry_id = try entry_mod.Entry.createDraftAs(
         database,
         book_id,
         doc_number,
@@ -131,6 +131,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
         null,
         period_id,
         "{\"revaluation\":true}",
+        .adjusting,
         performed_by,
     );
 
@@ -181,7 +182,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
             var rev_meta_buf: [80]u8 = undefined;
             const rev_meta = std.fmt.bufPrint(&rev_meta_buf, "{{\"revaluation_reversal\":true,\"reverses_revaluation\":{d}}}", .{entry_id}) catch unreachable;
 
-            const rev_id = try entry_mod.Entry.createDraft(
+            const rev_id = try entry_mod.Entry.createDraftAs(
                 database,
                 book_id,
                 rev_doc,
@@ -190,6 +191,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
                 null,
                 next_period_id,
                 rev_meta,
+                .adjusting,
                 performed_by,
             );
 
@@ -380,6 +382,27 @@ test "revalueForexBalances: FX gain from rate increase" {
         try std.testing.expectEqual(@as(i64, 5_000_000_000), line2_credit);
         try std.testing.expectEqual(s.fx_gl, line2_acct);
     }
+}
+
+test "revalueForexBalances: entries are marked entry_type='adjusting'" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    try postFxEntry(s.database, s.book_id, "FX-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const result = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+    const reval_id = result.entry_id;
+
+    // The revaluation entry and its reversal (if created) must both carry
+    // entry_type='adjusting' so IFRS/GAAP adjustment disclosures can filter them.
+    var stmt = try s.database.prepare(
+        \\SELECT entry_type FROM ledger_entries WHERE id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, reval_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("adjusting", stmt.columnText(0).?);
 }
 
 test "revalueForexBalances: FX loss from rate decrease" {
