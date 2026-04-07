@@ -138,20 +138,30 @@ fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_i
     const entry_id = try entry_mod.Entry.createDraft(database, book_id, doc_number, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"direct\"}", performed_by);
 
     var line_num: i32 = 1;
+    var re_debit_total: i64 = 0;
+    var re_credit_total: i64 = 0;
+
     for (account_ids, debit_sums, credit_sums) |acct_id, ds, cs| {
         if (ds > cs) {
             const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
-            line_num += 1;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
             line_num += 1;
+            re_debit_total = std.math.add(i64, re_debit_total, amount) catch return error.AmountOverflow;
         } else if (cs > ds) {
             const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
             line_num += 1;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
-            line_num += 1;
+            re_credit_total = std.math.add(i64, re_credit_total, amount) catch return error.AmountOverflow;
         }
+    }
+
+    if (re_debit_total > 0) {
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, re_debit_total, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+        line_num += 1;
+    }
+    if (re_credit_total > 0) {
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, re_credit_total, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+        line_num += 1;
     }
 
     try entry_mod.Entry.post(database, entry_id, performed_by);
@@ -163,6 +173,8 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
         const entry_id = try entry_mod.Entry.createDraft(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":1}", performed_by);
         var line_num: i32 = 1;
         var has_lines = false;
+        var is_debit_total: i64 = 0;
+        var is_credit_total: i64 = 0;
         for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
             if (!is_rev) continue;
             if (ds == cs) continue;
@@ -171,15 +183,21 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
                 const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-                line_num += 1;
+                is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
             } else {
                 const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-                line_num += 1;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
+                is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
             }
+        }
+        if (is_debit_total > 0) {
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+            line_num += 1;
+        }
+        if (is_credit_total > 0) {
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+            line_num += 1;
         }
         if (has_lines) {
             try entry_mod.Entry.post(database, entry_id, performed_by);
@@ -193,23 +211,31 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
         const entry_id = try entry_mod.Entry.createDraft(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":2}", performed_by);
         var line_num: i32 = 1;
         var has_lines = false;
+        var is_debit_total: i64 = 0;
+        var is_credit_total: i64 = 0;
         for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
             if (is_rev) continue;
             if (ds == cs) continue;
             has_lines = true;
             if (ds > cs) {
                 const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-                line_num += 1;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
+                is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
             } else {
                 const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
                 _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
                 line_num += 1;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-                line_num += 1;
+                is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
             }
+        }
+        if (is_debit_total > 0) {
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+            line_num += 1;
+        }
+        if (is_credit_total > 0) {
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+            line_num += 1;
         }
         if (has_lines) {
             try entry_mod.Entry.post(database, entry_id, performed_by);
@@ -650,4 +676,125 @@ test "closePeriod: book archived rejected" {
 
     const result = closePeriod(database, book_id, period_id, "admin");
     try std.testing.expectError(error.BookArchived, result);
+}
+
+test "closePeriod: direct close netted line count is N+1 for uniform direction" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const rev2_id = try account_mod.Account.create(s.database, s.book_id, "4002", "Service Revenue", .revenue, false, "admin");
+    const rev3_id = try account_mod.Account.create(s.database, s.book_id, "4003", "Interest Revenue", .revenue, false, "admin");
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 5_000_000_000_00, s.revenue_id, 5_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "REV-002", s.cash_id, 3_000_000_000_00, rev2_id, 3_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "REV-003", s.cash_id, 1_000_000_000_00, rev3_id, 1_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    // 3 revenue accounts + 1 netted RE line = 4 lines (not 6)
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%closing_entry%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+    }
+}
+
+test "closePeriod: direct close netted line count N+2 for mixed revenue and expense" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 10_000_000_000_00, s.revenue_id, 10_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "EXP-001", s.expense_id, 6_000_000_000_00, s.cash_id, 6_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    // 1 revenue + 1 expense + 2 RE lines (one debit, one credit) = 4 lines (not 4 old either, but structure is different)
+    // Revenue account gets debited (close credit balance) -> RE gets credited
+    // Expense account gets credited (close debit balance) -> RE gets debited
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%closing_entry%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+    }
+
+    // Verify the RE lines are netted (not paired per account)
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%closing_entry%' AND el.account_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        try stmt.bindInt(2, s.re_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+}
+
+test "closePeriod: two-step close netted line count" {
+    const s = try setupCloseTestDb();
+    defer s.database.close();
+
+    const is_id = try account_mod.Account.create(s.database, s.book_id, "3200", "Income Summary", .equity, false, "admin");
+    try book_mod.Book.setIncomeSummaryAccount(s.database, s.book_id, is_id, "admin");
+
+    const rev2_id = try account_mod.Account.create(s.database, s.book_id, "4002", "Service Revenue", .revenue, false, "admin");
+
+    try postTestEntry(s.database, s.book_id, "REV-001", s.cash_id, 5_000_000_000_00, s.revenue_id, 5_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "REV-002", s.cash_id, 3_000_000_000_00, rev2_id, 3_000_000_000_00, s.period_id);
+    try postTestEntry(s.database, s.book_id, "EXP-001", s.expense_id, 4_000_000_000_00, s.cash_id, 4_000_000_000_00, s.period_id);
+
+    try closePeriod(s.database, s.book_id, s.period_id, "admin");
+
+    // Step 1 (CLOSE-REV): 2 revenue accounts + 1 IS line = 3 lines
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%"step":1%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+    }
+
+    // Step 2 (CLOSE-EXP): 1 expense account + 1 IS line = 2 lines
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%"step":2%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
+
+    // Step 3 (CLOSE-IS): always 2 lines (IS -> RE)
+    {
+        var stmt = try s.database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%"step":3%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, s.book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+    }
 }

@@ -135,19 +135,27 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
     );
 
     var line_num: i32 = 1;
+    var fx_debit_total: i64 = 0;
+    var fx_credit_total: i64 = 0;
     for (adj_account_ids[0..adj_count], adj_amounts[0..adj_count]) |acct_id, amount| {
         if (amount > 0) {
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, fx_one, acct_id, null, null, performed_by);
             line_num += 1;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
-            line_num += 1;
+            fx_credit_total = std.math.add(i64, fx_credit_total, amount) catch return error.AmountOverflow;
         } else {
             const abs_amount = std.math.negate(amount) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, abs_amount, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
-            line_num += 1;
             _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, abs_amount, base_currency, fx_one, acct_id, null, null, performed_by);
             line_num += 1;
+            fx_debit_total = std.math.add(i64, fx_debit_total, abs_amount) catch return error.AmountOverflow;
         }
+    }
+    if (fx_debit_total > 0) {
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, fx_debit_total, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+        line_num += 1;
+    }
+    if (fx_credit_total > 0) {
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, fx_credit_total, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+        line_num += 1;
     }
 
     try entry_mod.Entry.post(database, entry_id, performed_by);
@@ -186,19 +194,27 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
             );
 
             var rev_line: i32 = 1;
+            var rev_fx_debit: i64 = 0;
+            var rev_fx_credit: i64 = 0;
             for (adj_account_ids[0..adj_count], adj_amounts[0..adj_count]) |acct_id, amount| {
                 if (amount > 0) {
                     _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, 0, amount, base_currency, fx_one, acct_id, null, null, performed_by);
                     rev_line += 1;
-                    _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, amount, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
-                    rev_line += 1;
+                    rev_fx_debit = std.math.add(i64, rev_fx_debit, amount) catch return error.AmountOverflow;
                 } else {
                     const abs_amount = std.math.negate(amount) catch return error.AmountOverflow;
-                    _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, 0, abs_amount, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
-                    rev_line += 1;
                     _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, abs_amount, 0, base_currency, fx_one, acct_id, null, null, performed_by);
                     rev_line += 1;
+                    rev_fx_credit = std.math.add(i64, rev_fx_credit, abs_amount) catch return error.AmountOverflow;
                 }
+            }
+            if (rev_fx_debit > 0) {
+                _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, rev_fx_debit, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+                rev_line += 1;
+            }
+            if (rev_fx_credit > 0) {
+                _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, 0, rev_fx_credit, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+                rev_line += 1;
             }
 
             try entry_mod.Entry.post(database, rev_id, performed_by);
@@ -380,6 +396,7 @@ test "revalueForexBalances: FX loss from rate decrease" {
     try std.testing.expect(reval_id > 0);
 
     // Loss = (100 * 55.00) - (100 * 56.50) = 5500 - 5650 = -150 PHP = -15_000_000_000
+    // Netted: line 1 = account credit, line 2 = FX G/L debit (net counterpart)
     {
         var stmt = try s.database.prepare(
             \\SELECT base_debit_amount, base_credit_amount, account_id FROM ledger_entry_lines
@@ -388,15 +405,15 @@ test "revalueForexBalances: FX loss from rate decrease" {
         defer stmt.finalize();
         try stmt.bindInt(1, reval_id);
         _ = try stmt.step();
-        const line1_debit = stmt.columnInt64(0);
+        const line1_credit = stmt.columnInt64(1);
         const line1_acct = stmt.columnInt64(2);
-        try std.testing.expectEqual(@as(i64, 15_000_000_000), line1_debit);
-        try std.testing.expectEqual(s.fx_gl, line1_acct);
+        try std.testing.expectEqual(@as(i64, 15_000_000_000), line1_credit);
+        try std.testing.expectEqual(s.cash_usd, line1_acct);
         _ = try stmt.step();
-        const line2_credit = stmt.columnInt64(1);
+        const line2_debit = stmt.columnInt64(0);
         const line2_acct = stmt.columnInt64(2);
-        try std.testing.expectEqual(@as(i64, 15_000_000_000), line2_credit);
-        try std.testing.expectEqual(s.cash_usd, line2_acct);
+        try std.testing.expectEqual(@as(i64, 15_000_000_000), line2_debit);
+        try std.testing.expectEqual(s.fx_gl, line2_acct);
     }
 }
 
@@ -425,7 +442,7 @@ test "revalueForexBalances: multiple currencies in single compound entry" {
 
     // USD gain = (100*57 - 100*56.50) = 50 PHP = 5_000_000_000
     // EUR gain = (200*61 - 200*60) = 200 PHP = 20_000_000_000
-    // 4 lines total (2 per currency adjustment)
+    // Netted: 2 account lines + 1 FX G/L line = 3 lines total
     {
         var stmt = try s.database.prepare(
             \\SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;
@@ -433,7 +450,7 @@ test "revalueForexBalances: multiple currencies in single compound entry" {
         defer stmt.finalize();
         try stmt.bindInt(1, reval_id);
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
     }
 }
 
@@ -628,15 +645,15 @@ test "revalueForexBalances: multiple accounts same currency adjusted" {
     const reval_id = result.entry_id;
     try std.testing.expect(reval_id > 0);
 
-    // Cash-USD gain: (100*57 - 100*56.50) = 50 PHP -> 2 lines
-    // AR-USD gain: (200*57 - 200*56.50) = 100 PHP -> 2 lines
-    // Total: 4 lines
+    // Cash-USD gain: (100*57 - 100*56.50) = 50 PHP
+    // AR-USD gain: (200*57 - 200*56.50) = 100 PHP
+    // Netted: 2 account lines + 1 FX G/L line = 3 lines total
     {
         var stmt = try s.database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
         defer stmt.finalize();
         try stmt.bindInt(1, reval_id);
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
     }
 }
 

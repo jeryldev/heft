@@ -1888,3 +1888,159 @@ test "SCENARIO: Per-book audit chain verified after multi-book operations" {
     }
     try std.testing.expect(book2_count >= 2);
 }
+
+test "LIFECYCLE: Netted closing entries — multi-account fiscal year close and balance carry-forward" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    // Setup: book with multiple revenue and expense accounts
+    const book_id = try book_mod.Book.create(database, "FY2026 Test", "PHP", 2, "admin");
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const ar = try account_mod.Account.create(database, book_id, "1100", "Accounts Receivable", .asset, false, "admin");
+    const ap = try account_mod.Account.create(database, book_id, "2000", "Accounts Payable", .liability, false, "admin");
+    const re = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    const rev_sales = try account_mod.Account.create(database, book_id, "4001", "Sales", .revenue, false, "admin");
+    const rev_service = try account_mod.Account.create(database, book_id, "4002", "Service Revenue", .revenue, false, "admin");
+    const rev_interest = try account_mod.Account.create(database, book_id, "4003", "Interest Income", .revenue, false, "admin");
+    const exp_salaries = try account_mod.Account.create(database, book_id, "5001", "Salaries", .expense, false, "admin");
+    const exp_rent = try account_mod.Account.create(database, book_id, "5002", "Rent", .expense, false, "admin");
+    const exp_utilities = try account_mod.Account.create(database, book_id, "5003", "Utilities", .expense, false, "admin");
+
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re, "admin");
+
+    // Create Jan and Feb periods
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_id = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    // === Post January transactions ===
+    // Sales: 50,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "INV-001", "2026-01-05", "2026-01-05", null, jan_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 5_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, ar, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 5_000_000_000_000, "PHP", money.FX_RATE_SCALE, rev_sales, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+    // Service revenue: 20,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "INV-002", "2026-01-10", "2026-01-10", null, jan_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 2_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 2_000_000_000_000, "PHP", money.FX_RATE_SCALE, rev_service, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+    // Interest income: 1,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "INT-001", "2026-01-31", "2026-01-31", null, jan_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 100_000_000_000, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 100_000_000_000, "PHP", money.FX_RATE_SCALE, rev_interest, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+    // Salaries: 30,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "PAY-001", "2026-01-31", "2026-01-31", null, jan_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 3_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, exp_salaries, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 3_000_000_000_000, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+    // Rent: 15,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "RENT-001", "2026-01-31", "2026-01-31", null, jan_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 1_500_000_000_000, 0, "PHP", money.FX_RATE_SCALE, exp_rent, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_500_000_000_000, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+    // Utilities: 5,000
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "UTIL-001", "2026-01-31", "2026-01-31", null, jan_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 500_000_000_000, 0, "PHP", money.FX_RATE_SCALE, exp_utilities, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 500_000_000_000, "PHP", money.FX_RATE_SCALE, ap, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+
+    // Net income = (50,000 + 20,000 + 1,000) - (30,000 + 15,000 + 5,000) = 21,000
+    const total_revenue: i64 = 5_000_000_000_000 + 2_000_000_000_000 + 100_000_000_000;
+    const total_expense: i64 = 3_000_000_000_000 + 1_500_000_000_000 + 500_000_000_000;
+    const net_income = total_revenue - total_expense;
+
+    // Verify pre-close trial balance
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-01-31");
+        defer tb.deinit();
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    }
+
+    // === Close January ===
+    try close_mod.closePeriod(database, book_id, jan_id, "admin");
+
+    // Verify closing entry line count is netted:
+    // 3 revenue + 3 expense = 6 account lines + 2 RE lines (debit + credit) = 8 lines total
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE e.book_id = ? AND e.metadata LIKE '%closing_entry%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 8), stmt.columnInt(0));
+    }
+
+    // Verify all revenue/expense accounts are zeroed
+    {
+        const accts = [_]i64{ rev_sales, rev_service, rev_interest, exp_salaries, exp_rent, exp_utilities };
+        for (accts) |acct_id| {
+            var stmt = try database.prepare(
+                \\SELECT COALESCE(SUM(debit_sum), 0), COALESCE(SUM(credit_sum), 0)
+                \\FROM ledger_account_balances WHERE account_id = ? AND period_id = ?;
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, acct_id);
+            try stmt.bindInt(2, jan_id);
+            _ = try stmt.step();
+            try std.testing.expectEqual(stmt.columnInt64(0), stmt.columnInt64(1));
+        }
+    }
+
+    // Verify RE received net income
+    {
+        var stmt = try database.prepare(
+            \\SELECT COALESCE(SUM(credit_sum - debit_sum), 0) FROM ledger_account_balances
+            \\WHERE account_id = ? AND period_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, re);
+        try stmt.bindInt(2, jan_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(net_income, stmt.columnInt64(0));
+    }
+
+    // === Verify balance carry-forward to February ===
+    // Post a Feb transaction to create Feb balances
+    {
+        const eid = try entry_mod.Entry.createDraft(database, book_id, "FEB-001", "2026-02-15", "2026-02-15", null, feb_id, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 1, 1_000_000_000_000, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "admin");
+        _ = try entry_mod.Entry.addLine(database, eid, 2, 0, 1_000_000_000_000, "PHP", money.FX_RATE_SCALE, rev_sales, null, null, "admin");
+        try entry_mod.Entry.post(database, eid, "admin");
+    }
+
+    // Account ledger for RE should show Jan closing balance as opening for Feb
+    {
+        const al = try report_mod.accountLedger(database, book_id, re, "2026-02-01", "2026-02-28");
+        defer al.deinit();
+        try std.testing.expectEqual(net_income, al.opening_balance);
+    }
+
+    // Trial balance as of Feb 28 should include Jan RE balance + Feb transactions
+    {
+        const tb = try report_mod.trialBalance(database, book_id, "2026-02-28");
+        defer tb.deinit();
+        try std.testing.expectEqual(tb.total_debits, tb.total_credits);
+    }
+
+    // Verify passes
+    {
+        const result = try verify_mod.verify(database, book_id);
+        try std.testing.expect(result.passed());
+    }
+}
