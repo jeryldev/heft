@@ -156,6 +156,31 @@ pub export fn ledger_set_retained_earnings_account(handle: ?*LedgerDB, book_id: 
     return true;
 }
 
+/// Generic alias for ledger_set_retained_earnings_account. Sets the
+/// equity close target for any entity type (corporation RE, sole prop
+/// Owner's Capital, nonprofit Net Assets, etc).
+pub export fn ledger_set_equity_close_target(handle: ?*LedgerDB, book_id: i64, account_id: i64, performed_by: [*:0]const u8) bool {
+    return ledger_set_retained_earnings_account(handle, book_id, account_id, performed_by);
+}
+
+pub export fn ledger_set_dividends_drawings_account(handle: ?*LedgerDB, book_id: i64, account_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.setDividendsDrawingsAccount(h.sqlite, book_id, account_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
+pub export fn ledger_set_current_year_earnings_account(handle: ?*LedgerDB, book_id: i64, account_id: i64, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    heft.book.Book.setCurrentYearEarningsAccount(h.sqlite, book_id, account_id, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 pub export fn ledger_set_income_summary_account(handle: ?*LedgerDB, book_id: i64, account_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return false;
     heft.book.Book.setIncomeSummaryAccount(h.sqlite, book_id, account_id, std.mem.span(performed_by)) catch |err| {
@@ -674,6 +699,7 @@ fn mapError(err: anyerror) i32 {
         error.InvalidDecimalPlaces => 24,
         error.BufferTooSmall => 25,
         error.RetainedEarningsAccountRequired => 26,
+        error.EquityCloseTargetRequired => 26,
         error.FxGainLossAccountRequired => 27,
         error.OpeningBalanceAccountRequired => 28,
         error.IncomeSummaryAccountRequired => 29,

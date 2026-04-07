@@ -124,6 +124,12 @@ bool    ledger_validate_opening_balance(LedgerDB* h, int64_t book_id);
 bool    ledger_set_require_approval(LedgerDB* h, int64_t book_id, int32_t require, const char* performed_by);
 bool    ledger_set_fy_start_month(LedgerDB* h, int64_t book_id, int32_t month, const char* performed_by);
 bool    ledger_set_entity_type(LedgerDB* h, int64_t book_id, const char* entity_type, const char* performed_by);
+/* Generic alias for ledger_set_retained_earnings_account. Use for any entity type. */
+bool    ledger_set_equity_close_target(LedgerDB* h, int64_t book_id, int64_t account_id, const char* performed_by);
+/* Dividends Declared (corp) / Owner's Drawings (sole prop) / Partner Drawings. Must be equity. */
+bool    ledger_set_dividends_drawings_account(LedgerDB* h, int64_t book_id, int64_t account_id, const char* performed_by);
+/* Current Year Earnings — intermediate equity account. Must be non-contra equity. */
+bool    ledger_set_current_year_earnings_account(LedgerDB* h, int64_t book_id, int64_t account_id, const char* performed_by);
 
 /* ── Accounts ──────────────────────────────────────────────── */
 

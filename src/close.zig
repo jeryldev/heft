@@ -13,9 +13,10 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
     var is_account_id: i64 = 0;
     var book_currency_buf: [4]u8 = undefined;
     var book_currency_len: usize = 0;
+    var entity_type: book_mod.EntityType = .corporation;
     {
         var stmt = try database.prepare(
-            \\SELECT status, retained_earnings_account_id, income_summary_account_id, base_currency
+            \\SELECT status, retained_earnings_account_id, income_summary_account_id, base_currency, entity_type
             \\FROM ledger_books WHERE id = ?;
         );
         defer stmt.finalize();
@@ -29,9 +30,13 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
             book_currency_len = @min(cur.len, book_currency_buf.len);
             @memcpy(book_currency_buf[0..book_currency_len], cur[0..book_currency_len]);
         }
+        entity_type = book_mod.EntityType.fromString(stmt.columnText(4).?) orelse return error.InvalidInput;
     }
 
-    if (re_account_id <= 0) return error.RetainedEarningsAccountRequired;
+    // Partnership and LLC use the allocation table. All other entity types
+    // require a single equity close target (retained_earnings_account_id).
+    const uses_allocations = entity_type == .partnership or entity_type == .llc;
+    if (!uses_allocations and re_account_id <= 0) return error.RetainedEarningsAccountRequired;
 
     const base_currency = book_currency_buf[0..book_currency_len];
 
@@ -118,7 +123,11 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
 
     var doc_buf: [48]u8 = undefined;
 
-    if (is_account_id > 0) {
+    if (uses_allocations) {
+        // Partnership/LLC: validate allocations, then split net income
+        try book_mod.Book.validateEquityAllocations(database, book_id, end_date);
+        try allocatedClose(database, book_id, period_id, base_currency, end_date, period_number, period_year, account_ids[0..acct_count], debit_sums[0..acct_count], credit_sums[0..acct_count], is_revenue[0..acct_count], &doc_buf, performed_by);
+    } else if (is_account_id > 0) {
         try twoStepClose(database, book_id, period_id, re_account_id, is_account_id, base_currency, end_date, period_number, period_year, account_ids[0..acct_count], debit_sums[0..acct_count], credit_sums[0..acct_count], is_revenue[0..acct_count], &doc_buf, performed_by);
     } else {
         try directClose(database, book_id, period_id, re_account_id, base_currency, end_date, period_number, period_year, account_ids[0..acct_count], debit_sums[0..acct_count], credit_sums[0..acct_count], &doc_buf, performed_by);
@@ -279,6 +288,145 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
             try entry_mod.Entry.deleteDraft(database, entry_id, performed_by);
         }
     }
+}
+
+/// Closing path for partnerships and LLCs. Computes net income across
+/// all revenue and expense accounts, then allocates the net to each
+/// partner/member capital account per the active equity allocations.
+///
+/// Line structure:
+///   1..N: Close each revenue/expense account (one line per account, netted)
+///   N+1..N+M: Credit/debit each partner capital account by their allocation share
+///
+/// The last allocation absorbs the rounding residual to ensure:
+///   sum(partner_shares) == total_net_income (exactly)
+fn allocatedClose(
+    database: db.Database,
+    book_id: i64,
+    period_id: i64,
+    base_currency: []const u8,
+    end_date: []const u8,
+    period_number: i32,
+    period_year: i32,
+    account_ids: []const i64,
+    debit_sums: []const i64,
+    credit_sums: []const i64,
+    is_revenue_flags: []const bool,
+    doc_buf: *[48]u8,
+    performed_by: []const u8,
+) !void {
+    const doc_number = std.fmt.bufPrint(doc_buf, "CLOSE-P{d}-FY{d}", .{ period_number, period_year }) catch unreachable;
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, doc_number, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"allocated\"}", performed_by);
+
+    var line_num: i32 = 1;
+    var net_income: i64 = 0; // credit side minus debit side, signed
+
+    // First pass: close revenue/expense accounts to the entry and compute net income
+    for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
+        if (ds == cs) continue;
+        if (is_rev) {
+            // Revenue: credit balance. Close by debiting revenue.
+            if (cs > ds) {
+                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
+                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                line_num += 1;
+                net_income = std.math.add(i64, net_income, amount) catch return error.AmountOverflow;
+            } else {
+                // Unusual: revenue with debit balance (e.g., sales returns net > sales). Credit it.
+                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
+                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                line_num += 1;
+                net_income = std.math.sub(i64, net_income, amount) catch return error.AmountOverflow;
+            }
+        } else {
+            // Expense: debit balance. Close by crediting expense.
+            if (ds > cs) {
+                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
+                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                line_num += 1;
+                net_income = std.math.sub(i64, net_income, amount) catch return error.AmountOverflow;
+            } else {
+                // Unusual: expense with credit balance (e.g., purchase returns > purchases). Debit it.
+                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
+                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                line_num += 1;
+                net_income = std.math.add(i64, net_income, amount) catch return error.AmountOverflow;
+            }
+        }
+    }
+
+    // If no net income/loss, no allocation needed; delete or post accordingly
+    if (net_income == 0) {
+        if (line_num == 1) {
+            // No lines added (all zero-activity accounts). Delete the draft.
+            try entry_mod.Entry.deleteDraft(database, entry_id, performed_by);
+            return;
+        }
+        // Lines exist but they net to zero. Post with no partner allocation.
+        try entry_mod.Entry.post(database, entry_id, performed_by);
+        return;
+    }
+
+    // Second pass: allocate net_income to partner capital accounts
+    // Read active allocations at end_date
+    const MaxAllocations = 64;
+    var alloc_account_ids: [MaxAllocations]i64 = undefined;
+    var alloc_values: [MaxAllocations]i64 = undefined;
+    var alloc_count: usize = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT account_id, allocation_value
+            \\FROM ledger_equity_allocations
+            \\WHERE book_id = ?
+            \\  AND effective_date <= ?
+            \\  AND (end_date IS NULL OR end_date >= ?)
+            \\  AND allocation_type = 'percentage'
+            \\ORDER BY id ASC;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, end_date);
+        try stmt.bindText(3, end_date);
+        while (try stmt.step()) {
+            if (alloc_count >= MaxAllocations) return error.TooManyAccounts;
+            alloc_account_ids[alloc_count] = stmt.columnInt64(0);
+            alloc_values[alloc_count] = stmt.columnInt64(1);
+            alloc_count += 1;
+        }
+    }
+
+    // Distribute net_income across partners. The last partner absorbs the
+    // rounding residual: instead of independently computing its share, we
+    // compute (total - sum_so_far) to guarantee exact total.
+    var allocated_so_far: i64 = 0;
+    for (alloc_account_ids[0..alloc_count], alloc_values[0..alloc_count], 0..) |acct_id, pct, i| {
+        const is_last = (i == alloc_count - 1);
+        var share: i64 = undefined;
+        if (is_last) {
+            share = std.math.sub(i64, net_income, allocated_so_far) catch return error.AmountOverflow;
+        } else {
+            // share = net_income * pct / 10000 (use i128 for overflow safety)
+            const wide = @as(i128, net_income) * @as(i128, pct);
+            const quot = @divTrunc(wide, 10000);
+            if (quot > std.math.maxInt(i64) or quot < std.math.minInt(i64)) return error.AmountOverflow;
+            share = @intCast(quot);
+            allocated_so_far = std.math.add(i64, allocated_so_far, share) catch return error.AmountOverflow;
+        }
+
+        if (share == 0) continue;
+
+        // Positive net income → credit partner capital (equity increases)
+        // Negative net income (loss) → debit partner capital (equity decreases)
+        if (share > 0) {
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, share, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+        } else {
+            const abs_share = std.math.negate(share) catch return error.AmountOverflow;
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, abs_share, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+        }
+        line_num += 1;
+    }
+
+    try entry_mod.Entry.post(database, entry_id, performed_by);
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -797,4 +945,240 @@ test "closePeriod: two-step close netted line count" {
         _ = try stmt.step();
         try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
     }
+}
+
+// ── Sprint A.5: Entity type validation in closePeriod ─────────
+
+test "closePeriod: partnership without allocations fails with EquityAllocationRequired" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "ABC Partners", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .partnership, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Revenue", .revenue, false, "admin");
+    _ = try account_mod.Account.create(database, book_id, "3100", "Partner Capital", .equity, false, "admin");
+    // Note: we DON'T designate retained_earnings_account_id because partnerships
+    // use the allocation table instead.
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    try postTestEntry(database, book_id, "REV-001", cash_id, 10_000_000_000_00, revenue_id, 10_000_000_000_00, period_id);
+
+    const result = close_partnership_helper(database, book_id, period_id);
+    try std.testing.expectError(error.EquityAllocationRequired, result);
+}
+
+fn close_partnership_helper(database: db.Database, book_id: i64, period_id: i64) !void {
+    return closePeriod(database, book_id, period_id, "admin");
+}
+
+test "closePeriod: partnership with 50/30/20 allocation splits net income" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "XYZ Partners", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .partnership, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Revenue", .revenue, false, "admin");
+    const expense_id = try account_mod.Account.create(database, book_id, "5001", "Expense", .expense, false, "admin");
+    const partner_a = try account_mod.Account.create(database, book_id, "3101", "Partner A Capital", .equity, false, "admin");
+    const partner_b = try account_mod.Account.create(database, book_id, "3102", "Partner B Capital", .equity, false, "admin");
+    const partner_c = try account_mod.Account.create(database, book_id, "3103", "Partner C Capital", .equity, false, "admin");
+
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_a, "Partner A", 5000, "2026-01-01", "admin"); // 50%
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_b, "Partner B", 3000, "2026-01-01", "admin"); // 30%
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_c, "Partner C", 2000, "2026-01-01", "admin"); // 20%
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Revenue 10,000 - Expense 4,000 = Net Income 6,000
+    try postTestEntry(database, book_id, "REV-001", cash_id, 1_000_000_000_000, revenue_id, 1_000_000_000_000, period_id);
+    try postTestEntry(database, book_id, "EXP-001", expense_id, 400_000_000_000, cash_id, 400_000_000_000, period_id);
+
+    try closePeriod(database, book_id, period_id, "admin");
+
+    // Partner A: 50% × 6,000 = 3,000
+    const a_bal = try queryBalance(database, partner_a, period_id);
+    try std.testing.expectEqual(@as(i64, 300_000_000_000), a_bal.credit_sum - a_bal.debit_sum);
+
+    // Partner B: 30% × 6,000 = 1,800
+    const b_bal = try queryBalance(database, partner_b, period_id);
+    try std.testing.expectEqual(@as(i64, 180_000_000_000), b_bal.credit_sum - b_bal.debit_sum);
+
+    // Partner C: 20% × 6,000 = 1,200
+    const c_bal = try queryBalance(database, partner_c, period_id);
+    try std.testing.expectEqual(@as(i64, 120_000_000_000), c_bal.credit_sum - c_bal.debit_sum);
+
+    // Revenue and expense zeroed
+    const rev_bal = try queryBalance(database, revenue_id, period_id);
+    try std.testing.expectEqual(@as(i64, 0), rev_bal.credit_sum - rev_bal.debit_sum);
+    const exp_bal = try queryBalance(database, expense_id, period_id);
+    try std.testing.expectEqual(@as(i64, 0), exp_bal.debit_sum - exp_bal.credit_sum);
+}
+
+test "closePeriod: partnership with 50/50 allocation on net loss splits equally" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Partners", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .partnership, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Revenue", .revenue, false, "admin");
+    const expense_id = try account_mod.Account.create(database, book_id, "5001", "Expense", .expense, false, "admin");
+    const partner_a = try account_mod.Account.create(database, book_id, "3101", "Partner A", .equity, false, "admin");
+    const partner_b = try account_mod.Account.create(database, book_id, "3102", "Partner B", .equity, false, "admin");
+
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_a, "Partner A", 5000, "2026-01-01", "admin");
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_b, "Partner B", 5000, "2026-01-01", "admin");
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Net loss: Revenue 3,000 - Expense 5,000 = -2,000
+    try postTestEntry(database, book_id, "REV-001", cash_id, 300_000_000_000, revenue_id, 300_000_000_000, period_id);
+    try postTestEntry(database, book_id, "EXP-001", expense_id, 500_000_000_000, cash_id, 500_000_000_000, period_id);
+
+    try closePeriod(database, book_id, period_id, "admin");
+
+    // Each partner absorbs -1,000 (debit balance of 100,000,000,000)
+    const a_bal = try queryBalance(database, partner_a, period_id);
+    try std.testing.expectEqual(@as(i64, 100_000_000_000), a_bal.debit_sum - a_bal.credit_sum);
+
+    const b_bal = try queryBalance(database, partner_b, period_id);
+    try std.testing.expectEqual(@as(i64, 100_000_000_000), b_bal.debit_sum - b_bal.credit_sum);
+}
+
+test "closePeriod: partnership rounding residual absorbed by last partner" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Partners", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .partnership, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Revenue", .revenue, false, "admin");
+    const partner_a = try account_mod.Account.create(database, book_id, "3101", "Partner A", .equity, false, "admin");
+    const partner_b = try account_mod.Account.create(database, book_id, "3102", "Partner B", .equity, false, "admin");
+    const partner_c = try account_mod.Account.create(database, book_id, "3103", "Partner C", .equity, false, "admin");
+
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_a, "A", 3333, "2026-01-01", "admin");
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_b, "B", 3333, "2026-01-01", "admin");
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, partner_c, "C", 3334, "2026-01-01", "admin"); // last gets 33.34 to sum to 100.00
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Net income = 100 (in base units: 100_00000000 = 10,000,000,000)
+    try postTestEntry(database, book_id, "REV-001", cash_id, 10_000_000_000, revenue_id, 10_000_000_000, period_id);
+
+    try closePeriod(database, book_id, period_id, "admin");
+
+    // A: 3333/10000 × 10_000_000_000 = 3_333_000_000
+    // B: 3333/10000 × 10_000_000_000 = 3_333_000_000
+    // C: 10_000_000_000 - 3_333_000_000 - 3_333_000_000 = 3_334_000_000 (absorbs residual)
+    const a_bal = try queryBalance(database, partner_a, period_id);
+    const b_bal = try queryBalance(database, partner_b, period_id);
+    const c_bal = try queryBalance(database, partner_c, period_id);
+
+    const a_net = a_bal.credit_sum - a_bal.debit_sum;
+    const b_net = b_bal.credit_sum - b_bal.debit_sum;
+    const c_net = c_bal.credit_sum - c_bal.debit_sum;
+
+    // Sum must equal the total net income exactly
+    try std.testing.expectEqual(@as(i64, 10_000_000_000), a_net + b_net + c_net);
+    // A and B get the proportional share
+    try std.testing.expectEqual(@as(i64, 3_333_000_000), a_net);
+    try std.testing.expectEqual(@as(i64, 3_333_000_000), b_net);
+    // C absorbs the residual
+    try std.testing.expectEqual(@as(i64, 3_334_000_000), c_net);
+}
+
+test "closePeriod: llc same allocation behavior as partnership" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "XYZ LLC", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .llc, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Revenue", .revenue, false, "admin");
+    const member_1 = try account_mod.Account.create(database, book_id, "3101", "Member 1 Capital", .equity, false, "admin");
+    const member_2 = try account_mod.Account.create(database, book_id, "3102", "Member 2 Capital", .equity, false, "admin");
+
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, member_1, "Member 1", 6000, "2026-01-01", "admin"); // 60%
+    _ = try book_mod.Book.addEquityAllocation(database, book_id, member_2, "Member 2", 4000, "2026-01-01", "admin"); // 40%
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    // Net income 1,000
+    try postTestEntry(database, book_id, "REV-001", cash_id, 100_000_000_000, revenue_id, 100_000_000_000, period_id);
+
+    try closePeriod(database, book_id, period_id, "admin");
+
+    const m1_bal = try queryBalance(database, member_1, period_id);
+    try std.testing.expectEqual(@as(i64, 60_000_000_000), m1_bal.credit_sum - m1_bal.debit_sum);
+
+    const m2_bal = try queryBalance(database, member_2, period_id);
+    try std.testing.expectEqual(@as(i64, 40_000_000_000), m2_bal.credit_sum - m2_bal.debit_sum);
+}
+
+test "closePeriod: sole proprietorship uses single-target close to Owner's Capital" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Juan dela Cruz", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .sole_proprietorship, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Sales", .revenue, false, "admin");
+    const expense_id = try account_mod.Account.create(database, book_id, "5001", "Expenses", .expense, false, "admin");
+    const owner_cap = try account_mod.Account.create(database, book_id, "3000", "Owner's Capital", .equity, false, "admin");
+
+    try book_mod.Book.setEquityCloseTarget(database, book_id, owner_cap, "admin");
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    try postTestEntry(database, book_id, "REV-001", cash_id, 500_000_000_000, revenue_id, 500_000_000_000, period_id);
+    try postTestEntry(database, book_id, "EXP-001", expense_id, 200_000_000_000, cash_id, 200_000_000_000, period_id);
+
+    try closePeriod(database, book_id, period_id, "admin");
+
+    // Owner's Capital increases by net income (300)
+    const oc_bal = try queryBalance(database, owner_cap, period_id);
+    try std.testing.expectEqual(@as(i64, 300_000_000_000), oc_bal.credit_sum - oc_bal.debit_sum);
+}
+
+test "closePeriod: nonprofit uses single-target close to Net Assets Without Restrictions" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Heft Foundation", "PHP", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .nonprofit, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1001", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4001", "Donations", .revenue, false, "admin");
+    const expense_id = try account_mod.Account.create(database, book_id, "5001", "Programs", .expense, false, "admin");
+    const na_no_restrict = try account_mod.Account.create(database, book_id, "3000", "Net Assets Without Restrictions", .equity, false, "admin");
+
+    try book_mod.Book.setEquityCloseTarget(database, book_id, na_no_restrict, "admin");
+
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    try postTestEntry(database, book_id, "DON-001", cash_id, 1_000_000_000_000, revenue_id, 1_000_000_000_000, period_id);
+    try postTestEntry(database, book_id, "PROG-001", expense_id, 600_000_000_000, cash_id, 600_000_000_000, period_id);
+
+    try closePeriod(database, book_id, period_id, "admin");
+
+    // Net Assets increases by change in net assets (400)
+    const na_bal = try queryBalance(database, na_no_restrict, period_id);
+    try std.testing.expectEqual(@as(i64, 400_000_000_000), na_bal.credit_sum - na_bal.debit_sum);
 }

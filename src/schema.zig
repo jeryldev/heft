@@ -14,7 +14,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 12;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
@@ -86,6 +86,46 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
         };
     }
 
+    if (from_version < 11) {
+        database.exec("ALTER TABLE ledger_books ADD COLUMN dividends_drawings_account_id INTEGER;") catch |err| {
+            std.log.debug("migrate v11: dividends_drawings column: {s} (expected if exists)", .{@errorName(err)});
+        };
+        database.exec("ALTER TABLE ledger_books ADD COLUMN current_year_earnings_account_id INTEGER;") catch |err| {
+            std.log.debug("migrate v11: current_year_earnings column: {s} (expected if exists)", .{@errorName(err)});
+        };
+    }
+
+    if (from_version < 12) {
+        database.exec(
+            \\CREATE TABLE IF NOT EXISTS ledger_equity_allocations (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+            \\  account_id INTEGER NOT NULL REFERENCES ledger_accounts(id),
+            \\  allocation_name TEXT NOT NULL
+            \\    CHECK (length(allocation_name) BETWEEN 1 AND 100),
+            \\  allocation_type TEXT NOT NULL DEFAULT 'percentage'
+            \\    CHECK (allocation_type IN ('percentage', 'ratio', 'equal', 'fixed_amount')),
+            \\  allocation_value INTEGER NOT NULL
+            \\    CHECK (allocation_value >= 0),
+            \\  effective_date TEXT NOT NULL
+            \\    CHECK (length(effective_date) = 10),
+            \\  end_date TEXT
+            \\    CHECK (end_date IS NULL OR length(end_date) = 10),
+            \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            \\  CHECK (end_date IS NULL OR end_date >= effective_date)
+            \\);
+        ) catch |err| {
+            std.log.debug("migrate v12: equity_allocations table: {s}", .{@errorName(err)});
+        };
+        database.exec(
+            \\CREATE INDEX IF NOT EXISTS idx_equity_allocations_book_dates
+            \\  ON ledger_equity_allocations (book_id, effective_date, end_date);
+        ) catch |err| {
+            std.log.debug("migrate v12: equity_allocations index: {s}", .{@errorName(err)});
+        };
+    }
+
     const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
     try database.exec(version_pragma);
 
@@ -139,6 +179,8 @@ const tables = [_][*:0]const u8{
     \\    CHECK (entity_type IN ('corporation', 'sole_proprietorship', 'partnership',
     \\                            'llc', 'nonprofit', 'cooperative', 'fund',
     \\                            'government', 'other')),
+    \\  dividends_drawings_account_id INTEGER,
+    \\  current_year_earnings_account_id INTEGER,
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     \\);
@@ -491,6 +533,30 @@ const tables = [_][*:0]const u8{
     \\  UNIQUE (entry_line_id)
     \\);
     ,
+    // ── Equity Allocations (Sprint A.4) ─────────────────────────
+    // Per-partner / per-member capital account allocations for
+    // partnerships, LLCs, and other multi-owner entities. Each row
+    // defines one capital account's share of net income for a date range.
+    // Effective_date windowing allows allocation agreements to change.
+    \\CREATE TABLE IF NOT EXISTS ledger_equity_allocations (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id),
+    \\  account_id INTEGER NOT NULL REFERENCES ledger_accounts(id),
+    \\  allocation_name TEXT NOT NULL
+    \\    CHECK (length(allocation_name) BETWEEN 1 AND 100),
+    \\  allocation_type TEXT NOT NULL DEFAULT 'percentage'
+    \\    CHECK (allocation_type IN ('percentage', 'ratio', 'equal', 'fixed_amount')),
+    \\  allocation_value INTEGER NOT NULL
+    \\    CHECK (allocation_value >= 0),
+    \\  effective_date TEXT NOT NULL
+    \\    CHECK (length(effective_date) = 10),
+    \\  end_date TEXT
+    \\    CHECK (end_date IS NULL OR length(end_date) = 10),
+    \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    \\  CHECK (end_date IS NULL OR end_date >= effective_date)
+    \\);
+    ,
 };
 
 // ── Indexes (13) ────────────────────────────────────────────────
@@ -553,6 +619,10 @@ const indexes = [_][*:0]const u8{
     // Open items: counterparty aging by due date
     \\CREATE INDEX IF NOT EXISTS idx_open_items_counterparty
     \\  ON ledger_open_items (counterparty_id, status, due_date);
+    ,
+    // Equity allocations: lookup active allocations by book and date
+    \\CREATE INDEX IF NOT EXISTS idx_equity_allocations_book_dates
+    \\  ON ledger_equity_allocations (book_id, effective_date, end_date);
     ,
 };
 
@@ -617,7 +687,7 @@ const triggers = [_][*:0]const u8{
 
 // ── Tests ───────────────────────────────────────────────────────
 
-test "createAll creates 17 tables" {
+test "createAll creates 18 tables" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -627,10 +697,10 @@ test "createAll creates 17 tables" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 17), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 18), stmt.columnInt(0));
 }
 
-test "createAll creates 14 indexes" {
+test "createAll creates 15 indexes" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -640,7 +710,7 @@ test "createAll creates 14 indexes" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 14), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 15), stmt.columnInt(0));
 }
 
 test "createAll creates transaction history view" {

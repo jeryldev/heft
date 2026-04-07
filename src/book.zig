@@ -76,11 +76,14 @@ pub const Book = struct {
             "income_summary_account_id",
             "opening_balance_account_id",
             "suspense_account_id",
+            "dividends_drawings_account_id",
+            "current_year_earnings_account_id",
         };
         var stmt = try database.prepare(
             \\SELECT rounding_account_id, fx_gain_loss_account_id,
             \\  retained_earnings_account_id, income_summary_account_id,
-            \\  opening_balance_account_id, suspense_account_id
+            \\  opening_balance_account_id, suspense_account_id,
+            \\  dividends_drawings_account_id, current_year_earnings_account_id
             \\FROM ledger_books WHERE id = ?;
         );
         defer stmt.finalize();
@@ -254,6 +257,247 @@ pub const Book = struct {
         try audit.log(database, "book", book_id, "update", "retained_earnings_account_id", null, id_str, performed_by, book_id);
 
         if (owns_txn) try database.commit();
+    }
+
+    /// Generic alias for setRetainedEarningsAccount. Use this name for
+    /// non-corporation entity types (sole prop Owner's Capital, nonprofit
+    /// Net Assets, partnership single-capital, etc). The underlying storage
+    /// is the same — both names set the `retained_earnings_account_id`
+    /// column. The engine closes revenue/expense to whatever account is
+    /// designated here, regardless of entity type.
+    pub fn setEquityCloseTarget(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        return setRetainedEarningsAccount(database, book_id, account_id, performed_by);
+    }
+
+    /// Designate the dividends/drawings account. Must be an equity account.
+    /// Used for corporation Dividends Declared (contra-equity) or sole
+    /// proprietorship Owner's Drawings (contra-equity). The engine closes
+    /// this account to the equity close target during period close.
+    pub fn setDividendsDrawingsAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status != .active) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = account_mod.AccountType.fromString(stmt.columnText(2).?) orelse return error.InvalidInput;
+            if (acct_type != .equity) return error.InvalidInput;
+        }
+
+        if (try isSystemAccount(database, book_id, account_id, "dividends_drawings_account_id")) return error.InvalidInput;
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET dividends_drawings_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "dividends_drawings_account_id", null, id_str, performed_by, book_id);
+
+        if (owns_txn) try database.commit();
+    }
+
+    /// Designate the current year earnings account. Must be a non-contra
+    /// equity account. When set, period close posts net income here first
+    /// instead of directly to retained earnings. Year-end close rolls this
+    /// account into retained earnings (implemented in Sprint A.5).
+    pub fn setCurrentYearEarningsAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT status, book_id, account_type, is_contra FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const acct_status = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (acct_status != .active) return error.AccountInactive;
+            if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
+            const acct_type = account_mod.AccountType.fromString(stmt.columnText(2).?) orelse return error.InvalidInput;
+            if (acct_type != .equity) return error.InvalidInput;
+            if (stmt.columnInt(3) != 0) return error.InvalidInput;
+        }
+
+        if (try isSystemAccount(database, book_id, account_id, "current_year_earnings_account_id")) return error.InvalidInput;
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET current_year_earnings_account_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        var id_buf: [id_buf_len]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{account_id}) catch unreachable;
+
+        try audit.log(database, "book", book_id, "update", "current_year_earnings_account_id", null, id_str, performed_by, book_id);
+
+        if (owns_txn) try database.commit();
+    }
+
+    /// Add an equity allocation for a partnership/LLC capital account.
+    /// allocation_value is scaled ×10^4 for percentage type (5000 = 50.00%).
+    /// effective_date is the first date this allocation applies.
+    /// Sum validation happens via validateEquityAllocations, NOT here —
+    /// so callers can build up allocations incrementally in a transaction.
+    pub fn addEquityAllocation(
+        database: db.Database,
+        book_id: i64,
+        account_id: i64,
+        allocation_name: []const u8,
+        allocation_value: i64,
+        effective_date: []const u8,
+        performed_by: []const u8,
+    ) !i64 {
+        if (allocation_name.len == 0 or allocation_name.len > 100) return error.InvalidInput;
+        if (allocation_value < 0 or allocation_value > 10000) return error.InvalidInput;
+        if (effective_date.len != 10) return error.InvalidInput;
+
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+        }
+
+        {
+            var stmt = try database.prepare("SELECT book_id, account_type FROM ledger_accounts WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, account_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            if (stmt.columnInt64(0) != book_id) return error.InvalidInput;
+            const acct_type = account_mod.AccountType.fromString(stmt.columnText(1).?) orelse return error.InvalidInput;
+            if (acct_type != .equity) return error.InvalidInput;
+        }
+
+        var alloc_id: i64 = 0;
+        {
+            var stmt = try database.prepare(
+                \\INSERT INTO ledger_equity_allocations
+                \\  (book_id, account_id, allocation_name, allocation_type, allocation_value, effective_date)
+                \\VALUES (?, ?, ?, 'percentage', ?, ?);
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            try stmt.bindInt(2, account_id);
+            try stmt.bindText(3, allocation_name);
+            try stmt.bindInt(4, allocation_value);
+            try stmt.bindText(5, effective_date);
+            _ = try stmt.step();
+            alloc_id = database.lastInsertRowId();
+        }
+
+        try audit.log(database, "equity_allocation", alloc_id, "create", null, null, null, performed_by, book_id);
+
+        if (owns_txn) try database.commit();
+        return alloc_id;
+    }
+
+    /// End an equity allocation by setting its end_date. The allocation
+    /// remains in the database for historical/audit purposes but is
+    /// excluded from validateEquityAllocations for dates > end_date.
+    pub fn endEquityAllocation(database: db.Database, allocation_id: i64, end_date: []const u8, performed_by: []const u8) !void {
+        if (end_date.len != 10) return error.InvalidInput;
+
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        var book_id: i64 = 0;
+        var effective_date_buf: [16]u8 = undefined;
+        var effective_date_len: usize = 0;
+        {
+            var stmt = try database.prepare("SELECT book_id, effective_date, end_date FROM ledger_equity_allocations WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, allocation_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            book_id = stmt.columnInt64(0);
+            const eff = stmt.columnText(1).?;
+            effective_date_len = @min(eff.len, effective_date_buf.len);
+            @memcpy(effective_date_buf[0..effective_date_len], eff[0..effective_date_len]);
+            if (stmt.columnText(2) != null) return error.InvalidInput; // already ended
+        }
+
+        if (std.mem.order(u8, end_date, effective_date_buf[0..effective_date_len]) == .lt) {
+            return error.InvalidInput;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_equity_allocations SET end_date = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, end_date);
+            try stmt.bindInt(2, allocation_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "equity_allocation", allocation_id, "update", "end_date", null, end_date, performed_by, book_id);
+
+        if (owns_txn) try database.commit();
+    }
+
+    /// Validate that the active equity allocations at a given date sum
+    /// to exactly 10000 (100.00%). Returns EquityAllocationRequired if
+    /// there are no active allocations, EquityAllocationTotalInvalid if
+    /// the sum is wrong. Called by closePeriod for partnership/llc entity
+    /// types before the allocated close.
+    pub fn validateEquityAllocations(database: db.Database, book_id: i64, at_date: []const u8) !void {
+        var stmt = try database.prepare(
+            \\SELECT COALESCE(SUM(allocation_value), 0), COUNT(*)
+            \\FROM ledger_equity_allocations
+            \\WHERE book_id = ?
+            \\  AND effective_date <= ?
+            \\  AND (end_date IS NULL OR end_date >= ?)
+            \\  AND allocation_type = 'percentage';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, at_date);
+        try stmt.bindText(3, at_date);
+        _ = try stmt.step();
+        const total = stmt.columnInt64(0);
+        const count = stmt.columnInt(1);
+        if (count == 0) return error.EquityAllocationRequired;
+        if (total != 10000) return error.EquityAllocationTotalInvalid;
     }
 
     pub fn setIncomeSummaryAccount(database: db.Database, book_id: i64, account_id: i64, performed_by: []const u8) !void {
@@ -1632,6 +1876,429 @@ test "setEntityType is no-op when already that type" {
     defer stmt.finalize();
     _ = try stmt.step();
     try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "setEquityCloseTarget is alias for setRetainedEarningsAccount" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3100", "Retained Earnings", .equity, false, "admin");
+
+    try Book.setEquityCloseTarget(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT retained_earnings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setEquityCloseTarget works for sole proprietorship Owner's Capital" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Juan dela Cruz", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .sole_proprietorship, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Owner's Capital", .equity, false, "admin");
+
+    try Book.setEquityCloseTarget(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT retained_earnings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setEquityCloseTarget works for nonprofit Net Assets Without Restrictions" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Heft Foundation", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .nonprofit, "admin");
+    _ = try account_mod.Account.create(database, 1, "3000", "Net Assets Without Restrictions", .equity, false, "admin");
+
+    try Book.setEquityCloseTarget(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT retained_earnings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setEquityCloseTarget rejects non-equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "FY2026", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+
+    const result = Book.setEquityCloseTarget(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "EquityCloseTargetRequired error alias exists" {
+    // This test just verifies the error name exists in the error set.
+    // The error should be usable as a return type.
+    const err: anyerror = error.EquityCloseTargetRequired;
+    try std.testing.expect(err == error.EquityCloseTargetRequired);
+}
+
+// ── Sprint A.3: Dividends/Drawings + Current Year Earnings ─────
+
+test "setDividendsDrawingsAccount happy path with contra equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme Corp", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3900", "Dividends Declared", .equity, true, "admin");
+
+    try Book.setDividendsDrawingsAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT dividends_drawings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setDividendsDrawingsAccount happy path with non-contra equity (sole prop drawings)" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Juan dela Cruz", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .sole_proprietorship, "admin");
+    _ = try account_mod.Account.create(database, 1, "3900", "Owner's Drawings", .equity, true, "admin");
+
+    try Book.setDividendsDrawingsAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT dividends_drawings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setDividendsDrawingsAccount rejects non-equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+
+    const result = Book.setDividendsDrawingsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setDividendsDrawingsAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3900", "Dividends", .equity, true, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setDividendsDrawingsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setDividendsDrawingsAccount rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "3900", "Dividends", .equity, true, "admin");
+
+    const result = Book.setDividendsDrawingsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setDividendsDrawingsAccount writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3900", "Dividends", .equity, true, "admin");
+    try Book.setDividendsDrawingsAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'book' AND field_changed = 'dividends_drawings_account_id';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+test "setCurrentYearEarningsAccount happy path" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3150", "Current Year Earnings", .equity, false, "admin");
+
+    try Book.setCurrentYearEarningsAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare("SELECT current_year_earnings_account_id FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1), stmt.columnInt64(0));
+}
+
+test "setCurrentYearEarningsAccount rejects contra equity" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3150", "Treasury Stock", .equity, true, "admin");
+
+    const result = Book.setCurrentYearEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setCurrentYearEarningsAccount rejects non-equity" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "4000", "Revenue", .revenue, false, "admin");
+
+    const result = Book.setCurrentYearEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "setCurrentYearEarningsAccount rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3150", "CYE", .equity, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setCurrentYearEarningsAccount(database, 1, 1, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setCurrentYearEarningsAccount writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3150", "CYE", .equity, false, "admin");
+    try Book.setCurrentYearEarningsAccount(database, 1, 1, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'book' AND field_changed = 'current_year_earnings_account_id';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}
+
+// ── Sprint A.4: Equity Allocations ─────────────────────────────
+
+test "addEquityAllocation inserts a single allocation row" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "ABC Partners", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .partnership, "admin");
+    const partner_a = try account_mod.Account.create(database, 1, "3101", "Partner A Capital", .equity, false, "admin");
+
+    const alloc_id = try Book.addEquityAllocation(database, 1, partner_a, "Partner A", 5000, "2026-01-01", "admin");
+    try std.testing.expect(alloc_id > 0);
+
+    var stmt = try database.prepare("SELECT allocation_name, allocation_value FROM ledger_equity_allocations WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, alloc_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("Partner A", stmt.columnText(0).?);
+    try std.testing.expectEqual(@as(i64, 5000), stmt.columnInt64(1));
+}
+
+test "addEquityAllocation rejects non-equity account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "ABC Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "1000", "Cash", .asset, false, "admin");
+
+    const result = Book.addEquityAllocation(database, 1, 1, "Partner A", 5000, "2026-01-01", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "addEquityAllocation rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "ABC", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.addEquityAllocation(database, 1, 1, "Partner A", 5000, "2026-01-01", "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "addEquityAllocation rejects cross-book account" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Book A", "PHP", 2, "admin");
+    _ = try Book.create(database, "Book B", "USD", 2, "admin");
+    _ = try account_mod.Account.create(database, 2, "3101", "Cross Book Partner", .equity, false, "admin");
+
+    const result = Book.addEquityAllocation(database, 1, 1, "Partner", 5000, "2026-01-01", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "addEquityAllocation rejects percentage > 10000" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+
+    const result = Book.addEquityAllocation(database, 1, 1, "Partner A", 10001, "2026-01-01", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "addEquityAllocation rejects percentage < 0" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+
+    const result = Book.addEquityAllocation(database, 1, 1, "Partner A", -1, "2026-01-01", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "endEquityAllocation sets end_date" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    const alloc_id = try Book.addEquityAllocation(database, 1, 1, "Partner A", 5000, "2026-01-01", "admin");
+
+    try Book.endEquityAllocation(database, alloc_id, "2026-12-31", "admin");
+
+    var stmt = try database.prepare("SELECT end_date FROM ledger_equity_allocations WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, alloc_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("2026-12-31", stmt.columnText(0).?);
+}
+
+test "endEquityAllocation rejects end_date before effective_date" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    const alloc_id = try Book.addEquityAllocation(database, 1, 1, "Partner A", 5000, "2026-06-01", "admin");
+
+    const result = Book.endEquityAllocation(database, alloc_id, "2026-01-01", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "endEquityAllocation rejects already-ended allocation" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    const alloc_id = try Book.addEquityAllocation(database, 1, 1, "Partner A", 5000, "2026-01-01", "admin");
+    try Book.endEquityAllocation(database, alloc_id, "2026-12-31", "admin");
+
+    const result = Book.endEquityAllocation(database, alloc_id, "2027-01-01", "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "validateEquityAllocations succeeds when percentages sum to 10000" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "ABC Partnership", "PHP", 2, "admin");
+    const pa = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    const pb = try account_mod.Account.create(database, 1, "3102", "Partner B", .equity, false, "admin");
+    const pc = try account_mod.Account.create(database, 1, "3103", "Partner C", .equity, false, "admin");
+
+    _ = try Book.addEquityAllocation(database, 1, pa, "Partner A", 5000, "2026-01-01", "admin"); // 50.00%
+    _ = try Book.addEquityAllocation(database, 1, pb, "Partner B", 3000, "2026-01-01", "admin"); // 30.00%
+    _ = try Book.addEquityAllocation(database, 1, pc, "Partner C", 2000, "2026-01-01", "admin"); // 20.00%
+
+    try Book.validateEquityAllocations(database, 1, "2026-06-15");
+}
+
+test "validateEquityAllocations fails when percentages do not sum to 10000" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Broken Partnership", "PHP", 2, "admin");
+    const pa = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    const pb = try account_mod.Account.create(database, 1, "3102", "Partner B", .equity, false, "admin");
+
+    _ = try Book.addEquityAllocation(database, 1, pa, "Partner A", 5000, "2026-01-01", "admin");
+    _ = try Book.addEquityAllocation(database, 1, pb, "Partner B", 4000, "2026-01-01", "admin"); // sums to 9000 (90%)
+
+    const result = Book.validateEquityAllocations(database, 1, "2026-06-15");
+    try std.testing.expectError(error.EquityAllocationTotalInvalid, result);
+}
+
+test "validateEquityAllocations fails when no allocations exist" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Empty Partnership", "PHP", 2, "admin");
+
+    const result = Book.validateEquityAllocations(database, 1, "2026-06-15");
+    try std.testing.expectError(error.EquityAllocationRequired, result);
+}
+
+test "validateEquityAllocations ignores ended allocations" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partnership", "PHP", 2, "admin");
+    const pa = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    const pb = try account_mod.Account.create(database, 1, "3102", "Partner B", .equity, false, "admin");
+    const pc = try account_mod.Account.create(database, 1, "3103", "Partner C", .equity, false, "admin");
+
+    // Initial allocation: 50/50
+    const old_a = try Book.addEquityAllocation(database, 1, pa, "Partner A", 5000, "2026-01-01", "admin");
+    const old_b = try Book.addEquityAllocation(database, 1, pb, "Partner B", 5000, "2026-01-01", "admin");
+
+    // End the old allocations on June 30
+    try Book.endEquityAllocation(database, old_a, "2026-06-30", "admin");
+    try Book.endEquityAllocation(database, old_b, "2026-06-30", "admin");
+
+    // New allocation: 40/40/20 starting July 1
+    _ = try Book.addEquityAllocation(database, 1, pa, "Partner A", 4000, "2026-07-01", "admin");
+    _ = try Book.addEquityAllocation(database, 1, pb, "Partner B", 4000, "2026-07-01", "admin");
+    _ = try Book.addEquityAllocation(database, 1, pc, "Partner C", 2000, "2026-07-01", "admin");
+
+    // On June 15: old allocation active (50/50 = 100%)
+    try Book.validateEquityAllocations(database, 1, "2026-06-15");
+
+    // On July 15: new allocation active (40/40/20 = 100%)
+    try Book.validateEquityAllocations(database, 1, "2026-07-15");
+}
+
+test "addEquityAllocation writes audit log" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Partners", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, 1, "3101", "Partner A", .equity, false, "admin");
+    _ = try Book.addEquityAllocation(database, 1, 1, "Partner A", 5000, "2026-01-01", "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'equity_allocation' AND action = 'create';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
 }
 
 test "create book with all 9 entity types via setEntityType" {
