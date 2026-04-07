@@ -61,7 +61,13 @@ pub const EntityType = enum {
 };
 
 pub const Book = struct {
-    const id_buf_len = 20; // max i64 decimal digits
+    // Decimal length of any i64 value: -9223372036854775808 is exactly 20
+    // characters (sign + 19 digits). Every `bufPrint("{d}", .{i64_val}) catch
+    // unreachable` paired with `var buf: [id_buf_len]u8 = undefined;` in this
+    // file is therefore provably non-failing — the buffer is always wide
+    // enough for the entire output. Do not shrink without revisiting every
+    // call site.
+    const id_buf_len = 20;
 
     const create_sql: [*:0]const u8 =
         \\INSERT INTO ledger_books (name, base_currency, decimal_places)
