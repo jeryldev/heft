@@ -32,9 +32,27 @@ pub const EntryStatus = enum {
 
 pub const Entry = struct {
     const create_sql: [*:0]const u8 =
-        \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, metadata, period_id, book_id)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?);
+        \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, metadata, entry_type, period_id, book_id)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?);
     ;
+
+    pub const EntryType = enum {
+        standard,
+        opening,
+        closing,
+        reversal,
+        adjusting,
+
+        pub fn toString(self: EntryType) []const u8 {
+            return switch (self) {
+                .standard => "standard",
+                .opening => "opening",
+                .closing => "closing",
+                .reversal => "reversal",
+                .adjusting => "adjusting",
+            };
+        }
+    };
 
     const line_sql: [*:0]const u8 =
         \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, entry_id, description, counterparty_id)
@@ -54,6 +72,10 @@ pub const Entry = struct {
     ;
 
     pub fn createDraft(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, performed_by: []const u8) !i64 {
+        return createDraftAs(database, book_id, document_number, transaction_date, posting_date, description, period_id, metadata, .standard, performed_by);
+    }
+
+    pub fn createDraftAs(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, entry_type: EntryType, performed_by: []const u8) !i64 {
         if (document_number.len == 0) return error.InvalidInput;
 
         const owns_txn = try database.beginTransactionIfNeeded();
@@ -92,8 +114,9 @@ pub const Entry = struct {
         try stmt.bindText(3, posting_date);
         if (description) |d| try stmt.bindText(4, d) else try stmt.bindNull(4);
         if (metadata) |m| try stmt.bindText(5, m) else try stmt.bindNull(5);
-        try stmt.bindInt(6, period_id);
-        try stmt.bindInt(7, book_id);
+        try stmt.bindText(6, entry_type.toString());
+        try stmt.bindInt(7, period_id);
+        try stmt.bindInt(8, book_id);
 
         _ = stmt.step() catch return error.DuplicateNumber;
 
@@ -371,7 +394,7 @@ pub const Entry = struct {
         errdefer if (owns_txn) database.rollback();
 
         {
-            var stmt = try database.prepare("SELECT status, period_id, book_id, metadata FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, period_id, book_id, entry_type FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
@@ -380,14 +403,11 @@ pub const Entry = struct {
             if (status != .draft) return error.AlreadyPosted;
             period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
-            // Opening entries are marked with {"opening_entry":true} in metadata.
-            // They DO NOT update the balance cache or mark future periods stale,
+            // Opening entries skip cache update + future-stale propagation,
             // preserving the existing cumulative-query architecture. The journal
-            // entry exists for audit trail completeness (Rule 1 satisfied).
-            if (stmt.columnText(3)) |meta| {
-                if (std.mem.indexOf(u8, meta, "\"opening_entry\":true") != null) {
-                    is_opening_entry = true;
-                }
+            // entry still exists for audit trail completeness (Rule 1 satisfied).
+            if (stmt.columnText(3)) |et| {
+                if (std.mem.eql(u8, et, "opening")) is_opening_entry = true;
             }
         }
 
@@ -627,7 +647,7 @@ pub const Entry = struct {
         errdefer if (owns_txn) database.rollback();
 
         {
-            var stmt = try database.prepare("SELECT status, period_id, book_id, metadata FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, period_id, book_id, entry_type FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
@@ -638,10 +658,8 @@ pub const Entry = struct {
             entry_book_id = stmt.columnInt64(2);
             // Opening entries skipped cache updates at post time; they must
             // also skip cache reversal at void time.
-            if (stmt.columnText(3)) |meta| {
-                if (std.mem.indexOf(u8, meta, "\"opening_entry\":true") != null) {
-                    is_opening_entry = true;
-                }
+            if (stmt.columnText(3)) |et| {
+                if (std.mem.eql(u8, et, "opening")) is_opening_entry = true;
             }
         }
 

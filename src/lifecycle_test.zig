@@ -814,7 +814,11 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
     // Recalculate all stale balances and verify clean
     _ = try cache_mod.recalculateAllStale(database, book_id);
 
-    // Lock all periods (permanent — audit complete)
+    // Lock all periods (permanent — audit complete).
+    // Sprint D.1: closePeriod soft-closes mid-year periods, so periods 0-1
+    // need an explicit hard close before they can be locked.
+    try period_mod.Period.transition(database, period_ids[0], .closed, "controller");
+    try period_mod.Period.transition(database, period_ids[1], .closed, "controller");
     {
         var i: usize = 0;
         while (i < 12) : (i += 1) {
@@ -1978,7 +1982,7 @@ test "LIFECYCLE: Netted closing entries — multi-account fiscal year close and 
         var stmt = try database.prepare(
             \\SELECT COUNT(*) FROM ledger_entry_lines el
             \\JOIN ledger_entries e ON e.id = el.entry_id
-            \\WHERE e.book_id = ? AND e.metadata LIKE '%closing_entry%';
+            \\WHERE e.book_id = ? AND e.entry_type = 'closing';
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);

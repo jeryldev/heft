@@ -14,7 +14,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 12;
+pub const SCHEMA_VERSION: i32 = 13;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
@@ -349,6 +349,8 @@ const tables = [_][*:0]const u8{
     \\    CHECK (posted_by IS NULL OR length(posted_by) <= 100),
     \\  metadata TEXT
     \\    CHECK (metadata IS NULL OR length(metadata) <= 10000),
+    \\  entry_type TEXT NOT NULL DEFAULT 'standard'
+    \\    CHECK (entry_type IN ('standard', 'opening', 'closing', 'reversal', 'adjusting')),
     \\  approval_status TEXT NOT NULL DEFAULT 'none'
     \\    CHECK (approval_status IN ('none', 'pending', 'approved', 'rejected')),
     \\  approved_by TEXT

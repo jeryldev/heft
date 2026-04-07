@@ -1176,8 +1176,11 @@ test "CHAR reopen: cannot reopen if next period is closed" {
     try postYear1Transactions(s);
     try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
     try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
+    // Sprint D.1: closePeriod now soft-closes mid-year periods. Force Feb hard
+    // closed to recreate the "blocked by closed downstream" precondition.
+    try period_mod.Period.transitionWithReason(s.database, s.periods[1], .closed, null, "admin");
 
-    // Attempt to reopen Jan while Feb is also closed
+    // Attempt to reopen Jan while Feb is hard-closed
     const result = period_mod.Period.transitionWithReason(s.database, s.periods[0], .open, "Attempt", "admin");
     try std.testing.expectError(error.CannotReopenCascade, result);
 }

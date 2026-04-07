@@ -14,7 +14,7 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
         \\JOIN ledger_entries e ON e.id = el.entry_id
         \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
         \\  AND el.account_id = ?
-        \\  AND (e.metadata IS NULL OR e.metadata NOT LIKE '%"opening_entry":true%');
+        \\  AND e.entry_type != 'opening';
     );
     defer compute_stmt.finalize();
 

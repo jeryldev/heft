@@ -538,6 +538,17 @@ pub fn trialBalanceMovement(database: db.Database, book_id: i64, start_date: []c
     return result;
 }
 
+const ni_sql: [*:0]const u8 =
+    \\SELECT a.account_type, SUM(ab.debit_sum), SUM(ab.credit_sum)
+    \\FROM ledger_account_balances ab
+    \\JOIN ledger_accounts a ON a.id = ab.account_id
+    \\JOIN ledger_periods p ON p.id = ab.period_id
+    \\WHERE ab.book_id = ?
+    \\  AND p.start_date >= ? AND p.end_date <= ?
+    \\  AND a.account_type IN ('revenue', 'expense')
+    \\GROUP BY a.account_type;
+;
+
 const bs_sql: [*:0]const u8 =
     \\SELECT a.id, a.number, a.name, a.account_type, a.normal_balance,
     \\  SUM(ab.debit_sum), SUM(ab.credit_sum)
@@ -548,17 +559,6 @@ const bs_sql: [*:0]const u8 =
     \\  AND a.account_type IN ('asset', 'liability', 'equity')
     \\GROUP BY a.id
     \\ORDER BY a.number;
-;
-
-const ni_sql: [*:0]const u8 =
-    \\SELECT a.account_type, SUM(ab.debit_sum), SUM(ab.credit_sum)
-    \\FROM ledger_account_balances ab
-    \\JOIN ledger_accounts a ON a.id = ab.account_id
-    \\JOIN ledger_periods p ON p.id = ab.period_id
-    \\WHERE ab.book_id = ?
-    \\  AND p.start_date >= ? AND p.end_date <= ?
-    \\  AND a.account_type IN ('revenue', 'expense')
-    \\GROUP BY a.account_type;
 ;
 
 pub fn balanceSheetAuto(database: db.Database, book_id: i64, as_of_date: []const u8) !*ReportResult {

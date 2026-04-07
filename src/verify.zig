@@ -70,7 +70,7 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
             \\    FROM ledger_entry_lines el
             \\    JOIN ledger_entries e ON e.id = el.entry_id
             \\    WHERE e.book_id = ? AND e.status = 'posted'
-            \\      AND (e.metadata IS NULL OR e.metadata NOT LIKE '%"opening_entry":true%')
+            \\      AND e.entry_type != 'opening'
             \\    GROUP BY el.account_id, e.period_id
             \\) computed ON computed.account_id = ab.account_id AND computed.period_id = ab.period_id
             \\WHERE ab.book_id = ?;

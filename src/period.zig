@@ -177,14 +177,6 @@ pub const Period = struct {
         const is_reopen = target_status == .open and (current == .closed or current == .soft_closed);
         if (is_reopen) {
             if (reason == null or reason.?.len == 0) return error.InvalidInput;
-
-            // Sprint C.2: Reopening cascade. If the next period has an
-            // opening entry (derived from this period's close balances),
-            // that entry is now stale and must be voided. If the next
-            // period is closed or locked, refuse — the user must reopen
-            // the next period first (cascading in reverse chronological
-            // order).
-            try cascadeReopen(database, period_book_id, period_id, performed_by);
         }
 
         {
@@ -193,6 +185,14 @@ pub const Period = struct {
             try stmt.bindText(1, target_status.toString());
             try stmt.bindInt(2, period_id);
             _ = try stmt.step();
+        }
+
+        if (is_reopen) {
+            // Sprint C.2 + D.9: After flipping status to open, void stale
+            // closing entries in this period and the opening entry in the
+            // next period. Status must change first so voidEntry's PeriodClosed
+            // guard does not reject these legitimate cascade voids.
+            try cascadeReopen(database, period_book_id, period_id, performed_by);
         }
 
         try audit.log(database, "period", period_id, "transition", "status", current.toString(), target_status.toString(), performed_by, period_book_id);
@@ -211,6 +211,34 @@ pub const Period = struct {
     ///   void it (it's stale — derived from balances that are about to change).
     /// - If next period doesn't exist or has no opening entry, no-op.
     fn cascadeReopen(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8) !void {
+        // Void any posted closing entries in the period being reopened. Without
+        // this, re-close after reopen collides on document_number UNIQUE.
+        // Sprint D.9: closing entries become void on reopen so a fresh close
+        // can run and produce a revision-suffixed document number.
+        {
+            const entry_mod = @import("entry.zig");
+            var ids: [16]i64 = undefined;
+            var n: usize = 0;
+            {
+                var stmt = try database.prepare(
+                    \\SELECT id FROM ledger_entries
+                    \\WHERE book_id = ? AND period_id = ? AND status = 'posted'
+                    \\  AND entry_type = 'closing';
+                );
+                defer stmt.finalize();
+                try stmt.bindInt(1, book_id);
+                try stmt.bindInt(2, period_id);
+                while (try stmt.step()) {
+                    if (n >= ids.len) break;
+                    ids[n] = stmt.columnInt64(0);
+                    n += 1;
+                }
+            }
+            for (ids[0..n]) |eid| {
+                try entry_mod.Entry.voidEntry(database, eid, "Period reopen: stale closing entry", performed_by);
+            }
+        }
+
         var next_period_id: i64 = 0;
         var next_status: PeriodStatus = .open;
         {
@@ -240,7 +268,7 @@ pub const Period = struct {
             var stmt = try database.prepare(
                 \\SELECT id FROM ledger_entries
                 \\WHERE book_id = ? AND period_id = ? AND status = 'posted'
-                \\  AND metadata LIKE '%"opening_entry":true%'
+                \\  AND entry_type = 'opening'
                 \\LIMIT 1;
             );
             defer stmt.finalize();
@@ -256,6 +284,26 @@ pub const Period = struct {
         // with the updated balances.
         const entry_mod = @import("entry.zig");
         try entry_mod.Entry.voidEntry(database, opening_entry_id, "Period reopen cascade: stale opening entry", performed_by);
+
+        // Sprint D.5: Mark all downstream period caches stale so subsequent
+        // report queries trigger recalculateStale and pick up the corrected
+        // numbers from the re-closed period.
+        {
+            var stmt = try database.prepare(
+                \\UPDATE ledger_account_balances
+                \\SET is_stale = 1
+                \\WHERE book_id = ? AND period_id IN (
+                \\  SELECT id FROM ledger_periods
+                \\  WHERE book_id = ?
+                \\    AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?)
+                \\);
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            try stmt.bindInt(2, book_id);
+            try stmt.bindInt(3, period_id);
+            _ = try stmt.step();
+        }
     }
 
     const days_in_month = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };

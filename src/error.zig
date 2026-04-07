@@ -27,6 +27,7 @@ pub const LedgerError = error{
     OpeningBalanceAccountRequired,
     PeriodClosed,
     PeriodLocked,
+    PeriodNotInBalance,
     RetainedEarningsAccountRequired,
     EquityCloseTargetRequired,
     EquityAllocationRequired,
