@@ -47,4 +47,5 @@ comptime {
     _ = open_item;
     _ = LedgerError;
     _ = @import("lifecycle_test.zig");
+    _ = @import("characterization_test.zig");
 }
