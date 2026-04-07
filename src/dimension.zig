@@ -415,6 +415,13 @@ pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, 
     return buf[0..pos];
 }
 
+/// Maximum dimension values that a single rollup can process. Consistent with
+/// the bounded-allocation discipline used throughout the engine
+/// (MAX_REPORT_ROWS, MAX_CLASSIFICATION_NODES, MaxAccounts). Realistic chart-of-
+/// accounts dimensions hold tens to a few thousand values; 10k is a generous
+/// upper bound that prevents adversarial input from exhausting memory.
+pub const MAX_DIMENSION_VALUES: usize = 10_000;
+
 pub fn dimensionSummaryRollup(database: db.Database, book_id: i64, dimension_id: i64, start_date: []const u8, end_date: []const u8, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
@@ -445,6 +452,7 @@ pub fn dimensionSummaryRollup(database: db.Database, book_id: i64, dimension_id:
         try stmt.bindInt(4, dimension_id);
 
         while (try stmt.step()) {
+            if (entries.count() >= MAX_DIMENSION_VALUES) return error.TooManyAccounts;
             const id = stmt.columnInt64(0);
             const code_src = stmt.columnText(1) orelse "";
             const label_src = stmt.columnText(2) orelse "";
@@ -1203,6 +1211,25 @@ test "dimensionSummaryRollup aggregates child values to parent" {
     try std.testing.expect(std.mem.indexOf(u8, csv, "CC-100") != null);
     try std.testing.expect(std.mem.indexOf(u8, csv, "CC-101") != null);
     try std.testing.expect(std.mem.indexOf(u8, csv, "CC-102") != null);
+}
+
+test "dimensionSummaryRollup rejects when value count exceeds MAX_DIMENSION_VALUES" {
+    const database = try setupTestDb();
+    defer database.close();
+    const dim_id = try Dimension.create(database, 1, "Stress", .project, "admin");
+
+    // Create MAX + 1 values to trip the bound. SQLite in-memory inserts are
+    // fast enough that this completes well under a second.
+    var i: usize = 0;
+    var code_buf: [16]u8 = undefined;
+    while (i <= MAX_DIMENSION_VALUES) : (i += 1) {
+        const code = std.fmt.bufPrint(&code_buf, "V{d}", .{i}) catch unreachable;
+        _ = try DimensionValue.create(database, dim_id, code, "x", "admin");
+    }
+
+    var buf: [4096]u8 = undefined;
+    const result = dimensionSummaryRollup(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .csv);
+    try std.testing.expectError(error.TooManyAccounts, result);
 }
 
 test "dimensionSummaryRollup flat dimension same as dimensionSummary" {
