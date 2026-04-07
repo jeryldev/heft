@@ -247,7 +247,7 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
     switch (format) {
         .csv => {
             const header = "account_id,account_number,account_name,budget,actual_debit,actual_credit,variance\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -265,27 +265,27 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
                     std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
                 const variance = std.math.sub(i64, actual_net, budget_amt) catch return error.AmountOverflow;
 
-                const row = std.fmt.bufPrint(buf[pos..], "{d},", .{acct_id}) catch return error.InvalidInput;
+                const row = std.fmt.bufPrint(buf[pos..], "{d},", .{acct_id}) catch return error.BufferTooSmall;
                 pos += row.len;
                 pos += try export_mod.csvField(buf[pos..], number);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], name);
-                const rest = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d}\n", .{ budget_amt, actual_debit, actual_credit, variance }) catch return error.InvalidInput;
+                const rest = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d}\n", .{ budget_amt, actual_debit, actual_credit, variance }) catch return error.BufferTooSmall;
                 pos += rest.len;
             }
         },
         .json => {
             const header = "{\"rows\":[";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -304,18 +304,18 @@ pub fn budgetVsActual(database: db.Database, budget_id: i64, start_date: []const
                     std.math.sub(i64, actual_debit, actual_credit) catch return error.AmountOverflow;
                 const variance = std.math.sub(i64, actual_net, budget_amt) catch return error.AmountOverflow;
 
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"account_id\":{d},\"account_number\":\"", .{acct_id}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"account_id\":{d},\"account_number\":\"", .{acct_id}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], number);
-                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"account_name\":\"", .{}) catch return error.InvalidInput;
+                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"account_name\":\"", .{}) catch return error.BufferTooSmall;
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], name);
-                const j3 = std.fmt.bufPrint(buf[pos..], "\",\"budget\":{d},\"actual_debit\":{d},\"actual_credit\":{d},\"variance\":{d}}}", .{ budget_amt, actual_debit, actual_credit, variance }) catch return error.InvalidInput;
+                const j3 = std.fmt.bufPrint(buf[pos..], "\",\"budget\":{d},\"actual_debit\":{d},\"actual_credit\":{d},\"variance\":{d}}}", .{ budget_amt, actual_debit, actual_credit, variance }) catch return error.BufferTooSmall;
                 pos += j3.len;
             }
 
             const footer = "]}";
-            if (pos + footer.len > buf.len) return error.InvalidInput;
+            if (pos + footer.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + footer.len], footer);
             pos += footer.len;
         },
@@ -637,7 +637,7 @@ test "BudgetLine.set cross-book period returns CrossBookViolation" {
     try std.testing.expectError(error.CrossBookViolation, result);
 }
 
-test "budgetVsActual buffer too small returns InvalidInput" {
+test "budgetVsActual buffer too small returns BufferTooSmall" {
     const database = try setupTestDb();
     defer database.close();
     const book_id = try createTestBook(database);
@@ -649,7 +649,7 @@ test "budgetVsActual buffer too small returns InvalidInput" {
 
     var buf: [10]u8 = undefined;
     const result = budgetVsActual(database, budget_id, "2026-01-01", "2026-01-31", &buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 test "Budget audit log verified on create" {

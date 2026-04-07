@@ -314,9 +314,11 @@ pub const Account = struct {
 
             var walk_id: i64 = pid;
             var depth: u32 = 0;
+            var walk_stmt = try database.prepare("SELECT COALESCE(parent_id, 0) FROM ledger_accounts WHERE id = ?;");
+            defer walk_stmt.finalize();
             while (depth < 10) : (depth += 1) {
-                var walk_stmt = try database.prepare("SELECT COALESCE(parent_id, 0) FROM ledger_accounts WHERE id = ?;");
-                defer walk_stmt.finalize();
+                walk_stmt.reset();
+                walk_stmt.clearBindings();
                 try walk_stmt.bindInt(1, walk_id);
                 _ = try walk_stmt.step();
                 walk_id = walk_stmt.columnInt64(0);

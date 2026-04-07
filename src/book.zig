@@ -151,8 +151,8 @@ pub const Book = struct {
             const acct_status_enum = account_mod.AccountStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
             if (acct_status_enum != .active) return error.AccountInactive;
             if (stmt.columnInt64(1) != book_id) return error.InvalidInput;
-            const acct_type = stmt.columnText(2).?;
-            if (!std.mem.eql(u8, acct_type, "revenue") and !std.mem.eql(u8, acct_type, "expense")) return error.InvalidInput;
+            const acct_type = account_mod.AccountType.fromString(stmt.columnText(2).?) orelse return error.InvalidInput;
+            if (acct_type != .revenue and acct_type != .expense) return error.InvalidInput;
         }
 
         if (try isSystemAccount(database, book_id, account_id, "fx_gain_loss_account_id")) return error.InvalidInput;

@@ -21,27 +21,27 @@ pub fn csvField(dest: []u8, src: []const u8) !usize {
         }
     }
     if (!needs_quoting) {
-        if (src.len > dest.len) return error.InvalidInput;
+        if (src.len > dest.len) return error.BufferTooSmall;
         @memcpy(dest[0..src.len], src);
         return src.len;
     }
     var pos: usize = 0;
-    if (pos >= dest.len) return error.InvalidInput;
+    if (pos >= dest.len) return error.BufferTooSmall;
     dest[pos] = '"';
     pos += 1;
     for (src) |c| {
         if (c == '"') {
-            if (pos + 2 > dest.len) return error.InvalidInput;
+            if (pos + 2 > dest.len) return error.BufferTooSmall;
             dest[pos] = '"';
             dest[pos + 1] = '"';
             pos += 2;
         } else {
-            if (pos >= dest.len) return error.InvalidInput;
+            if (pos >= dest.len) return error.BufferTooSmall;
             dest[pos] = c;
             pos += 1;
         }
     }
-    if (pos >= dest.len) return error.InvalidInput;
+    if (pos >= dest.len) return error.BufferTooSmall;
     dest[pos] = '"';
     pos += 1;
     return pos;
@@ -52,49 +52,49 @@ pub fn jsonString(dest: []u8, src: []const u8) !usize {
     for (src) |c| {
         switch (c) {
             '"' => {
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = '"';
                 pos += 2;
             },
             '\\' => {
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = '\\';
                 pos += 2;
             },
             '\n' => {
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = 'n';
                 pos += 2;
             },
             '\t' => {
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = 't';
                 pos += 2;
             },
             '\r' => {
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = 'r';
                 pos += 2;
             },
             0x08 => { // backspace
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = 'b';
                 pos += 2;
             },
             0x0C => { // form feed
-                if (pos + 2 > dest.len) return error.InvalidInput;
+                if (pos + 2 > dest.len) return error.BufferTooSmall;
                 dest[pos] = '\\';
                 dest[pos + 1] = 'f';
                 pos += 2;
             },
             0x00...0x07, 0x0B, 0x0E...0x1F => { // other control chars
-                if (pos + 6 > dest.len) return error.InvalidInput;
+                if (pos + 6 > dest.len) return error.BufferTooSmall;
                 const hex = "0123456789abcdef";
                 dest[pos] = '\\';
                 dest[pos + 1] = 'u';
@@ -105,7 +105,7 @@ pub fn jsonString(dest: []u8, src: []const u8) !usize {
                 pos += 6;
             },
             else => {
-                if (pos >= dest.len) return error.InvalidInput;
+                if (pos >= dest.len) return error.BufferTooSmall;
                 dest[pos] = c;
                 pos += 1;
             },
@@ -121,7 +121,7 @@ pub fn reportToCsv(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
 
     // Header
     const header = "account_number,account_name,account_type,debit_balance,credit_balance\n";
-    if (pos + header.len > buf.len) return error.InvalidInput;
+    if (pos + header.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + header.len], header);
     pos += header.len;
 
@@ -132,23 +132,23 @@ pub fn reportToCsv(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         const acct_type = row.account_type[0..row.account_type_len];
 
         pos += try csvField(buf[pos..], acct_num);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], acct_name);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], acct_type);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.debit_balance, result.decimal_places);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.credit_balance, result.decimal_places);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = '\n';
         pos += 1;
     }
@@ -161,32 +161,32 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
     var pos: usize = 0;
 
     const open = "{\"total_debits\":";
-    if (pos + open.len > buf.len) return error.InvalidInput;
+    if (pos + open.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + open.len], open);
     pos += open.len;
 
     const dp = result.decimal_places;
-    if (pos >= buf.len) return error.InvalidInput;
+    if (pos >= buf.len) return error.BufferTooSmall;
     buf[pos] = '"';
     pos += 1;
     pos += fmtAmount(buf[pos..], result.total_debits, dp);
     const mid = "\",\"total_credits\":\"";
-    if (pos + mid.len > buf.len) return error.InvalidInput;
+    if (pos + mid.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + mid.len], mid);
     pos += mid.len;
     pos += fmtAmount(buf[pos..], result.total_credits, dp);
-    if (pos >= buf.len) return error.InvalidInput;
+    if (pos >= buf.len) return error.BufferTooSmall;
     buf[pos] = '"';
     pos += 1;
 
     const arr_open = ",\"rows\":[";
-    if (pos + arr_open.len > buf.len) return error.InvalidInput;
+    if (pos + arr_open.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + arr_open.len], arr_open);
     pos += arr_open.len;
 
     for (result.rows, 0..) |row, i| {
         if (i > 0) {
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
         }
@@ -195,38 +195,38 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         const acct_type = row.account_type[0..row.account_type_len];
 
         const p1 = "{\"account\":\"";
-        if (pos + p1.len > buf.len) return error.InvalidInput;
+        if (pos + p1.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p1.len], p1);
         pos += p1.len;
         pos += try jsonString(buf[pos..], acct_num);
         const p2 = "\",\"name\":\"";
-        if (pos + p2.len > buf.len) return error.InvalidInput;
+        if (pos + p2.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p2.len], p2);
         pos += p2.len;
         pos += try jsonString(buf[pos..], acct_name);
         const p3 = "\",\"type\":\"";
-        if (pos + p3.len > buf.len) return error.InvalidInput;
+        if (pos + p3.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p3.len], p3);
         pos += p3.len;
         pos += try jsonString(buf[pos..], acct_type);
         const p4 = "\",\"debit\":\"";
-        if (pos + p4.len > buf.len) return error.InvalidInput;
+        if (pos + p4.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p4.len], p4);
         pos += p4.len;
         pos += fmtAmount(buf[pos..], row.debit_balance, dp);
         const p5 = "\",\"credit\":\"";
-        if (pos + p5.len > buf.len) return error.InvalidInput;
+        if (pos + p5.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p5.len], p5);
         pos += p5.len;
         pos += fmtAmount(buf[pos..], row.credit_balance, dp);
         const p6 = "\"}";
-        if (pos + p6.len > buf.len) return error.InvalidInput;
+        if (pos + p6.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p6.len], p6);
         pos += p6.len;
     }
 
     const close = "]}";
-    if (pos + close.len > buf.len) return error.InvalidInput;
+    if (pos + close.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + close.len], close);
     pos += close.len;
 
@@ -239,58 +239,58 @@ pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
     var pos: usize = 0;
 
     const header = "posting_date,document_number,description,account_number,account_name,debit_amount,credit_amount,running_balance,transaction_currency,transaction_debit,transaction_credit,fx_rate\n";
-    if (pos + header.len > buf.len) return error.InvalidInput;
+    if (pos + header.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + header.len], header);
     pos += header.len;
 
     for (result.rows) |row| {
         pos += try csvField(buf[pos..], row.posting_date[0..row.posting_date_len]);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.document_number[0..row.document_number_len]);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.description[0..row.description_len]);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.account_number[0..row.account_number_len]);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.account_name[0..row.account_name_len]);
         const dp = result.decimal_places;
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.debit_amount, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.credit_amount, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.running_balance, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += try csvField(buf[pos..], row.transaction_currency[0..row.transaction_currency_len]);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.transaction_debit, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.transaction_credit, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.fx_rate, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = '\n';
         pos += 1;
     }
@@ -303,53 +303,53 @@ pub fn ledgerResultToJson(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
 
     const open = std.fmt.bufPrint(buf[pos..], "{{\"opening_balance\":{d},\"closing_balance\":{d},\"total_debits\":{d},\"total_credits\":{d},\"rows\":[", .{
         result.opening_balance, result.closing_balance, result.total_debits, result.total_credits,
-    }) catch return error.InvalidInput;
+    }) catch return error.BufferTooSmall;
     pos += open.len;
 
     for (result.rows, 0..) |row, i| {
         if (i > 0) {
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
         }
         const p1 = "{\"posting_date\":\"";
-        if (pos + p1.len > buf.len) return error.InvalidInput;
+        if (pos + p1.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p1.len], p1);
         pos += p1.len;
         pos += try jsonString(buf[pos..], row.posting_date[0..row.posting_date_len]);
         const p2 = "\",\"document_number\":\"";
-        if (pos + p2.len > buf.len) return error.InvalidInput;
+        if (pos + p2.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p2.len], p2);
         pos += p2.len;
         pos += try jsonString(buf[pos..], row.document_number[0..row.document_number_len]);
         const p3 = "\",\"description\":\"";
-        if (pos + p3.len > buf.len) return error.InvalidInput;
+        if (pos + p3.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p3.len], p3);
         pos += p3.len;
         pos += try jsonString(buf[pos..], row.description[0..row.description_len]);
         const p4 = "\",\"account_number\":\"";
-        if (pos + p4.len > buf.len) return error.InvalidInput;
+        if (pos + p4.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p4.len], p4);
         pos += p4.len;
         pos += try jsonString(buf[pos..], row.account_number[0..row.account_number_len]);
         const p5 = "\",\"account_name\":\"";
-        if (pos + p5.len > buf.len) return error.InvalidInput;
+        if (pos + p5.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p5.len], p5);
         pos += p5.len;
         pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
         const p6 = "\",\"transaction_currency\":\"";
-        if (pos + p6.len > buf.len) return error.InvalidInput;
+        if (pos + p6.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p6.len], p6);
         pos += p6.len;
         pos += try jsonString(buf[pos..], row.transaction_currency[0..row.transaction_currency_len]);
         const nums = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"running_balance\":{d},\"transaction_debit\":{d},\"transaction_credit\":{d},\"fx_rate\":{d}}}", .{
             row.debit_amount, row.credit_amount, row.running_balance, row.transaction_debit, row.transaction_credit, row.fx_rate,
-        }) catch return error.InvalidInput;
+        }) catch return error.BufferTooSmall;
         pos += nums.len;
     }
 
     const close = "]}";
-    if (pos + close.len > buf.len) return error.InvalidInput;
+    if (pos + close.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + close.len], close);
     pos += close.len;
 
@@ -362,24 +362,24 @@ pub fn classifiedResultToCsv(result: *classification_mod.ClassifiedResult, buf: 
     var pos: usize = 0;
 
     const header = "node_type,depth,label,account_id,debit_balance,credit_balance\n";
-    if (pos + header.len > buf.len) return error.InvalidInput;
+    if (pos + header.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + header.len], header);
     pos += header.len;
 
     for (result.rows) |row| {
         pos += try csvField(buf[pos..], row.node_type[0..row.node_type_len]);
-        const mid1 = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.depth}) catch return error.InvalidInput;
+        const mid1 = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.depth}) catch return error.BufferTooSmall;
         pos += mid1.len;
         pos += try csvField(buf[pos..], row.label[0..row.label_len]);
         const dp = result.decimal_places;
-        const aid = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.account_id}) catch return error.InvalidInput;
+        const aid = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.account_id}) catch return error.BufferTooSmall;
         pos += aid.len;
         pos += fmtAmount(buf[pos..], row.debit_balance, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
         pos += fmtAmount(buf[pos..], row.credit_balance, dp);
-        if (pos >= buf.len) return error.InvalidInput;
+        if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = '\n';
         pos += 1;
     }
@@ -392,60 +392,60 @@ pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf:
 
     const dp = result.decimal_places;
     const hdr = "{\"total_debits\":\"";
-    if (pos + hdr.len > buf.len) return error.InvalidInput;
+    if (pos + hdr.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr.len], hdr);
     pos += hdr.len;
     pos += fmtAmount(buf[pos..], result.total_debits, dp);
     const hdr2 = "\",\"total_credits\":\"";
-    if (pos + hdr2.len > buf.len) return error.InvalidInput;
+    if (pos + hdr2.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr2.len], hdr2);
     pos += hdr2.len;
     pos += fmtAmount(buf[pos..], result.total_credits, dp);
     const hdr3 = "\",\"unclassified_debits\":\"";
-    if (pos + hdr3.len > buf.len) return error.InvalidInput;
+    if (pos + hdr3.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr3.len], hdr3);
     pos += hdr3.len;
     pos += fmtAmount(buf[pos..], result.unclassified_debits, dp);
     const hdr4 = "\",\"unclassified_credits\":\"";
-    if (pos + hdr4.len > buf.len) return error.InvalidInput;
+    if (pos + hdr4.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr4.len], hdr4);
     pos += hdr4.len;
     pos += fmtAmount(buf[pos..], result.unclassified_credits, dp);
     const hdr5 = "\",\"rows\":[";
-    if (pos + hdr5.len > buf.len) return error.InvalidInput;
+    if (pos + hdr5.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr5.len], hdr5);
     pos += hdr5.len;
 
     for (result.rows, 0..) |row, i| {
         if (i > 0) {
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
         }
         const p1 = "{\"node_type\":\"";
-        if (pos + p1.len > buf.len) return error.InvalidInput;
+        if (pos + p1.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p1.len], p1);
         pos += p1.len;
         pos += try jsonString(buf[pos..], row.node_type[0..row.node_type_len]);
-        const mid1 = std.fmt.bufPrint(buf[pos..], "\",\"depth\":{d},\"label\":\"", .{row.depth}) catch return error.InvalidInput;
+        const mid1 = std.fmt.bufPrint(buf[pos..], "\",\"depth\":{d},\"label\":\"", .{row.depth}) catch return error.BufferTooSmall;
         pos += mid1.len;
         pos += try jsonString(buf[pos..], row.label[0..row.label_len]);
-        const acct_part = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":\"", .{row.account_id}) catch return error.InvalidInput;
+        const acct_part = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":\"", .{row.account_id}) catch return error.BufferTooSmall;
         pos += acct_part.len;
         pos += fmtAmount(buf[pos..], row.debit_balance, dp);
         const cr_part = "\",\"credit\":\"";
-        if (pos + cr_part.len > buf.len) return error.InvalidInput;
+        if (pos + cr_part.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + cr_part.len], cr_part);
         pos += cr_part.len;
         pos += fmtAmount(buf[pos..], row.credit_balance, dp);
         const close_row = "\"}";
-        if (pos + close_row.len > buf.len) return error.InvalidInput;
+        if (pos + close_row.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + close_row.len], close_row);
         pos += close_row.len;
     }
 
     const close = "]}";
-    if (pos + close.len > buf.len) return error.InvalidInput;
+    if (pos + close.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + close.len], close);
     pos += close.len;
 
@@ -467,7 +467,7 @@ pub fn exportChartOfAccounts(database: db_mod.Database, book_id: i64, buf: []u8,
     switch (format) {
         .csv => {
             const header = "number,name,account_type,normal_balance,is_contra,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -480,36 +480,36 @@ pub fn exportChartOfAccounts(database: db_mod.Database, book_id: i64, buf: []u8,
                 const status = stmt.columnText(5) orelse "";
 
                 pos += try csvField(buf[pos..], number);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], name);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], acct_type);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], normal_bal);
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},", .{is_contra}) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},", .{is_contra}) catch return error.BufferTooSmall;
                 pos += nums.len;
                 pos += try csvField(buf[pos..], status);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
         },
         .json => {
             const open = "{\"accounts\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -523,36 +523,36 @@ pub fn exportChartOfAccounts(database: db_mod.Database, book_id: i64, buf: []u8,
                 const status = stmt.columnText(5) orelse "";
 
                 const j1 = "{\"number\":\"";
-                if (pos + j1.len > buf.len) return error.InvalidInput;
+                if (pos + j1.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j1.len], j1);
                 pos += j1.len;
                 pos += try jsonString(buf[pos..], number);
                 const j2 = "\",\"name\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try jsonString(buf[pos..], name);
                 const j3 = "\",\"account_type\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try jsonString(buf[pos..], acct_type);
                 const j4 = "\",\"normal_balance\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try jsonString(buf[pos..], normal_bal);
-                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.InvalidInput;
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.BufferTooSmall;
                 pos += j5.len;
                 pos += try jsonString(buf[pos..], status);
                 const j6 = "\"}";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -585,7 +585,7 @@ pub fn exportJournalEntries(database: db_mod.Database, book_id: i64, start_date:
     switch (format) {
         .csv => {
             const header = "document_number,transaction_date,posting_date,description,status,line_number,account_number,account_name,debit_amount,credit_amount,currency,fx_rate\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -604,39 +604,39 @@ pub fn exportJournalEntries(database: db_mod.Database, book_id: i64, start_date:
                 const fx_rate = stmt.columnInt64(11);
 
                 pos += try csvField(buf[pos..], doc);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], txn_date);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], post_date);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], desc);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], status);
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},", .{line_num}) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},", .{line_num}) catch return error.BufferTooSmall;
                 pos += nums.len;
                 pos += try csvField(buf[pos..], acct_num);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], acct_name);
-                const nums2 = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ debit, credit }) catch return error.InvalidInput;
+                const nums2 = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ debit, credit }) catch return error.BufferTooSmall;
                 pos += nums2.len;
                 pos += try csvField(buf[pos..], currency);
-                const fx = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{fx_rate}) catch return error.InvalidInput;
+                const fx = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{fx_rate}) catch return error.BufferTooSmall;
                 pos += fx.len;
             }
         },
         .json => {
             const open = "{\"entries\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
@@ -664,38 +664,38 @@ pub fn exportJournalEntries(database: db_mod.Database, book_id: i64, start_date:
                 if (!same_entry) {
                     if (entry_open) {
                         const close_entry = "]}";
-                        if (pos + close_entry.len > buf.len) return error.InvalidInput;
+                        if (pos + close_entry.len > buf.len) return error.BufferTooSmall;
                         @memcpy(buf[pos .. pos + close_entry.len], close_entry);
                         pos += close_entry.len;
                     }
 
                     const h1 = if (entry_open) ",{\"document_number\":\"" else "{\"document_number\":\"";
-                    if (pos + h1.len > buf.len) return error.InvalidInput;
+                    if (pos + h1.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + h1.len], h1);
                     pos += h1.len;
                     pos += try jsonString(buf[pos..], doc);
                     const h2 = "\",\"transaction_date\":\"";
-                    if (pos + h2.len > buf.len) return error.InvalidInput;
+                    if (pos + h2.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + h2.len], h2);
                     pos += h2.len;
                     pos += try jsonString(buf[pos..], txn_date);
                     const h3 = "\",\"posting_date\":\"";
-                    if (pos + h3.len > buf.len) return error.InvalidInput;
+                    if (pos + h3.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + h3.len], h3);
                     pos += h3.len;
                     pos += try jsonString(buf[pos..], post_date);
                     const h4 = "\",\"description\":\"";
-                    if (pos + h4.len > buf.len) return error.InvalidInput;
+                    if (pos + h4.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + h4.len], h4);
                     pos += h4.len;
                     pos += try jsonString(buf[pos..], desc);
                     const h5 = "\",\"status\":\"";
-                    if (pos + h5.len > buf.len) return error.InvalidInput;
+                    if (pos + h5.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + h5.len], h5);
                     pos += h5.len;
                     pos += try jsonString(buf[pos..], status);
                     const h6 = "\",\"lines\":[";
-                    if (pos + h6.len > buf.len) return error.InvalidInput;
+                    if (pos + h6.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + h6.len], h6);
                     pos += h6.len;
 
@@ -704,35 +704,35 @@ pub fn exportJournalEntries(database: db_mod.Database, book_id: i64, start_date:
                     prev_doc_len = copy_len;
                     entry_open = true;
                 } else {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
 
-                const l1 = std.fmt.bufPrint(buf[pos..], "{{\"line_number\":{d},\"account_number\":\"", .{line_num}) catch return error.InvalidInput;
+                const l1 = std.fmt.bufPrint(buf[pos..], "{{\"line_number\":{d},\"account_number\":\"", .{line_num}) catch return error.BufferTooSmall;
                 pos += l1.len;
                 pos += try jsonString(buf[pos..], acct_num);
                 const l2 = "\",\"account_name\":\"";
-                if (pos + l2.len > buf.len) return error.InvalidInput;
+                if (pos + l2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + l2.len], l2);
                 pos += l2.len;
                 pos += try jsonString(buf[pos..], acct_name);
-                const l3 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"currency\":\"", .{ debit, credit }) catch return error.InvalidInput;
+                const l3 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"currency\":\"", .{ debit, credit }) catch return error.BufferTooSmall;
                 pos += l3.len;
                 pos += try jsonString(buf[pos..], currency);
-                const l4 = std.fmt.bufPrint(buf[pos..], "\",\"fx_rate\":{d}}}", .{fx_rate}) catch return error.InvalidInput;
+                const l4 = std.fmt.bufPrint(buf[pos..], "\",\"fx_rate\":{d}}}", .{fx_rate}) catch return error.BufferTooSmall;
                 pos += l4.len;
             }
 
             if (entry_open) {
                 const close_entry = "]}";
-                if (pos + close_entry.len > buf.len) return error.InvalidInput;
+                if (pos + close_entry.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + close_entry.len], close_entry);
                 pos += close_entry.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -759,7 +759,7 @@ pub fn exportAuditTrail(database: db_mod.Database, book_id: i64, start_date: []c
     switch (format) {
         .csv => {
             const header = "id,entity_type,entity_id,action,field_changed,old_value,new_value,performed_by,performed_at\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -774,47 +774,47 @@ pub fn exportAuditTrail(database: db_mod.Database, book_id: i64, start_date: []c
                 const performed_by = stmt.columnText(7) orelse "";
                 const performed_at = stmt.columnText(8) orelse "";
 
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try csvField(buf[pos..], entity_type);
-                const eid_s = std.fmt.bufPrint(buf[pos..], ",{d},", .{entity_id}) catch return error.InvalidInput;
+                const eid_s = std.fmt.bufPrint(buf[pos..], ",{d},", .{entity_id}) catch return error.BufferTooSmall;
                 pos += eid_s.len;
                 pos += try csvField(buf[pos..], action);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], field);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], old_val);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], new_val);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], performed_by);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], performed_at);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
         },
         .json => {
             const open = "{\"records\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -830,45 +830,45 @@ pub fn exportAuditTrail(database: db_mod.Database, book_id: i64, start_date: []c
                 const performed_by = stmt.columnText(7) orelse "";
                 const performed_at = stmt.columnText(8) orelse "";
 
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"entity_type\":\"", .{id}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"entity_type\":\"", .{id}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try jsonString(buf[pos..], entity_type);
-                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"entity_id\":{d},\"action\":\"", .{entity_id}) catch return error.InvalidInput;
+                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"entity_id\":{d},\"action\":\"", .{entity_id}) catch return error.BufferTooSmall;
                 pos += j2.len;
                 pos += try jsonString(buf[pos..], action);
                 const j3 = "\",\"field_changed\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try jsonString(buf[pos..], field);
                 const j4 = "\",\"old_value\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try jsonString(buf[pos..], old_val);
                 const j5 = "\",\"new_value\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try jsonString(buf[pos..], new_val);
                 const j6 = "\",\"performed_by\":\"";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
                 pos += try jsonString(buf[pos..], performed_by);
                 const j7 = "\",\"performed_at\":\"";
-                if (pos + j7.len > buf.len) return error.InvalidInput;
+                if (pos + j7.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
                 pos += try jsonString(buf[pos..], performed_at);
                 const j8 = "\"}";
-                if (pos + j8.len > buf.len) return error.InvalidInput;
+                if (pos + j8.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j8.len], j8);
                 pos += j8.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -892,7 +892,7 @@ pub fn exportPeriods(database: db_mod.Database, book_id: i64, buf: []u8, format:
     switch (format) {
         .csv => {
             const header = "id,name,period_number,year,start_date,end_date,period_type,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -906,39 +906,39 @@ pub fn exportPeriods(database: db_mod.Database, book_id: i64, buf: []u8, format:
                 const period_type = stmt.columnText(6) orelse "";
                 const status = stmt.columnText(7) orelse "";
 
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try csvField(buf[pos..], name);
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ period_number, year }) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ period_number, year }) catch return error.BufferTooSmall;
                 pos += nums.len;
                 pos += try csvField(buf[pos..], start_date);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], end_date);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], period_type);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], status);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
         },
         .json => {
             const open = "{\"periods\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -953,35 +953,35 @@ pub fn exportPeriods(database: db_mod.Database, book_id: i64, buf: []u8, format:
                 const period_type = stmt.columnText(6) orelse "";
                 const status = stmt.columnText(7) orelse "";
 
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try jsonString(buf[pos..], name);
-                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"period_number\":{d},\"year\":{d},\"start_date\":\"", .{ period_number, year }) catch return error.InvalidInput;
+                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"period_number\":{d},\"year\":{d},\"start_date\":\"", .{ period_number, year }) catch return error.BufferTooSmall;
                 pos += j2.len;
                 pos += try jsonString(buf[pos..], start_date);
                 const j3 = "\",\"end_date\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try jsonString(buf[pos..], end_date);
                 const j4 = "\",\"period_type\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try jsonString(buf[pos..], period_type);
                 const j5 = "\",\"status\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try jsonString(buf[pos..], status);
                 const j6 = "\"}";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1008,7 +1008,7 @@ pub fn exportSubledger(database: db_mod.Database, book_id: i64, buf: []u8, forma
     switch (format) {
         .csv => {
             const header = "group_name,group_type,control_account_number,counterparty_number,counterparty_name,counterparty_type\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -1021,41 +1021,41 @@ pub fn exportSubledger(database: db_mod.Database, book_id: i64, buf: []u8, forma
                 const cp_type = stmt.columnText(5) orelse "";
 
                 pos += try csvField(buf[pos..], group_name);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], group_type);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], control_acct);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], cp_number);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], cp_name);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try csvField(buf[pos..], cp_type);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
         },
         .json => {
             const open = "{\"subledger_accounts\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -1069,43 +1069,43 @@ pub fn exportSubledger(database: db_mod.Database, book_id: i64, buf: []u8, forma
                 const cp_type = stmt.columnText(5) orelse "";
 
                 const j1 = "{\"group_name\":\"";
-                if (pos + j1.len > buf.len) return error.InvalidInput;
+                if (pos + j1.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j1.len], j1);
                 pos += j1.len;
                 pos += try jsonString(buf[pos..], group_name);
                 const j2 = "\",\"group_type\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try jsonString(buf[pos..], group_type);
                 const j3 = "\",\"control_account_number\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try jsonString(buf[pos..], control_acct);
                 const j4 = "\",\"counterparty_number\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try jsonString(buf[pos..], cp_number);
                 const j5 = "\",\"counterparty_name\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try jsonString(buf[pos..], cp_name);
                 const j6 = "\",\"counterparty_type\":\"";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
                 pos += try jsonString(buf[pos..], cp_type);
                 const j7 = "\"}";
-                if (pos + j7.len > buf.len) return error.InvalidInput;
+                if (pos + j7.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1136,38 +1136,38 @@ pub fn exportBookMetadata(database: db_mod.Database, book_id: i64, buf: []u8, fo
     switch (format) {
         .csv => {
             const header = "id,name,base_currency,decimal_places,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try csvField(buf[pos..], name);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try csvField(buf[pos..], currency);
-            const dec_s = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.InvalidInput;
+            const dec_s = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.BufferTooSmall;
             pos += dec_s.len;
             pos += try csvField(buf[pos..], status);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = '\n';
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try jsonString(buf[pos..], name);
             const j2 = "\",\"base_currency\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try jsonString(buf[pos..], currency);
-            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.InvalidInput;
+            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.BufferTooSmall;
             pos += j3.len;
             pos += try jsonString(buf[pos..], status);
             const j4 = "\"}";
-            if (pos + j4.len > buf.len) return error.InvalidInput;
+            if (pos + j4.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j4.len], j4);
             pos += j4.len;
         },
@@ -1302,7 +1302,7 @@ test "CSV export: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = reportToCsv(setup.result, &small_buf);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── Setup Helpers for New Exports ──────────────────────────────
@@ -1453,7 +1453,7 @@ test "ledgerResultToCsv: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = ledgerResultToCsv(setup.gl_result, &small_buf);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── LedgerResult JSON Tests ────────────────────────────────────
@@ -1571,7 +1571,7 @@ test "classifiedResultToCsv: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = classifiedResultToCsv(setup.result, &small_buf);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── ClassifiedResult JSON Tests ────────────────────────────────
@@ -1735,7 +1735,7 @@ test "exportChartOfAccounts: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = exportChartOfAccounts(database, 1, &small_buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── Journal Entries Export Tests ────────────────────────────────
@@ -1848,7 +1848,7 @@ test "exportJournalEntries: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = exportJournalEntries(database, 1, "2026-01-01", "2026-01-31", &small_buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── Audit Trail Export Tests ───────────────────────────────────
@@ -1938,7 +1938,7 @@ test "exportAuditTrail: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = exportAuditTrail(database, 1, "2026-01-01", "2026-12-31", &small_buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 test "exportAuditTrail: captures void reason" {
@@ -2085,7 +2085,7 @@ test "exportPeriods: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = exportPeriods(database, 1, &small_buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 test "exportPeriods: shows period status" {
@@ -2190,7 +2190,7 @@ test "exportSubledger: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = exportSubledger(database, 1, &small_buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── Book Metadata Export Tests ─────────────────────────────────
@@ -2272,7 +2272,7 @@ test "exportBookMetadata: buffer too small returns error" {
 
     var small_buf: [10]u8 = undefined;
     const result = exportBookMetadata(database, 1, &small_buf, .csv);
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.BufferTooSmall, result);
 }
 
 // ── csvField unit tests ──────────────────────────────────────────

@@ -3,6 +3,8 @@ const db = @import("db.zig");
 const audit = @import("audit.zig");
 const report = @import("report.zig");
 
+pub const MAX_CLASSIFICATION_NODES: usize = 10_000;
+
 pub const Classification = struct {
     const valid_types = [_][]const u8{ "balance_sheet", "income_statement", "trial_balance", "cash_flow" };
 
@@ -668,7 +670,9 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
         defer stmt.finalize();
         try stmt.bindInt(1, classification_id);
 
+        var node_count: usize = 0;
         while (try stmt.step()) {
+            if (node_count >= MAX_CLASSIFICATION_NODES) return error.TooManyAccounts;
             const node_id = stmt.columnInt64(0);
             const node_type = stmt.columnText(1).?;
             const is_account = std.mem.eql(u8, node_type, "account");
@@ -680,6 +684,7 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
             try node_balances.put(allocator, node_id, .{ 0, 0 });
 
             if (is_account) try account_nodes.append(allocator, node_id);
+            node_count += 1;
         }
     }
 
@@ -861,7 +866,9 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
         defer stmt.finalize();
         try stmt.bindInt(1, classification_id);
 
+        var node_count: usize = 0;
         while (try stmt.step()) {
+            if (node_count >= MAX_CLASSIFICATION_NODES) return error.TooManyAccounts;
             const node_id = stmt.columnInt64(0);
             const node_type = stmt.columnText(1).?;
             const is_account = std.mem.eql(u8, node_type, "account");
@@ -873,6 +880,7 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
             try node_balances.put(allocator, node_id, .{ 0, 0 });
 
             if (is_account) try account_nodes.append(allocator, node_id);
+            node_count += 1;
         }
     }
 

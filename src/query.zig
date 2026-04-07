@@ -22,14 +22,14 @@ fn writeJsonMeta(buf: []u8, total: i64, limit: i32, offset: i32) !usize {
     const has_more = @as(i64, offset) + @as(i64, limit) < total;
     const s = std.fmt.bufPrint(buf, "{{\"total\":{d},\"limit\":{d},\"offset\":{d},\"has_more\":{s},\"rows\":[", .{
         total, limit, offset, if (has_more) "true" else "false",
-    }) catch return error.InvalidInput;
+    }) catch return error.BufferTooSmall;
     return s.len;
 }
 
 fn writeCsvMeta(buf: []u8, total: i64, limit: i32, offset: i32) !usize {
     const s = std.fmt.bufPrint(buf, "# total={d},limit={d},offset={d}\n", .{
         total, limit, offset,
-    }) catch return error.InvalidInput;
+    }) catch return error.BufferTooSmall;
     return s.len;
 }
 
@@ -64,35 +64,35 @@ pub fn getBook(database: db_mod.Database, book_id: i64, buf: []u8, format: expor
     switch (format) {
         .csv => {
             const header = "id,name,base_currency,decimal_places,status,rounding_account_id,fx_gain_loss_account_id,retained_earnings_account_id,income_summary_account_id,opening_balance_account_id,suspense_account_id\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], name);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], currency);
-            const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.InvalidInput;
+            const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.BufferTooSmall;
             pos += rest.len;
             pos += try export_mod.csvField(buf[pos..], status);
-            const sys_accts = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d},{d}\n", .{ rounding_id, fx_gl_id, re_id, is_id, ob_id, suspense_id }) catch return error.InvalidInput;
+            const sys_accts = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d},{d}\n", .{ rounding_id, fx_gl_id, re_id, is_id, ob_id, suspense_id }) catch return error.BufferTooSmall;
             pos += sys_accts.len;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], name);
             const j2 = "\",\"base_currency\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], currency);
-            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.InvalidInput;
+            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.BufferTooSmall;
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], status);
-            const j4 = std.fmt.bufPrint(buf[pos..], "\",\"rounding_account_id\":{d},\"fx_gain_loss_account_id\":{d},\"retained_earnings_account_id\":{d},\"income_summary_account_id\":{d},\"opening_balance_account_id\":{d},\"suspense_account_id\":{d}}}", .{ rounding_id, fx_gl_id, re_id, is_id, ob_id, suspense_id }) catch return error.InvalidInput;
+            const j4 = std.fmt.bufPrint(buf[pos..], "\",\"rounding_account_id\":{d},\"fx_gain_loss_account_id\":{d},\"retained_earnings_account_id\":{d},\"income_summary_account_id\":{d},\"opening_balance_account_id\":{d},\"suspense_account_id\":{d}}}", .{ rounding_id, fx_gl_id, re_id, is_id, ob_id, suspense_id }) catch return error.BufferTooSmall;
             pos += j4.len;
         },
     }
@@ -145,7 +145,7 @@ pub fn listBooks(database: db_mod.Database, status_filter: ?[]const u8, order: S
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,name,base_currency,decimal_places,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -156,17 +156,17 @@ pub fn listBooks(database: db_mod.Database, status_filter: ?[]const u8, order: S
                 const decimals = stmt.columnInt(3);
                 const status = stmt.columnText(4) orelse "";
 
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], name);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], currency);
-                const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.InvalidInput;
+                const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{decimals}) catch return error.BufferTooSmall;
                 pos += rest.len;
                 pos += try export_mod.csvField(buf[pos..], status);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -177,7 +177,7 @@ pub fn listBooks(database: db_mod.Database, status_filter: ?[]const u8, order: S
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -189,25 +189,25 @@ pub fn listBooks(database: db_mod.Database, status_filter: ?[]const u8, order: S
                 const decimals = stmt.columnInt(3);
                 const status = stmt.columnText(4) orelse "";
 
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{id}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], name);
                 const j2 = "\",\"base_currency\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], currency);
-                const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.InvalidInput;
+                const j3 = std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"status\":\"", .{decimals}) catch return error.BufferTooSmall;
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], status);
                 const j4 = "\"}";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -239,55 +239,55 @@ pub fn getAccount(database: db_mod.Database, account_id: i64, buf: []u8, format:
     switch (format) {
         .csv => {
             const header = "id,number,name,account_type,normal_balance,is_contra,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], number);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], name);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], acct_type);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], normal_bal);
-            const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{is_contra}) catch return error.InvalidInput;
+            const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{is_contra}) catch return error.BufferTooSmall;
             pos += rest.len;
             pos += try export_mod.csvField(buf[pos..], status);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = '\n';
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{id}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{id}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], number);
             const j2 = "\",\"name\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], name);
             const j3 = "\",\"account_type\":\"";
-            if (pos + j3.len > buf.len) return error.InvalidInput;
+            if (pos + j3.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j3.len], j3);
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], acct_type);
             const j4 = "\",\"normal_balance\":\"";
-            if (pos + j4.len > buf.len) return error.InvalidInput;
+            if (pos + j4.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j4.len], j4);
             pos += j4.len;
             pos += try export_mod.jsonString(buf[pos..], normal_bal);
-            const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.InvalidInput;
+            const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.BufferTooSmall;
             pos += j5.len;
             pos += try export_mod.jsonString(buf[pos..], status);
             const j6 = "\"}";
-            if (pos + j6.len > buf.len) return error.InvalidInput;
+            if (pos + j6.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j6.len], j6);
             pos += j6.len;
         },
@@ -388,7 +388,7 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,number,name,account_type,normal_balance,is_contra,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -401,25 +401,25 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
                 const is_contra = stmt.columnInt(5);
                 const status = stmt.columnText(6) orelse "";
 
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], number);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], name);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], acct_type);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], normal_bal);
-                const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{is_contra}) catch return error.InvalidInput;
+                const rest = std.fmt.bufPrint(buf[pos..], ",{d},", .{is_contra}) catch return error.BufferTooSmall;
                 pos += rest.len;
                 pos += try export_mod.csvField(buf[pos..], status);
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -430,7 +430,7 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -444,35 +444,35 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
                 const is_contra = stmt.columnInt(5);
                 const status = stmt.columnText(6) orelse "";
 
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{id}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{id}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], number);
                 const j2 = "\",\"name\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], name);
                 const j3 = "\",\"account_type\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], acct_type);
                 const j4 = "\",\"normal_balance\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], normal_bal);
-                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.InvalidInput;
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"is_contra\":{s},\"status\":\"", .{if (is_contra != 0) "true" else "false"}) catch return error.BufferTooSmall;
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], status);
                 const j6 = "\"}";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -496,55 +496,55 @@ pub fn getPeriod(database: db_mod.Database, period_id: i64, buf: []u8, format: e
     switch (format) {
         .csv => {
             const header = "id,name,period_number,year,start_date,end_date,period_type,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-            const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.InvalidInput;
+            const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.BufferTooSmall;
             pos += nums.len;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(6) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(7) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = '\n';
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
-            const j2 = std.fmt.bufPrint(buf[pos..], "\",\"period_number\":{d},\"year\":{d},\"start_date\":\"", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.InvalidInput;
+            const j2 = std.fmt.bufPrint(buf[pos..], "\",\"period_number\":{d},\"year\":{d},\"start_date\":\"", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.BufferTooSmall;
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
             const j3 = "\",\"end_date\":\"";
-            if (pos + j3.len > buf.len) return error.InvalidInput;
+            if (pos + j3.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j3.len], j3);
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
             const j4 = "\",\"period_type\":\"";
-            if (pos + j4.len > buf.len) return error.InvalidInput;
+            if (pos + j4.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j4.len], j4);
             pos += j4.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(6) orelse "");
             const j5 = "\",\"status\":\"";
-            if (pos + j5.len > buf.len) return error.InvalidInput;
+            if (pos + j5.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j5.len], j5);
             pos += j5.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(7) orelse "");
             const j6 = "\"}";
-            if (pos + j6.len > buf.len) return error.InvalidInput;
+            if (pos + j6.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j6.len], j6);
             pos += j6.len;
         },
@@ -623,30 +623,30 @@ pub fn listPeriods(database: db_mod.Database, book_id: i64, year_filter: ?i32, s
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,name,period_number,year,start_date,end_date,period_type,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.BufferTooSmall;
                 pos += nums.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(6) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(7) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -656,39 +656,39 @@ pub fn listPeriods(database: db_mod.Database, book_id: i64, year_filter: ?i32, s
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
-                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"period_number\":{d},\"year\":{d},\"start_date\":\"", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.InvalidInput;
+                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"period_number\":{d},\"year\":{d},\"start_date\":\"", .{ stmt.columnInt(2), stmt.columnInt(3) }) catch return error.BufferTooSmall;
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
                 const j3 = "\",\"end_date\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
                 const j4 = "\",\"period_type\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(6) orelse "");
                 const j5 = "\",\"status\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(7) orelse "");
                 const j6 = "\"}";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -801,34 +801,34 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,document_number,transaction_date,posting_date,description,status,period_id,metadata\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-                const pid = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(6)}) catch return error.InvalidInput;
+                const pid = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(6)}) catch return error.BufferTooSmall;
                 pos += pid.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(7) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -838,56 +838,56 @@ pub fn listEntries(database: db_mod.Database, book_id: i64, status_filter: ?[]co
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
                 const le_meta = stmt.columnText(7);
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"document_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"document_number\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j2 = "\",\"transaction_date\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j3 = "\",\"posting_date\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
                 const j4 = "\",\"description\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
                 const j5 = "\",\"status\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
-                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}", .{stmt.columnInt64(6)}) catch return error.InvalidInput;
+                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}", .{stmt.columnInt64(6)}) catch return error.BufferTooSmall;
                 pos += j6.len;
                 if (le_meta) |mv| {
                     const j7 = ",\"metadata\":\"";
-                    if (pos + j7.len > buf.len) return error.InvalidInput;
+                    if (pos + j7.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + j7.len], j7);
                     pos += j7.len;
                     pos += try export_mod.jsonString(buf[pos..], mv);
                     const j8 = "\"}";
-                    if (pos + j8.len > buf.len) return error.InvalidInput;
+                    if (pos + j8.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + j8.len], j8);
                     pos += j8.len;
                 } else {
                     const j7 = ",\"metadata\":null}";
-                    if (pos + j7.len > buf.len) return error.InvalidInput;
+                    if (pos + j7.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + j7.len], j7);
                     pos += j7.len;
                 }
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -998,38 +998,38 @@ pub fn listAuditLog(database: db_mod.Database, book_id: i64, entity_type_filter:
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,entity_type,entity_id,action,field_changed,old_value,new_value,performed_by,performed_at\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                const eid_s = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(2)}) catch return error.InvalidInput;
+                const eid_s = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(2)}) catch return error.BufferTooSmall;
                 pos += eid_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(6) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(7) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(8) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -1039,49 +1039,49 @@ pub fn listAuditLog(database: db_mod.Database, book_id: i64, entity_type_filter:
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"entity_type\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"entity_type\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
-                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"entity_id\":{d},\"action\":\"", .{stmt.columnInt64(2)}) catch return error.InvalidInput;
+                const j2 = std.fmt.bufPrint(buf[pos..], "\",\"entity_id\":{d},\"action\":\"", .{stmt.columnInt64(2)}) catch return error.BufferTooSmall;
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
                 const j3 = "\",\"field_changed\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
                 const j4 = "\",\"old_value\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
                 const j5 = "\",\"new_value\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(6) orelse "");
                 const j6 = "\",\"performed_by\":\"";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(7) orelse "");
                 const j7 = "\",\"performed_at\":\"";
-                if (pos + j7.len > buf.len) return error.InvalidInput;
+                if (pos + j7.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(8) orelse "");
                 const j8 = "\"}";
-                if (pos + j8.len > buf.len) return error.InvalidInput;
+                if (pos + j8.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j8.len], j8);
                 pos += j8.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1115,74 +1115,74 @@ pub fn getEntry(database: db_mod.Database, entry_id: i64, book_id: i64, buf: []u
     switch (format) {
         .csv => {
             const header = "id,document_number,transaction_date,posting_date,description,status,period_id,metadata\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{id}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], doc);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], txn_date);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], post_date);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], desc);
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], status);
-            const pid = std.fmt.bufPrint(buf[pos..], ",{d},", .{period_id}) catch return error.InvalidInput;
+            const pid = std.fmt.bufPrint(buf[pos..], ",{d},", .{period_id}) catch return error.BufferTooSmall;
             pos += pid.len;
             pos += try export_mod.csvField(buf[pos..], metadata_val orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = '\n';
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"document_number\":\"", .{id}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"document_number\":\"", .{id}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], doc);
             const j2 = "\",\"transaction_date\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], txn_date);
             const j3 = "\",\"posting_date\":\"";
-            if (pos + j3.len > buf.len) return error.InvalidInput;
+            if (pos + j3.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j3.len], j3);
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], post_date);
             const j4 = "\",\"description\":\"";
-            if (pos + j4.len > buf.len) return error.InvalidInput;
+            if (pos + j4.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j4.len], j4);
             pos += j4.len;
             pos += try export_mod.jsonString(buf[pos..], desc);
             const j5 = "\",\"status\":\"";
-            if (pos + j5.len > buf.len) return error.InvalidInput;
+            if (pos + j5.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j5.len], j5);
             pos += j5.len;
             pos += try export_mod.jsonString(buf[pos..], status);
-            const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}", .{period_id}) catch return error.InvalidInput;
+            const j6 = std.fmt.bufPrint(buf[pos..], "\",\"period_id\":{d}", .{period_id}) catch return error.BufferTooSmall;
             pos += j6.len;
             if (metadata_val) |mv| {
                 const j7 = ",\"metadata\":\"";
-                if (pos + j7.len > buf.len) return error.InvalidInput;
+                if (pos + j7.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
                 pos += try export_mod.jsonString(buf[pos..], mv);
                 const j8 = "\"}";
-                if (pos + j8.len > buf.len) return error.InvalidInput;
+                if (pos + j8.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j8.len], j8);
                 pos += j8.len;
             } else {
                 const j7 = ",\"metadata\":null}";
-                if (pos + j7.len > buf.len) return error.InvalidInput;
+                if (pos + j7.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
             }
@@ -1210,65 +1210,65 @@ pub fn listEntryLines(database: db_mod.Database, entry_id: i64, buf: []u8, forma
     switch (format) {
         .csv => {
             const header = "id,line_number,account_number,account_name,debit_amount,credit_amount,base_debit,base_credit,currency,fx_rate,description,counterparty_id\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},{d},", .{ stmt.columnInt64(0), stmt.columnInt(1) }) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},{d},", .{ stmt.columnInt64(0), stmt.columnInt(1) }) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
                 const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},", .{
                     stmt.columnInt64(4), stmt.columnInt64(5), stmt.columnInt64(6), stmt.columnInt64(7),
-                }) catch return error.InvalidInput;
+                }) catch return error.BufferTooSmall;
                 pos += nums.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(8) orelse "");
-                const fx = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(9)}) catch return error.InvalidInput;
+                const fx = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt64(9)}) catch return error.BufferTooSmall;
                 pos += fx.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(10) orelse "");
-                const cp = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(11)}) catch return error.InvalidInput;
+                const cp = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(11)}) catch return error.BufferTooSmall;
                 pos += cp.len;
             }
         },
         .json => {
             const open = "{\"lines\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"line_number\":{d},\"account_number\":\"", .{ stmt.columnInt64(0), stmt.columnInt(1) }) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"line_number\":{d},\"account_number\":\"", .{ stmt.columnInt64(0), stmt.columnInt(1) }) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j2 = "\",\"account_name\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
                 const j3 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"base_debit\":{d},\"base_credit\":{d},\"currency\":\"", .{
                     stmt.columnInt64(4), stmt.columnInt64(5), stmt.columnInt64(6), stmt.columnInt64(7),
-                }) catch return error.InvalidInput;
+                }) catch return error.BufferTooSmall;
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(8) orelse "");
-                const j4 = std.fmt.bufPrint(buf[pos..], "\",\"fx_rate\":{d},\"description\":\"", .{stmt.columnInt64(9)}) catch return error.InvalidInput;
+                const j4 = std.fmt.bufPrint(buf[pos..], "\",\"fx_rate\":{d},\"description\":\"", .{stmt.columnInt64(9)}) catch return error.BufferTooSmall;
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(10) orelse "");
-                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"counterparty_id\":{d}}}", .{stmt.columnInt64(11)}) catch return error.InvalidInput;
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"counterparty_id\":{d}}}", .{stmt.columnInt64(11)}) catch return error.BufferTooSmall;
                 pos += j5.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1288,31 +1288,31 @@ pub fn getClassification(database: db_mod.Database, classification_id: i64, buf:
     switch (format) {
         .csv => {
             const header = "id,name,report_type\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = '\n';
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
             const j2 = "\",\"report_type\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
             const j3 = "\"}";
-            if (pos + j3.len > buf.len) return error.InvalidInput;
+            if (pos + j3.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j3.len], j3);
             pos += j3.len;
         },
@@ -1337,37 +1337,37 @@ pub fn getSubledgerGroup(database: db_mod.Database, group_id: i64, buf: []u8, fo
     switch (format) {
         .csv => {
             const header = "id,name,type,group_number,control_account_number\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-            const gn = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt(3)}) catch return error.InvalidInput;
+            const gn = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt(3)}) catch return error.BufferTooSmall;
             pos += gn.len;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = '\n';
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
             const j2 = "\",\"type\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
-            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"group_number\":{d},\"control_account_number\":\"", .{stmt.columnInt(3)}) catch return error.InvalidInput;
+            const j3 = std.fmt.bufPrint(buf[pos..], "\",\"group_number\":{d},\"control_account_number\":\"", .{stmt.columnInt(3)}) catch return error.BufferTooSmall;
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
             const j4 = "\"}";
-            if (pos + j4.len > buf.len) return error.InvalidInput;
+            if (pos + j4.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j4.len], j4);
             pos += j4.len;
         },
@@ -1387,38 +1387,38 @@ pub fn getSubledgerAccount(database: db_mod.Database, account_id: i64, buf: []u8
     switch (format) {
         .csv => {
             const header = "id,number,name,type,group_id\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
-            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += id_s.len;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-            if (pos >= buf.len) return error.InvalidInput;
+            if (pos >= buf.len) return error.BufferTooSmall;
             buf[pos] = ',';
             pos += 1;
             pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-            const gid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(4)}) catch return error.InvalidInput;
+            const gid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(4)}) catch return error.BufferTooSmall;
             pos += gid.len;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
             const j2 = "\",\"name\":\"";
-            if (pos + j2.len > buf.len) return error.InvalidInput;
+            if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
             const j3 = "\",\"type\":\"";
-            if (pos + j3.len > buf.len) return error.InvalidInput;
+            if (pos + j3.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j3.len], j3);
             pos += j3.len;
             pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
-            const j4 = std.fmt.bufPrint(buf[pos..], "\",\"group_id\":{d}}}", .{stmt.columnInt64(4)}) catch return error.InvalidInput;
+            const j4 = std.fmt.bufPrint(buf[pos..], "\",\"group_id\":{d}}}", .{stmt.columnInt64(4)}) catch return error.BufferTooSmall;
             pos += j4.len;
         },
     }
@@ -1478,19 +1478,19 @@ pub fn listClassifications(database: db_mod.Database, book_id: i64, type_filter:
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,name,report_type\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -1500,26 +1500,26 @@ pub fn listClassifications(database: db_mod.Database, book_id: i64, type_filter:
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j2 = "\",\"report_type\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j3 = "\"}";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1584,22 +1584,22 @@ pub fn listSubledgerGroups(database: db_mod.Database, book_id: i64, type_filter:
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,name,type,group_number,control_account_number\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                const gn = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt(3)}) catch return error.InvalidInput;
+                const gn = std.fmt.bufPrint(buf[pos..], ",{d},", .{stmt.columnInt(3)}) catch return error.BufferTooSmall;
                 pos += gn.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
@@ -1609,29 +1609,29 @@ pub fn listSubledgerGroups(database: db_mod.Database, book_id: i64, type_filter:
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"name\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j2 = "\",\"type\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
-                const j3 = std.fmt.bufPrint(buf[pos..], "\",\"group_number\":{d},\"control_account_number\":\"", .{stmt.columnInt(3)}) catch return error.InvalidInput;
+                const j3 = std.fmt.bufPrint(buf[pos..], "\",\"group_number\":{d},\"control_account_number\":\"", .{stmt.columnInt(3)}) catch return error.BufferTooSmall;
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
                 const j4 = "\"}";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1710,23 +1710,23 @@ pub fn listSubledgerAccounts(database: db_mod.Database, book_id: i64, group_filt
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "id,number,name,type,group_id\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-                const gid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(4)}) catch return error.InvalidInput;
+                const gid = std.fmt.bufPrint(buf[pos..], ",{d}\n", .{stmt.columnInt64(4)}) catch return error.BufferTooSmall;
                 pos += gid.len;
             }
         },
@@ -1735,29 +1735,29 @@ pub fn listSubledgerAccounts(database: db_mod.Database, book_id: i64, group_filt
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j2 = "\",\"name\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j3 = "\",\"type\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
-                const j4 = std.fmt.bufPrint(buf[pos..], "\",\"group_id\":{d}}}", .{stmt.columnInt64(4)}) catch return error.InvalidInput;
+                const j4 = std.fmt.bufPrint(buf[pos..], "\",\"group_id\":{d}}}", .{stmt.columnInt64(4)}) catch return error.BufferTooSmall;
                 pos += j4.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -1853,27 +1853,27 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "counterparty_id,counterparty_number,counterparty_name,group_name,control_account,debit_balance,credit_balance\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.BufferTooSmall;
                 pos += nums.len;
             }
         },
@@ -1882,34 +1882,34 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j2 = "\",\"counterparty_name\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j3 = "\",\"group_name\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
                 const j4 = "\",\"control_account\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
-                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"debit_balance\":{d},\"credit_balance\":{d}}}", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.InvalidInput;
+                const j5 = std.fmt.bufPrint(buf[pos..], "\",\"debit_balance\":{d},\"credit_balance\":{d}}}", .{ stmt.columnInt64(5), stmt.columnInt64(6) }) catch return error.BufferTooSmall;
                 pos += j5.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -2035,10 +2035,10 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
     switch (format) {
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
-            const ob = std.fmt.bufPrint(buf[pos..], "# opening_balance={d}\n", .{opening_balance}) catch return error.InvalidInput;
+            const ob = std.fmt.bufPrint(buf[pos..], "# opening_balance={d}\n", .{opening_balance}) catch return error.BufferTooSmall;
             pos += ob.len;
             const header = "posting_date,document_number,description,account_number,account_name,debit_amount,credit_amount,running_balance\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -2052,36 +2052,36 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
                 running = std.math.add(i64, running, diff) catch return error.AmountOverflow;
 
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(0) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{ debit, credit, running }) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d}\n", .{ debit, credit, running }) catch return error.BufferTooSmall;
                 pos += nums.len;
             }
         },
         .json => {
             const meta = std.fmt.bufPrint(buf[pos..], "{{\"total\":{d},\"limit\":{d},\"offset\":{d},\"has_more\":{s},\"opening_balance\":{d},\"rows\":[", .{
                 total, limit, offset, if (@as(i64, offset) + @as(i64, limit) < total) "true" else "false", opening_balance,
-            }) catch return error.InvalidInput;
+            }) catch return error.BufferTooSmall;
             pos += meta.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -2095,35 +2095,35 @@ pub fn counterpartyLedger(database: db_mod.Database, book_id: i64, counterparty_
                 running = std.math.add(i64, running, diff) catch return error.AmountOverflow;
 
                 const j1 = "{\"posting_date\":\"";
-                if (pos + j1.len > buf.len) return error.InvalidInput;
+                if (pos + j1.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j1.len], j1);
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(0) orelse "");
                 const j2 = "\",\"document_number\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j3 = "\",\"description\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j4 = "\",\"account_number\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
                 const j5 = "\",\"account_name\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
-                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"running_balance\":{d}}}", .{ debit, credit, running }) catch return error.InvalidInput;
+                const j6 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"running_balance\":{d}}}", .{ debit, credit, running }) catch return error.BufferTooSmall;
                 pos += j6.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -2214,37 +2214,37 @@ pub fn listTransactions(database: db_mod.Database, book_id: i64, account_filter:
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "posting_date,document_number,description,account_number,account_name,counterparty_number,counterparty_name,debit_amount,credit_amount\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(0) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(3) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(6) orelse "");
-                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(7), stmt.columnInt64(8) }) catch return error.InvalidInput;
+                const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d}\n", .{ stmt.columnInt64(7), stmt.columnInt64(8) }) catch return error.BufferTooSmall;
                 pos += nums.len;
             }
         },
@@ -2253,51 +2253,51 @@ pub fn listTransactions(database: db_mod.Database, book_id: i64, account_filter:
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
                 const j1 = "{\"posting_date\":\"";
-                if (pos + j1.len > buf.len) return error.InvalidInput;
+                if (pos + j1.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j1.len], j1);
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(0) orelse "");
                 const j2 = "\",\"document_number\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j3 = "\",\"description\":\"";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const j4 = "\",\"account_number\":\"";
-                if (pos + j4.len > buf.len) return error.InvalidInput;
+                if (pos + j4.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j4.len], j4);
                 pos += j4.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(3) orelse "");
                 const j5 = "\",\"account_name\":\"";
-                if (pos + j5.len > buf.len) return error.InvalidInput;
+                if (pos + j5.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j5.len], j5);
                 pos += j5.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(4) orelse "");
                 const j6 = "\",\"counterparty_number\":\"";
-                if (pos + j6.len > buf.len) return error.InvalidInput;
+                if (pos + j6.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j6.len], j6);
                 pos += j6.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
                 const j7 = "\",\"counterparty_name\":\"";
-                if (pos + j7.len > buf.len) return error.InvalidInput;
+                if (pos + j7.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j7.len], j7);
                 pos += j7.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(6) orelse "");
-                const j8 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d}}}", .{ stmt.columnInt64(7), stmt.columnInt64(8) }) catch return error.InvalidInput;
+                const j8 = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d}}}", .{ stmt.columnInt64(7), stmt.columnInt64(8) }) catch return error.BufferTooSmall;
                 pos += j8.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },
@@ -2372,24 +2372,24 @@ pub fn subledgerReconciliation(database: db_mod.Database, book_id: i64, group_id
     switch (format) {
         .csv => {
             const header = "control_account,gl_debits,gl_credits,gl_balance,sl_debits,sl_credits,sl_balance,difference,reconciled\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
             pos += try export_mod.csvField(buf[pos..], control_account_number[0..control_number_len]);
             const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d},{d},{d},{s}\n", .{
                 gl_debits, gl_credits, gl_balance, sl_debits, sl_credits, sl_balance, difference, if (is_reconciled) "true" else "false",
-            }) catch return error.InvalidInput;
+            }) catch return error.BufferTooSmall;
             pos += nums.len;
         },
         .json => {
             const j1 = "{\"control_account\":\"";
-            if (pos + j1.len > buf.len) return error.InvalidInput;
+            if (pos + j1.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j1.len], j1);
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], control_account_number[0..control_number_len]);
             const j2 = std.fmt.bufPrint(buf[pos..], "\",\"gl_debits\":{d},\"gl_credits\":{d},\"gl_balance\":{d},\"sl_debits\":{d},\"sl_credits\":{d},\"sl_balance\":{d},\"difference\":{d},\"reconciled\":{s}}}", .{
                 gl_debits, gl_credits, gl_balance, sl_debits, sl_credits, sl_balance, difference, if (is_reconciled) "true" else "false",
-            }) catch return error.InvalidInput;
+            }) catch return error.BufferTooSmall;
             pos += j2.len;
         },
     }
@@ -2504,22 +2504,22 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
         .csv => {
             pos += try writeCsvMeta(buf[pos..], total, limit, offset);
             const header = "counterparty_id,counterparty_number,counterparty_name,current_0_30,past_due_31_60,past_due_61_90,past_due_90_plus,total\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
             while (try stmt.step()) {
-                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const id_s = std.fmt.bufPrint(buf[pos..], "{d},", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += id_s.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(1) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
                 const sign: i64 = if (is_credit_normal) -1 else 1;
                 const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d}\n", .{
                     stmt.columnInt64(3) * sign, stmt.columnInt64(4) * sign, stmt.columnInt64(5) * sign, stmt.columnInt64(6) * sign, stmt.columnInt64(7) * sign,
-                }) catch return error.InvalidInput;
+                }) catch return error.BufferTooSmall;
                 pos += nums.len;
             }
         },
@@ -2528,27 +2528,27 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
                 first = false;
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.InvalidInput;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"counterparty_id\":{d},\"counterparty_number\":\"", .{stmt.columnInt64(0)}) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(1) orelse "");
                 const j2 = "\",\"counterparty_name\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const sign: i64 = if (is_credit_normal) -1 else 1;
                 const j3 = std.fmt.bufPrint(buf[pos..], "\",\"current_0_30\":{d},\"past_due_31_60\":{d},\"past_due_61_90\":{d},\"past_due_90_plus\":{d},\"total\":{d}}}", .{
                     stmt.columnInt64(3) * sign, stmt.columnInt64(4) * sign, stmt.columnInt64(5) * sign, stmt.columnInt64(6) * sign, stmt.columnInt64(7) * sign,
-                }) catch return error.InvalidInput;
+                }) catch return error.BufferTooSmall;
                 pos += j3.len;
             }
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },

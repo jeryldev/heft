@@ -119,7 +119,7 @@ pub fn listOpenItems(database: db.Database, counterparty_id: i64, include_closed
     switch (format) {
         .csv => {
             const header = "id,entry_line_id,original_amount,remaining_amount,due_date,status\n";
-            if (pos + header.len > buf.len) return error.InvalidInput;
+            if (pos + header.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + header.len], header);
             pos += header.len;
 
@@ -129,25 +129,25 @@ pub fn listOpenItems(database: db.Database, counterparty_id: i64, include_closed
                 }) catch return error.InvalidInput;
                 pos += row.len;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(4) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = ',';
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(5) orelse "");
-                if (pos >= buf.len) return error.InvalidInput;
+                if (pos >= buf.len) return error.BufferTooSmall;
                 buf[pos] = '\n';
                 pos += 1;
             }
         },
         .json => {
             const open = "{\"items\":[";
-            if (pos + open.len > buf.len) return error.InvalidInput;
+            if (pos + open.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + open.len], open);
             pos += open.len;
 
             var first = true;
             while (try stmt.step()) {
                 if (!first) {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = ',';
                     pos += 1;
                 }
@@ -157,32 +157,32 @@ pub fn listOpenItems(database: db.Database, counterparty_id: i64, include_closed
                 }) catch return error.InvalidInput;
                 pos += j1.len;
                 if (stmt.columnText(4)) |dd| {
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = '"';
                     pos += 1;
                     pos += try export_mod.jsonString(buf[pos..], dd);
-                    if (pos >= buf.len) return error.InvalidInput;
+                    if (pos >= buf.len) return error.BufferTooSmall;
                     buf[pos] = '"';
                     pos += 1;
                 } else {
                     const null_str = "null";
-                    if (pos + null_str.len > buf.len) return error.InvalidInput;
+                    if (pos + null_str.len > buf.len) return error.BufferTooSmall;
                     @memcpy(buf[pos .. pos + null_str.len], null_str);
                     pos += null_str.len;
                 }
                 const j2 = ",\"status\":\"";
-                if (pos + j2.len > buf.len) return error.InvalidInput;
+                if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(5) orelse "");
                 const j3 = "\"}";
-                if (pos + j3.len > buf.len) return error.InvalidInput;
+                if (pos + j3.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j3.len], j3);
                 pos += j3.len;
             }
 
             const close = "]}";
-            if (pos + close.len > buf.len) return error.InvalidInput;
+            if (pos + close.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + close.len], close);
             pos += close.len;
         },

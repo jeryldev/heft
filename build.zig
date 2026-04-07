@@ -1,5 +1,14 @@
 const std = @import("std");
 
+const sqlite_flags = &.{
+    "-DSQLITE_DQS=0",
+    "-DSQLITE_THREADSAFE=0",
+    "-DSQLITE_OMIT_DEPRECATED",
+    "-DSQLITE_DEFAULT_MEMSTATUS=0",
+    "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
+    "-DSQLITE_OMIT_SHARED_CACHE",
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -12,14 +21,7 @@ pub fn build(b: *std.Build) void {
 
     mod.addCSourceFile(.{
         .file = b.path("vendor/sqlite3.c"),
-        .flags = &.{
-            "-DSQLITE_DQS=0",
-            "-DSQLITE_THREADSAFE=0",
-            "-DSQLITE_OMIT_DEPRECATED",
-            "-DSQLITE_DEFAULT_MEMSTATUS=0",
-            "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
-            "-DSQLITE_OMIT_SHARED_CACHE",
-        },
+        .flags = sqlite_flags,
     });
     mod.addIncludePath(b.path("vendor/"));
     mod.link_libc = true;
@@ -64,14 +66,7 @@ pub fn build(b: *std.Build) void {
     });
     safe_mod.addCSourceFile(.{
         .file = b.path("vendor/sqlite3.c"),
-        .flags = &.{
-            "-DSQLITE_DQS=0",
-            "-DSQLITE_THREADSAFE=0",
-            "-DSQLITE_OMIT_DEPRECATED",
-            "-DSQLITE_DEFAULT_MEMSTATUS=0",
-            "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
-            "-DSQLITE_OMIT_SHARED_CACHE",
-        },
+        .flags = sqlite_flags,
     });
     safe_mod.addIncludePath(b.path("vendor/"));
     safe_mod.link_libc = true;

@@ -677,9 +677,10 @@ fn mapError(err: anyerror) i32 {
 
 // ── Helpers ────────────────────────────────────────────────────
 
-fn safeBuf(buf: [*]u8, buf_len: i32) ?[]u8 {
+fn safeBuf(buf: ?[*]u8, buf_len: i32) ?[]u8 {
+    const b = buf orelse return null;
     if (buf_len <= 0) return null;
-    return buf[0..@intCast(buf_len)];
+    return b[0..@intCast(buf_len)];
 }
 
 fn safeIntCast(val: usize) i32 {
@@ -805,7 +806,7 @@ pub export fn ledger_update_subledger_account_status(handle: ?*LedgerDB, account
 // ── Query/List Exports (buffer-based) ─────────────────────────
 // Pattern: write CSV/JSON into caller buffer, return bytes written or -1
 
-pub export fn ledger_get_book(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_get_book(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -818,7 +819,7 @@ pub export fn ledger_get_book(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_books(handle: ?*LedgerDB, status_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_books(handle: ?*LedgerDB, status_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -836,7 +837,7 @@ pub export fn ledger_list_books(handle: ?*LedgerDB, status_filter: ?[*:0]const u
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_get_account(handle: ?*LedgerDB, account_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_get_account(handle: ?*LedgerDB, account_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -849,7 +850,7 @@ pub export fn ledger_get_account(handle: ?*LedgerDB, account_id: i64, buf: [*]u8
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_accounts(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, status_filter: ?[*:0]const u8, name_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_accounts(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, status_filter: ?[*:0]const u8, name_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -869,7 +870,7 @@ pub export fn ledger_list_accounts(handle: ?*LedgerDB, book_id: i64, type_filter
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_get_period(handle: ?*LedgerDB, period_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_get_period(handle: ?*LedgerDB, period_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -882,7 +883,7 @@ pub export fn ledger_get_period(handle: ?*LedgerDB, period_id: i64, buf: [*]u8, 
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_periods(handle: ?*LedgerDB, book_id: i64, year_filter: i32, status_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_periods(handle: ?*LedgerDB, book_id: i64, year_filter: i32, status_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -901,7 +902,7 @@ pub export fn ledger_list_periods(handle: ?*LedgerDB, book_id: i64, year_filter:
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_get_entry(handle: ?*LedgerDB, entry_id: i64, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_get_entry(handle: ?*LedgerDB, entry_id: i64, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -914,7 +915,7 @@ pub export fn ledger_get_entry(handle: ?*LedgerDB, entry_id: i64, book_id: i64, 
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_entries(handle: ?*LedgerDB, book_id: i64, status_filter: ?[*:0]const u8, start_date: ?[*:0]const u8, end_date: ?[*:0]const u8, doc_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_entries(handle: ?*LedgerDB, book_id: i64, status_filter: ?[*:0]const u8, start_date: ?[*:0]const u8, end_date: ?[*:0]const u8, doc_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -935,7 +936,7 @@ pub export fn ledger_list_entries(handle: ?*LedgerDB, book_id: i64, status_filte
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_entry_lines(handle: ?*LedgerDB, entry_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_entry_lines(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -948,7 +949,7 @@ pub export fn ledger_list_entry_lines(handle: ?*LedgerDB, entry_id: i64, buf: [*
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_classifications(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_classifications(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -966,7 +967,7 @@ pub export fn ledger_list_classifications(handle: ?*LedgerDB, book_id: i64, type
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_subledger_groups(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_subledger_groups(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -984,7 +985,7 @@ pub export fn ledger_list_subledger_groups(handle: ?*LedgerDB, book_id: i64, typ
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_subledger_accounts(handle: ?*LedgerDB, book_id: i64, group_filter: i64, name_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_subledger_accounts(handle: ?*LedgerDB, book_id: i64, group_filter: i64, name_search: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1003,7 +1004,7 @@ pub export fn ledger_list_subledger_accounts(handle: ?*LedgerDB, book_id: i64, g
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_audit_log(handle: ?*LedgerDB, book_id: i64, entity_type: ?[*:0]const u8, action: ?[*:0]const u8, start_date: ?[*:0]const u8, end_date: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_audit_log(handle: ?*LedgerDB, book_id: i64, entity_type: ?[*:0]const u8, action: ?[*:0]const u8, start_date: ?[*:0]const u8, end_date: ?[*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1026,7 +1027,7 @@ pub export fn ledger_list_audit_log(handle: ?*LedgerDB, book_id: i64, entity_typ
 
 // ── Subledger Report Exports ──────────────────────────────────
 
-pub export fn ledger_subledger_report(handle: ?*LedgerDB, book_id: i64, group_id: i64, name_search: ?[*:0]const u8, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_subledger_report(handle: ?*LedgerDB, book_id: i64, group_id: i64, name_search: ?[*:0]const u8, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1045,7 +1046,7 @@ pub export fn ledger_subledger_report(handle: ?*LedgerDB, book_id: i64, group_id
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_counterparty_ledger(handle: ?*LedgerDB, book_id: i64, counterparty_id: i64, account_filter: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_counterparty_ledger(handle: ?*LedgerDB, book_id: i64, counterparty_id: i64, account_filter: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1063,7 +1064,7 @@ pub export fn ledger_counterparty_ledger(handle: ?*LedgerDB, book_id: i64, count
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_transactions(handle: ?*LedgerDB, book_id: i64, account_filter: i64, counterparty_filter: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_transactions(handle: ?*LedgerDB, book_id: i64, account_filter: i64, counterparty_filter: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1082,7 +1083,7 @@ pub export fn ledger_list_transactions(handle: ?*LedgerDB, book_id: i64, account
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_subledger_reconciliation(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_subledger_reconciliation(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1095,7 +1096,7 @@ pub export fn ledger_subledger_reconciliation(handle: ?*LedgerDB, book_id: i64, 
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_aged_subledger(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_aged_subledger(handle: ?*LedgerDB, book_id: i64, group_id: i64, as_of_date: [*:0]const u8, sort_order: i32, limit: i32, offset: i32, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1188,7 +1189,7 @@ pub export fn ledger_remove_line_dimension(handle: ?*LedgerDB, line_id: i64, dim
     return true;
 }
 
-pub export fn ledger_dimension_summary(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_dimension_summary(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const b = safeBuf(buf, buf_len) orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
@@ -1204,7 +1205,7 @@ pub export fn ledger_dimension_summary(handle: ?*LedgerDB, book_id: i64, dimensi
 
 // ── Sprint 20D: Dimension List Exports ───────────────────────
 
-pub export fn ledger_list_dimensions(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_dimensions(handle: ?*LedgerDB, book_id: i64, type_filter: ?[*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1218,7 +1219,7 @@ pub export fn ledger_list_dimensions(handle: ?*LedgerDB, book_id: i64, type_filt
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_list_dimension_values(handle: ?*LedgerDB, dimension_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_dimension_values(handle: ?*LedgerDB, dimension_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1233,7 +1234,7 @@ pub export fn ledger_list_dimension_values(handle: ?*LedgerDB, dimension_id: i64
 
 // ── Sprint 20C: Schema Self-Description ──────────────────────
 
-pub export fn ledger_describe_schema(handle: ?*LedgerDB, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_describe_schema(handle: ?*LedgerDB, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1302,7 +1303,7 @@ pub export fn ledger_set_budget_line(handle: ?*LedgerDB, budget_id: i64, account
     };
 }
 
-pub export fn ledger_budget_vs_actual(handle: ?*LedgerDB, budget_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_budget_vs_actual(handle: ?*LedgerDB, budget_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const b = safeBuf(buf, buf_len) orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
@@ -1367,7 +1368,7 @@ pub export fn ledger_recalculate_balances(handle: ?*LedgerDB, book_id: i64) i32 
 
 // ── Export Wrappers ────────────────────────────────────────────
 
-pub export fn ledger_export_chart_of_accounts(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_export_chart_of_accounts(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1380,7 +1381,7 @@ pub export fn ledger_export_chart_of_accounts(handle: ?*LedgerDB, book_id: i64, 
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_export_journal_entries(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_export_journal_entries(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1393,7 +1394,7 @@ pub export fn ledger_export_journal_entries(handle: ?*LedgerDB, book_id: i64, st
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_export_audit_trail(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_export_audit_trail(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1406,7 +1407,7 @@ pub export fn ledger_export_audit_trail(handle: ?*LedgerDB, book_id: i64, start_
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_export_periods(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_export_periods(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1419,7 +1420,7 @@ pub export fn ledger_export_periods(handle: ?*LedgerDB, book_id: i64, buf: [*]u8
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_export_subledger(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_export_subledger(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1432,7 +1433,7 @@ pub export fn ledger_export_subledger(handle: ?*LedgerDB, book_id: i64, buf: [*]
     return safeIntCast(result.len);
 }
 
-pub export fn ledger_export_book_metadata(handle: ?*LedgerDB, book_id: i64, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_export_book_metadata(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1478,7 +1479,7 @@ pub export fn ledger_allocate_payment(handle: ?*LedgerDB, open_item_id: i64, amo
     return true;
 }
 
-pub export fn ledger_list_open_items(handle: ?*LedgerDB, counterparty_id: i64, include_closed: bool, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_list_open_items(handle: ?*LedgerDB, counterparty_id: i64, include_closed: bool, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
@@ -1505,7 +1506,7 @@ pub export fn ledger_classified_trial_balance(handle: ?*LedgerDB, classification
     return heft.classification.classifiedTrialBalance(h.sqlite, classification_id, std.mem.span(as_of_date)) catch null;
 }
 
-pub export fn ledger_dimension_summary_rollup(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: [*]u8, buf_len: i32, format: i32) i32 {
+pub export fn ledger_dimension_summary_rollup(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return -1;
     const fmt: heft.export_mod.ExportFormat = if (format == 0) .csv else if (format == 1) .json else {
         setError(mapError(error.InvalidInput));
