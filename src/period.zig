@@ -246,12 +246,7 @@ pub const Period = struct {
         var insert_stmt = try database.prepare(create_sql);
         defer insert_stmt.finalize();
 
-        const audit_sql: [*:0]const u8 =
-            \\INSERT INTO ledger_audit_log
-            \\  (entity_type, entity_id, action, performed_by, book_id)
-            \\VALUES ('period', ?, 'create', ?, ?);
-        ;
-        var audit_stmt = try database.prepare(audit_sql);
+        var audit_stmt = try database.prepare(audit.insert_sql);
         defer audit_stmt.finalize();
 
         var start_buf: [date_buf_len]u8 = undefined;
@@ -293,12 +288,7 @@ pub const Period = struct {
             insert_stmt.clearBindings();
 
             const id = database.lastInsertRowId();
-            try audit_stmt.bindInt(1, id);
-            try audit_stmt.bindText(2, performed_by);
-            try audit_stmt.bindInt(3, book_id);
-            _ = try audit_stmt.step();
-            audit_stmt.reset();
-            audit_stmt.clearBindings();
+            try audit.logWithStmt(database, &audit_stmt, "period", id, "create", null, null, null, performed_by, book_id);
         }
 
         if (owns_txn) try database.commit();

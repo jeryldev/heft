@@ -116,7 +116,7 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         return;
     }
 
-    var doc_buf: [32]u8 = undefined;
+    var doc_buf: [48]u8 = undefined;
 
     if (is_account_id > 0) {
         try twoStepClose(database, book_id, period_id, re_account_id, is_account_id, base_currency, end_date, period_number, period_year, account_ids[0..acct_count], debit_sums[0..acct_count], credit_sums[0..acct_count], is_revenue[0..acct_count], &doc_buf, performed_by);
@@ -132,7 +132,7 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
     if (owns_txn) try database.commit();
 }
 
-fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, doc_buf: *[32]u8, performed_by: []const u8) !void {
+fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, doc_buf: *[48]u8, performed_by: []const u8) !void {
     const doc_number = std.fmt.bufPrint(doc_buf, "CLOSE-P{d}-FY{d}", .{ period_number, period_year }) catch unreachable;
 
     const entry_id = try entry_mod.Entry.createDraft(database, book_id, doc_number, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"direct\"}", performed_by);
@@ -157,7 +157,7 @@ fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_i
     try entry_mod.Entry.post(database, entry_id, performed_by);
 }
 
-fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, is_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, doc_buf: *[32]u8, performed_by: []const u8) !void {
+fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, is_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, doc_buf: *[48]u8, performed_by: []const u8) !void {
     {
         const doc = std.fmt.bufPrint(doc_buf, "CLOSE-REV-P{d}-FY{d}", .{ period_number, period_year }) catch unreachable;
         const entry_id = try entry_mod.Entry.createDraft(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":1}", performed_by);
