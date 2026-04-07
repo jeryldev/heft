@@ -23,6 +23,43 @@ pub const BookStatus = enum {
     }
 };
 
+/// Classification of the business entity keeping the book. Drives which
+/// closing method and equity structure the engine enforces. See
+/// .research/26-entity-type-architecture.md for the full rationale.
+pub const EntityType = enum {
+    corporation,
+    sole_proprietorship,
+    partnership,
+    llc,
+    nonprofit,
+    cooperative,
+    fund,
+    government,
+    other,
+
+    pub fn toString(self: EntityType) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromString(s: []const u8) ?EntityType {
+        const map = .{
+            .{ "corporation", EntityType.corporation },
+            .{ "sole_proprietorship", EntityType.sole_proprietorship },
+            .{ "partnership", EntityType.partnership },
+            .{ "llc", EntityType.llc },
+            .{ "nonprofit", EntityType.nonprofit },
+            .{ "cooperative", EntityType.cooperative },
+            .{ "fund", EntityType.fund },
+            .{ "government", EntityType.government },
+            .{ "other", EntityType.other },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
+};
+
 pub const Book = struct {
     const id_buf_len = 20; // max i64 decimal digits
 
@@ -507,6 +544,40 @@ pub const Book = struct {
         const old_str = std.fmt.bufPrint(&old_buf, "{d}", .{old_val}) catch unreachable;
         const new_str = std.fmt.bufPrint(&new_buf, "{d}", .{month}) catch unreachable;
         try audit.log(database, "book", book_id, "update", "fy_start_month", old_str, new_str, performed_by, book_id);
+
+        if (owns_txn) try database.commit();
+    }
+
+    pub fn setEntityType(database: db.Database, book_id: i64, entity_type: EntityType, performed_by: []const u8) !void {
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
+
+        var old_type: EntityType = undefined;
+        {
+            var stmt = try database.prepare("SELECT status, entity_type FROM ledger_books WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, book_id);
+            const has_row = try stmt.step();
+            if (!has_row) return error.NotFound;
+            const status = BookStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+            if (status == .archived) return error.BookArchived;
+            old_type = EntityType.fromString(stmt.columnText(1).?) orelse return error.InvalidInput;
+        }
+
+        if (old_type == entity_type) {
+            if (owns_txn) try database.commit();
+            return;
+        }
+
+        {
+            var stmt = try database.prepare("UPDATE ledger_books SET entity_type = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindText(1, entity_type.toString());
+            try stmt.bindInt(2, book_id);
+            _ = try stmt.step();
+        }
+
+        try audit.log(database, "book", book_id, "update", "entity_type", old_type.toString(), entity_type.toString(), performed_by, book_id);
 
         if (owns_txn) try database.commit();
     }
@@ -1451,4 +1522,138 @@ test "getFyStartDate: Australia July start, date in FY" {
 test "getFyStartDate: Australia July start, date before July" {
     const result = Book.getFyStartDate("2026-03-31", 7);
     try std.testing.expect(std.mem.eql(u8, &result, "2025-07-01"));
+}
+
+// ── Entity Type tests (Sprint A.1) ──────────────────────────────
+
+test "EntityType.toString returns canonical name" {
+    try std.testing.expectEqualStrings("corporation", EntityType.corporation.toString());
+    try std.testing.expectEqualStrings("sole_proprietorship", EntityType.sole_proprietorship.toString());
+    try std.testing.expectEqualStrings("partnership", EntityType.partnership.toString());
+    try std.testing.expectEqualStrings("llc", EntityType.llc.toString());
+    try std.testing.expectEqualStrings("nonprofit", EntityType.nonprofit.toString());
+    try std.testing.expectEqualStrings("cooperative", EntityType.cooperative.toString());
+    try std.testing.expectEqualStrings("fund", EntityType.fund.toString());
+    try std.testing.expectEqualStrings("government", EntityType.government.toString());
+    try std.testing.expectEqualStrings("other", EntityType.other.toString());
+}
+
+test "EntityType.fromString parses all 9 variants" {
+    try std.testing.expectEqual(EntityType.corporation, EntityType.fromString("corporation").?);
+    try std.testing.expectEqual(EntityType.sole_proprietorship, EntityType.fromString("sole_proprietorship").?);
+    try std.testing.expectEqual(EntityType.partnership, EntityType.fromString("partnership").?);
+    try std.testing.expectEqual(EntityType.llc, EntityType.fromString("llc").?);
+    try std.testing.expectEqual(EntityType.nonprofit, EntityType.fromString("nonprofit").?);
+    try std.testing.expectEqual(EntityType.cooperative, EntityType.fromString("cooperative").?);
+    try std.testing.expectEqual(EntityType.fund, EntityType.fromString("fund").?);
+    try std.testing.expectEqual(EntityType.government, EntityType.fromString("government").?);
+    try std.testing.expectEqual(EntityType.other, EntityType.fromString("other").?);
+}
+
+test "EntityType.fromString returns null for invalid string" {
+    try std.testing.expect(EntityType.fromString("invalid") == null);
+    try std.testing.expect(EntityType.fromString("") == null);
+    try std.testing.expect(EntityType.fromString("CORPORATION") == null);
+}
+
+test "create book defaults to corporation entity_type" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme Corp", "PHP", 2, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("corporation", stmt.columnText(0).?);
+}
+
+test "setEntityType updates book entity_type" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Juan dela Cruz", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .sole_proprietorship, "admin");
+
+    var stmt = try database.prepare("SELECT entity_type FROM ledger_books WHERE id = 1;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("sole_proprietorship", stmt.columnText(0).?);
+}
+
+test "setEntityType writes audit log with old and new values" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .partnership, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT field_changed, old_value, new_value FROM ledger_audit_log
+        \\WHERE entity_type = 'book' AND action = 'update' AND field_changed = 'entity_type';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("entity_type", stmt.columnText(0).?);
+    try std.testing.expectEqualStrings("corporation", stmt.columnText(1).?);
+    try std.testing.expectEqualStrings("partnership", stmt.columnText(2).?);
+}
+
+test "setEntityType rejects nonexistent book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const result = Book.setEntityType(database, 999, .partnership, "admin");
+    try std.testing.expectError(error.NotFound, result);
+}
+
+test "setEntityType rejects archived book" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    try Book.archive(database, 1, "admin");
+
+    const result = Book.setEntityType(database, 1, .partnership, "admin");
+    try std.testing.expectError(error.BookArchived, result);
+}
+
+test "setEntityType is no-op when already that type" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Book.create(database, "Acme", "PHP", 2, "admin");
+    try Book.setEntityType(database, 1, .corporation, "admin");
+
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'book' AND field_changed = 'entity_type';
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+}
+
+test "create book with all 9 entity types via setEntityType" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const types = [_]EntityType{
+        .corporation,       .sole_proprietorship, .partnership,
+        .llc,               .nonprofit,           .cooperative,
+        .fund,              .government,          .other,
+    };
+
+    for (types, 0..) |entity_type, i| {
+        var name_buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrint(&name_buf, "Book {d}", .{i}) catch unreachable;
+        const book_id = try Book.create(database, name, "PHP", 2, "admin");
+        try Book.setEntityType(database, book_id, entity_type, "admin");
+
+        var stmt = try database.prepare("SELECT entity_type FROM ledger_books WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings(entity_type.toString(), stmt.columnText(0).?);
+    }
 }

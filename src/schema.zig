@@ -14,7 +14,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 pub fn migrate(database: db.Database, from_version: i32) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
@@ -74,6 +74,18 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
         };
     }
 
+    if (from_version < 10) {
+        const entity_type_sql: [*:0]const u8 =
+            \\ALTER TABLE ledger_books ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'corporation'
+            \\  CHECK (entity_type IN ('corporation', 'sole_proprietorship', 'partnership',
+            \\                          'llc', 'nonprofit', 'cooperative', 'fund',
+            \\                          'government', 'other'));
+        ;
+        database.exec(entity_type_sql) catch |err| {
+            std.log.debug("migrate v10: entity_type column: {s} (expected if exists)", .{@errorName(err)});
+        };
+    }
+
     const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
     try database.exec(version_pragma);
 
@@ -123,6 +135,10 @@ const tables = [_][*:0]const u8{
     \\    CHECK (require_approval IN (0, 1)),
     \\  fy_start_month INTEGER NOT NULL DEFAULT 1
     \\    CHECK (fy_start_month BETWEEN 1 AND 12),
+    \\  entity_type TEXT NOT NULL DEFAULT 'corporation'
+    \\    CHECK (entity_type IN ('corporation', 'sole_proprietorship', 'partnership',
+    \\                            'llc', 'nonprofit', 'cooperative', 'fund',
+    \\                            'government', 'other')),
     \\  inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     \\  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     \\);

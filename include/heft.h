@@ -123,6 +123,7 @@ bool    ledger_set_suspense_account(LedgerDB* h, int64_t book_id, int64_t accoun
 bool    ledger_validate_opening_balance(LedgerDB* h, int64_t book_id);
 bool    ledger_set_require_approval(LedgerDB* h, int64_t book_id, int32_t require, const char* performed_by);
 bool    ledger_set_fy_start_month(LedgerDB* h, int64_t book_id, int32_t month, const char* performed_by);
+bool    ledger_set_entity_type(LedgerDB* h, int64_t book_id, const char* entity_type, const char* performed_by);
 
 /* ── Accounts ──────────────────────────────────────────────── */
 

@@ -354,6 +354,19 @@ pub export fn ledger_set_fy_start_month(handle: ?*LedgerDB, book_id: i64, month:
     return true;
 }
 
+pub export fn ledger_set_entity_type(handle: ?*LedgerDB, book_id: i64, entity_type: [*:0]const u8, performed_by: [*:0]const u8) bool {
+    const h = handle orelse return false;
+    const et = heft.book.EntityType.fromString(std.mem.span(entity_type)) orelse {
+        setError(mapError(error.InvalidInput));
+        return false;
+    };
+    heft.book.Book.setEntityType(h.sqlite, book_id, et, std.mem.span(performed_by)) catch |err| {
+        setError(mapError(err));
+        return false;
+    };
+    return true;
+}
+
 pub export fn ledger_translate_report(source: ?*heft.report.ReportResult, closing_rate: i64, average_rate: i64) ?*heft.report.ReportResult {
     const src = source orelse return null;
     const rates = heft.report.TranslationRates{
@@ -2283,6 +2296,20 @@ test "C ABI: ledger_set_fy_start_month" {
         defer ledger_close(h);
         _ = ledger_create_book(h, "India", "INR", 2, "admin");
         try std.testing.expect(ledger_set_fy_start_month(h, 1, 4, "admin"));
+    }
+}
+
+test "C ABI: ledger_set_entity_type" {
+    defer cleanupTestFile("test-cabi-entity.ledger");
+    const handle = ledger_open("test-cabi-entity.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+        _ = ledger_create_book(h, "Juan dela Cruz", "PHP", 2, "admin");
+        try std.testing.expect(ledger_set_entity_type(h, 1, "sole_proprietorship", "admin"));
+        // Invalid entity type string must return false
+        try std.testing.expect(!ledger_set_entity_type(h, 1, "nonsense", "admin"));
+        // Null handle returns false
+        try std.testing.expect(!ledger_set_entity_type(null, 1, "corporation", "admin"));
     }
 }
 
