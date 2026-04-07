@@ -31,6 +31,8 @@ pub const LedgerError = error{
     EquityCloseTargetRequired,
     EquityAllocationRequired,
     EquityAllocationTotalInvalid,
+    NoNextPeriod,
+    CannotReopenCascade,
     ReverseReasonRequired,
     TooFewLines,
     UnbalancedEntry,

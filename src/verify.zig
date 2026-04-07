@@ -55,7 +55,9 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         }
     }
 
-    // Check 2: Cache integrity — recompute from lines, compare with cache
+    // Check 2: Cache integrity — recompute from lines, compare with cache.
+    // Opening entries are audit-trail markers that don't contribute to the
+    // cache (by design — see Sprint C.1). Exclude them from the recomputation.
     {
         var stmt = try database.prepare(
             \\SELECT ab.account_id, ab.period_id, ab.debit_sum, ab.credit_sum,
@@ -68,6 +70,7 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
             \\    FROM ledger_entry_lines el
             \\    JOIN ledger_entries e ON e.id = el.entry_id
             \\    WHERE e.book_id = ? AND e.status = 'posted'
+            \\      AND (e.metadata IS NULL OR e.metadata NOT LIKE '%"opening_entry":true%')
             \\    GROUP BY el.account_id, e.period_id
             \\) computed ON computed.account_id = ab.account_id AND computed.period_id = ab.period_id
             \\WHERE ab.book_id = ?;

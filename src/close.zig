@@ -133,6 +133,18 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         try directClose(database, book_id, period_id, re_account_id, base_currency, end_date, period_number, period_year, account_ids[0..acct_count], debit_sums[0..acct_count], credit_sums[0..acct_count], &doc_buf, performed_by);
     }
 
+    // Sprint C.1: Generate opening balance entry in the next period, if it exists.
+    // Honors Rule 1 (everything is a journal entry) — the next period's opening
+    // balances now appear as a real posted entry in the journal. The entry is
+    // marked with metadata {"opening_entry":true} so post() skips cache updates
+    // and the existing cumulative-query report architecture continues to work.
+    generateOpeningEntry(database, book_id, period_id, base_currency, performed_by) catch |err| switch (err) {
+        // If no next period exists, that's fine — application can create periods
+        // later and call generateOpeningEntry manually. Any other error is a real bug.
+        error.NoNextPeriod => {},
+        else => return err,
+    };
+
     if (std.mem.eql(u8, period_status, "open")) {
         try period_mod.Period.transition(database, period_id, .soft_closed, performed_by);
     }
@@ -427,6 +439,147 @@ fn allocatedClose(
     }
 
     try entry_mod.Entry.post(database, entry_id, performed_by);
+}
+
+/// Sprint C.1: Generate an opening balance entry in the period immediately
+/// following the just-closed period. Brings forward all balance sheet
+/// account cumulative balances as of the closed period's end.
+///
+/// The entry is tagged with metadata {"opening_entry":true,"source_period_id":N}
+/// so post() skips the cache update and the existing cumulative-query report
+/// architecture continues to work correctly. The entry exists solely for
+/// audit trail completeness (Rule 1).
+///
+/// Returns error.NoNextPeriod if there is no period after the closed one.
+/// Callers should treat this as a non-error (the application will create
+/// the next period later and can call this function manually).
+pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_id: i64, base_currency: []const u8, performed_by: []const u8) !void {
+    // 1. Find the next period by start_date > closed_period.end_date
+    var next_period_id: i64 = 0;
+    var next_start_date_buf: [11]u8 = undefined;
+    var next_start_date_len: usize = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, start_date FROM ledger_periods
+            \\WHERE book_id = ?
+            \\  AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?)
+            \\  AND status IN ('open', 'soft_closed')
+            \\ORDER BY start_date ASC LIMIT 1;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, closed_period_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NoNextPeriod;
+        next_period_id = stmt.columnInt64(0);
+        const sd = stmt.columnText(1).?;
+        next_start_date_len = @min(sd.len, next_start_date_buf.len);
+        @memcpy(next_start_date_buf[0..next_start_date_len], sd[0..next_start_date_len]);
+    }
+    const next_start_date = next_start_date_buf[0..next_start_date_len];
+
+    // 2. Check if the next period already has an opening entry (shouldn't
+    //    happen in normal flow but prevents duplicates on retry/reopen)
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_entries
+            \\WHERE book_id = ? AND period_id = ? AND status = 'posted'
+            \\  AND metadata LIKE '%"opening_entry":true%';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, next_period_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) return; // already exists, don't duplicate
+    }
+
+    // 3. Query all balance sheet accounts with non-zero cumulative balance
+    //    through the end of the closed period. This uses the same cumulative
+    //    SUM pattern as the trial balance, scoped to balance sheet accounts.
+    const MaxAccounts = 2000;
+    var bs_account_ids: [MaxAccounts]i64 = undefined;
+    var bs_net_amounts: [MaxAccounts]i64 = undefined; // positive = debit balance, negative = credit balance
+    var bs_count: usize = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT a.id, SUM(ab.debit_sum) - SUM(ab.credit_sum) AS net
+            \\FROM ledger_account_balances ab
+            \\JOIN ledger_accounts a ON a.id = ab.account_id
+            \\JOIN ledger_periods p ON p.id = ab.period_id
+            \\WHERE ab.book_id = ?
+            \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?)
+            \\  AND a.account_type IN ('asset', 'liability', 'equity')
+            \\GROUP BY a.id
+            \\HAVING SUM(ab.debit_sum) != 0 OR SUM(ab.credit_sum) != 0
+            \\ORDER BY a.number;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, closed_period_id);
+        while (try stmt.step()) {
+            if (bs_count >= MaxAccounts) return error.TooManyAccounts;
+            bs_account_ids[bs_count] = stmt.columnInt64(0);
+            bs_net_amounts[bs_count] = stmt.columnInt64(1);
+            bs_count += 1;
+        }
+    }
+
+    if (bs_count == 0) return; // nothing to bring forward
+
+    // 4. Create the opening entry
+    var doc_buf: [48]u8 = undefined;
+    var meta_buf: [80]u8 = undefined;
+    const doc = std.fmt.bufPrint(&doc_buf, "OPEN-P{d}", .{next_period_id}) catch unreachable;
+    const metadata = std.fmt.bufPrint(&meta_buf, "{{\"opening_entry\":true,\"source_period_id\":{d}}}", .{closed_period_id}) catch unreachable;
+
+    const entry_id = try entry_mod.Entry.createDraft(
+        database,
+        book_id,
+        doc,
+        next_start_date,
+        next_start_date,
+        null,
+        next_period_id,
+        metadata,
+        performed_by,
+    );
+
+    // 5. Add one line per balance sheet account, debit or credit based on sign
+    var line_num: i32 = 1;
+    for (bs_account_ids[0..bs_count], bs_net_amounts[0..bs_count]) |acct_id, net| {
+        if (net == 0) continue;
+        if (net > 0) {
+            // Debit balance → debit the account in the opening entry
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, net, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+        } else {
+            // Credit balance → credit the account in the opening entry
+            const abs_net = std.math.negate(net) catch return error.AmountOverflow;
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, abs_net, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+        }
+        line_num += 1;
+    }
+
+    // 6. Post the entry. Because of the "opening_entry":true metadata tag,
+    //    post() will skip the cache update and future-stale marking.
+    try entry_mod.Entry.post(database, entry_id, performed_by);
+}
+
+/// Find the opening entry for a given period, if any. Returns the entry ID
+/// or null if the period has no opening entry. Used by period reopening
+/// cascade (Sprint C.2) to void the entry before allowing reopen.
+pub fn findOpeningEntry(database: db.Database, book_id: i64, period_id: i64) !?i64 {
+    var stmt = try database.prepare(
+        \\SELECT id FROM ledger_entries
+        \\WHERE book_id = ? AND period_id = ? AND status = 'posted'
+        \\  AND metadata LIKE '%"opening_entry":true%'
+        \\LIMIT 1;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, period_id);
+    const has_row = try stmt.step();
+    if (!has_row) return null;
+    return stmt.columnInt64(0);
 }
 
 // ── Tests ───────────────────────────────────────────────────────

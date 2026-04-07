@@ -997,3 +997,239 @@ test "CHAR corp: Equity Changes Jan-Mar shows movement" {
 
     try std.testing.expect(eq.rows.len > 0);
 }
+
+// ─────────────────────────────────────────────────────────────
+// Sprint C.1 — Opening entry generation characterization
+// ─────────────────────────────────────────────────────────────
+
+test "CHAR opening: entry created in next period after Jan close" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+
+    // An opening entry should exist in Feb (periods[1])
+    const opening_id = try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[1]);
+    try std.testing.expect(opening_id != null);
+
+    // Verify the entry has metadata tag
+    var stmt = try s.database.prepare("SELECT metadata, period_id, status FROM ledger_entries WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, opening_id.?);
+    _ = try stmt.step();
+    const meta = stmt.columnText(0).?;
+    try std.testing.expect(std.mem.indexOf(u8, meta, "\"opening_entry\":true") != null);
+    try std.testing.expectEqual(s.periods[1], stmt.columnInt64(1));
+    try std.testing.expectEqualStrings("posted", stmt.columnText(2).?);
+}
+
+test "CHAR opening: entry lines bring forward BS balances as of close date" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+
+    const opening_id = (try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[1])).?;
+
+    // Query the lines
+    var stmt = try s.database.prepare(
+        "SELECT account_id, debit_amount, credit_amount FROM ledger_entry_lines WHERE entry_id = ? ORDER BY line_number;",
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, opening_id);
+
+    var total_debits: i64 = 0;
+    var total_credits: i64 = 0;
+    var has_cash = false;
+    var has_capital = false;
+    var has_re = false;
+    while (try stmt.step()) {
+        const acct_id = stmt.columnInt64(0);
+        const dr = stmt.columnInt64(1);
+        const cr = stmt.columnInt64(2);
+        total_debits += dr;
+        total_credits += cr;
+
+        if (acct_id == s.cash and dr == 72 * 1_000_000_000_00) has_cash = true;
+        if (acct_id == s.capital and cr == AMT_100K) has_capital = true;
+        if (acct_id == s.re and cr == 17 * 1_000_000_000_00) has_re = true;
+    }
+
+    // Opening entry must be balanced
+    try std.testing.expectEqual(total_debits, total_credits);
+    // Expected total: 72 + 15 + 30 = 117 debits, 100 + 17 = 117 credits
+    try std.testing.expectEqual(@as(i64, 117 * 1_000_000_000_00), total_debits);
+
+    try std.testing.expect(has_cash);
+    try std.testing.expect(has_capital);
+    try std.testing.expect(has_re);
+}
+
+test "CHAR opening: opening entry does NOT affect trial balance (cache skipped)" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+
+    // After close, Feb period has an opening entry but the cache is unchanged.
+    // Trial balance as of Feb 28 should show the SAME cumulative amounts as
+    // before the Sprint C.1 refactor (locked down in Sprint B).
+    const tb = try report_mod.trialBalance(s.database, s.book_id, "2026-02-28");
+    defer tb.deinit();
+
+    // Pre-C.1 expected: Feb activity only (Feb 10-20). No opening entry duplication.
+    // Cash: Jan 110/38 + Feb 15/0 = 125/38 → net 87k
+    if (findRow(tb.rows, s.cash)) |row| {
+        try std.testing.expectEqual(@as(i64, 87 * 1_000_000_000_00), row.debit_balance);
+    } else return error.TestUnexpectedResult;
+
+    // RE: 17k from Jan close
+    if (findRow(tb.rows, s.re)) |row| {
+        try std.testing.expectEqual(@as(i64, 17 * 1_000_000_000_00), row.credit_balance);
+    } else return error.TestUnexpectedResult;
+}
+
+test "CHAR opening: journal register includes opening entries" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+
+    // Journal register for Feb should include the opening entry (it's a
+    // real posted entry in the period). This is the Rule 1 audit trail.
+    const jr = try report_mod.journalRegister(s.database, s.book_id, "2026-02-01", "2026-02-28");
+    defer jr.deinit();
+
+    // Feb has: 3 real activity entries (E6-E8) × 2 lines = 6 lines, plus
+    // the opening entry's 5 lines (Cash, AR, Equipment, Capital, RE) = 11
+    try std.testing.expectEqual(@as(usize, 11), jr.rows.len);
+}
+
+test "CHAR opening: sequential closes create opening entry in each next period" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[2], "admin");
+
+    // Each of Feb, Mar, Apr should have an opening entry
+    const feb_opening = try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[1]);
+    const mar_opening = try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[2]);
+    const apr_opening = try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[3]);
+
+    try std.testing.expect(feb_opening != null);
+    try std.testing.expect(mar_opening != null);
+    try std.testing.expect(apr_opening != null);
+}
+
+test "CHAR opening: no opening entry when no next period" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    // Close the LAST period (Dec 2026). No period exists after.
+    // Note: Dec 2026 has no activity, so closePeriod short-circuits
+    // via the acct_count==0 path. Opening entry generation is skipped
+    // in that branch. This test verifies the short-circuit behavior.
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[11], "admin");
+
+    // No period after Dec → no opening entry anywhere
+    for (s.periods) |pid| {
+        const opening = try close_mod.findOpeningEntry(s.database, s.book_id, pid);
+        try std.testing.expect(opening == null);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Sprint C.2 — Period reopening cascade
+// ─────────────────────────────────────────────────────────────
+
+test "CHAR reopen: reopening closed Jan voids Feb opening entry" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+
+    // Verify opening entry exists in Feb
+    const opening_before = try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[1]);
+    try std.testing.expect(opening_before != null);
+
+    // Reopen Jan (Feb is still open — cascade should proceed)
+    try period_mod.Period.transitionWithReason(s.database, s.periods[0], .open, "Found missed invoice", "admin");
+
+    // Opening entry in Feb should now be void (findOpeningEntry only returns posted)
+    const opening_after = try close_mod.findOpeningEntry(s.database, s.book_id, s.periods[1]);
+    try std.testing.expect(opening_after == null);
+}
+
+test "CHAR reopen: cannot reopen if next period is closed" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
+
+    // Attempt to reopen Jan while Feb is also closed
+    const result = period_mod.Period.transitionWithReason(s.database, s.periods[0], .open, "Attempt", "admin");
+    try std.testing.expectError(error.CannotReopenCascade, result);
+}
+
+test "CHAR reopen: cascade in reverse order works" {
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
+
+    // Must reopen Feb FIRST (it has a closed status and an opening entry from Jan close)
+    try period_mod.Period.transitionWithReason(s.database, s.periods[1], .open, "Reopen Feb", "admin");
+    // Now Jan can be reopened
+    try period_mod.Period.transitionWithReason(s.database, s.periods[0], .open, "Reopen Jan", "admin");
+
+    // Both periods are now open
+    var stmt = try s.database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, s.periods[0]);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("open", stmt.columnText(0).?);
+}
+
+test "CHAR reopen: can post new entries after reopening" {
+    // Known limitation (Sprint C.2 scope): Re-closing a reopened period
+    // with the same closing-entry document number hits a UNIQUE constraint.
+    // A future sprint can handle this either by voiding the old closing
+    // entry automatically in the cascade OR by varying the doc number.
+    //
+    // This test verifies the ESSENTIAL behavior: after reopening, the
+    // period accepts new posted entries (adjustments).
+    const s = try setupCorporationScenario();
+    defer s.database.close();
+
+    try postYear1Transactions(s);
+    try close_mod.closePeriod(s.database, s.book_id, s.periods[0], "admin");
+
+    // Reopen Jan (Feb is still open, cascade voids Feb opening entry)
+    try period_mod.Period.transitionWithReason(s.database, s.periods[0], .open, "Found error", "admin");
+
+    // Post a correction — this should succeed because the period is now open
+    try postSimple2LineEntry(s.database, s.book_id, s.periods[0], "CORR-001", "2026-01-30", s.cash, s.revenue, AMT_10K);
+
+    // Verify the correction posted
+    var stmt = try s.database.prepare(
+        "SELECT COUNT(*) FROM ledger_entries WHERE book_id = ? AND document_number = ? AND status = 'posted';",
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, s.book_id);
+    try stmt.bindText(2, "CORR-001");
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+}

@@ -362,15 +362,16 @@ pub const Entry = struct {
     }
 
     pub fn post(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
-        // Step 1: Fetch entry — verify status = 'draft'
+        // Step 1: Fetch entry — verify status = 'draft', also read metadata to detect opening entries
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
+        var is_opening_entry = false;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
         {
-            var stmt = try database.prepare("SELECT status, period_id, book_id FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, period_id, book_id, metadata FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
@@ -379,6 +380,15 @@ pub const Entry = struct {
             if (status != .draft) return error.AlreadyPosted;
             period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
+            // Opening entries are marked with {"opening_entry":true} in metadata.
+            // They DO NOT update the balance cache or mark future periods stale,
+            // preserving the existing cumulative-query architecture. The journal
+            // entry exists for audit trail completeness (Rule 1 satisfied).
+            if (stmt.columnText(3)) |meta| {
+                if (std.mem.indexOf(u8, meta, "\"opening_entry\":true") != null) {
+                    is_opening_entry = true;
+                }
+            }
         }
 
         // Step 1b: Check approval requirement
@@ -457,9 +467,14 @@ pub const Entry = struct {
                 const has_counterparty = cp_id_raw != 0;
                 const is_control = read_stmt.columnInt(6) > 0;
 
-                // Control account enforcement
-                if (is_control and !has_counterparty) return error.MissingCounterparty;
-                if (!is_control and has_counterparty) return error.InvalidCounterparty;
+                // Control account enforcement (skipped for opening entries — they
+                // bring forward control account balances without counterparty,
+                // which is correct because per-counterparty open items are
+                // tracked independently of the GL control account balance)
+                if (!is_opening_entry) {
+                    if (is_control and !has_counterparty) return error.MissingCounterparty;
+                    if (!is_control and has_counterparty) return error.InvalidCounterparty;
+                }
 
                 // Counterparty status enforcement
                 if (has_counterparty) {
@@ -487,17 +502,20 @@ pub const Entry = struct {
                 total_base_debits = std.math.add(i64, total_base_debits, base_debit) catch return error.AmountOverflow;
                 total_base_credits = std.math.add(i64, total_base_credits, base_credit) catch return error.AmountOverflow;
 
-                // Update balance cache
-                try cache_stmt.bindInt(1, acct_id);
-                try cache_stmt.bindInt(2, period_id);
-                try cache_stmt.bindInt(3, base_debit);
-                try cache_stmt.bindInt(4, base_credit);
-                try cache_stmt.bindInt(5, base_debit);
-                try cache_stmt.bindInt(6, base_credit);
-                try cache_stmt.bindInt(7, entry_book_id);
-                _ = try cache_stmt.step();
-                cache_stmt.reset();
-                cache_stmt.clearBindings();
+                // Update balance cache (skipped for opening entries — they are
+                // audit-trail markers that don't affect computed balances)
+                if (!is_opening_entry) {
+                    try cache_stmt.bindInt(1, acct_id);
+                    try cache_stmt.bindInt(2, period_id);
+                    try cache_stmt.bindInt(3, base_debit);
+                    try cache_stmt.bindInt(4, base_credit);
+                    try cache_stmt.bindInt(5, base_debit);
+                    try cache_stmt.bindInt(6, base_credit);
+                    try cache_stmt.bindInt(7, entry_book_id);
+                    _ = try cache_stmt.step();
+                    cache_stmt.reset();
+                    cache_stmt.clearBindings();
+                }
             }
 
             // Verify balance equation — auto-post rounding if book has rounding account
@@ -577,8 +595,8 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        // Step 7: Mark future periods stale
-        {
+        // Step 7: Mark future periods stale (skipped for opening entries)
+        if (!is_opening_entry) {
             var stale_stmt = try database.prepare(
                 \\UPDATE ledger_account_balances
                 \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
@@ -603,12 +621,13 @@ pub const Entry = struct {
 
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
+        var is_opening_entry = false;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
         {
-            var stmt = try database.prepare("SELECT status, period_id, book_id FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare("SELECT status, period_id, book_id, metadata FROM ledger_entries WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
@@ -617,6 +636,13 @@ pub const Entry = struct {
             if (status != .posted) return error.InvalidTransition;
             period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
+            // Opening entries skipped cache updates at post time; they must
+            // also skip cache reversal at void time.
+            if (stmt.columnText(3)) |meta| {
+                if (std.mem.indexOf(u8, meta, "\"opening_entry\":true") != null) {
+                    is_opening_entry = true;
+                }
+            }
         }
 
         // Verify period is open or soft_closed
@@ -652,8 +678,9 @@ pub const Entry = struct {
             _ = try stmt.step();
         }
 
-        // Reverse balance cache using the POSTED base amounts
-        {
+        // Reverse balance cache using the POSTED base amounts.
+        // Opening entries skipped cache updates at post time; skip reversal too.
+        if (!is_opening_entry) {
             var line_stmt = try database.prepare("SELECT account_id, base_debit_amount, base_credit_amount FROM ledger_entry_lines WHERE entry_id = ?;");
             defer line_stmt.finalize();
             try line_stmt.bindInt(1, entry_id);

@@ -4,6 +4,8 @@ const db = @import("db.zig");
 pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const i64) !u32 {
     var count: u32 = 0;
 
+    // Exclude opening entries from cache recalculation — they are audit-trail
+    // markers that don't contribute to computed balances (Sprint C.1 design).
     var compute_stmt = try database.prepare(
         \\SELECT COALESCE(SUM(el.base_debit_amount), 0),
         \\       COALESCE(SUM(el.base_credit_amount), 0),
@@ -11,7 +13,8 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
         \\FROM ledger_entry_lines el
         \\JOIN ledger_entries e ON e.id = el.entry_id
         \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
-        \\  AND el.account_id = ?;
+        \\  AND el.account_id = ?
+        \\  AND (e.metadata IS NULL OR e.metadata NOT LIKE '%"opening_entry":true%');
     );
     defer compute_stmt.finalize();
 
