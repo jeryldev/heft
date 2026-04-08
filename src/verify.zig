@@ -374,15 +374,21 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
                 continue;
             };
             // Extract source_period_id via substring scan — metadata is small.
+            // Tolerate optional whitespace and an optional minus sign between
+            // the colon and the digits so manually-constructed metadata that
+            // happens to be valid JSON still validates correctly.
             const needle = "\"source_period_id\":";
             const idx = std.mem.indexOf(u8, meta, needle) orelse {
                 result.warnings += 1;
                 continue;
             };
-            const tail = meta[idx + needle.len ..];
-            var end: usize = 0;
+            var tail = meta[idx + needle.len ..];
+            while (tail.len > 0 and (tail[0] == ' ' or tail[0] == '\t')) : (tail = tail[1..]) {}
+            var start: usize = 0;
+            if (tail.len > 0 and tail[0] == '-') start = 1;
+            var end: usize = start;
             while (end < tail.len and (tail[end] >= '0' and tail[end] <= '9')) : (end += 1) {}
-            if (end == 0) {
+            if (end == start) {
                 result.warnings += 1;
                 continue;
             }
@@ -833,6 +839,23 @@ test "verify: detects orphaned opening entry source_period_id (Check 15)" {
     try database.exec(
         \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, metadata, entry_type, status, period_id, book_id)
         \\VALUES ('OPEN-P2', '2026-02-01', '2026-02-01', '{"opening_entry":true,"source_period_id":999}', 'opening', 'posted', 2, 1);
+    );
+
+    const result = try verify(database, 1);
+    try std.testing.expect(result.errors > 0);
+}
+
+test "verify: Check 15 tolerates whitespace after source_period_id colon" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    // Manually-constructed metadata with a space after the colon. The orphan
+    // check must still detect that source_period_id 999 doesn't exist.
+    try database.exec(
+        \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, metadata, entry_type, status, period_id, book_id)
+        \\VALUES ('OPEN-P2-WS', '2026-02-01', '2026-02-01', '{"opening_entry":true,"source_period_id": 999}', 'opening', 'posted', 2, 1);
     );
 
     const result = try verify(database, 1);

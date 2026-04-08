@@ -211,12 +211,13 @@ pub const Period = struct {
     ///   void it (it's stale — derived from balances that are about to change).
     /// - If next period doesn't exist or has no opening entry, no-op.
     fn cascadeReopen(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8) !void {
+        const entry_mod = @import("entry.zig");
+
         // Void any posted closing entries in the period being reopened. Without
         // this, re-close after reopen collides on document_number UNIQUE.
         // Sprint D.9: closing entries become void on reopen so a fresh close
         // can run and produce a revision-suffixed document number.
         {
-            const entry_mod = @import("entry.zig");
             var ids: [16]i64 = undefined;
             var n: usize = 0;
             {
@@ -282,7 +283,6 @@ pub const Period = struct {
         // Void the stale opening entry. When the user re-closes this period,
         // closePeriod will generate a fresh opening entry in the next period
         // with the updated balances.
-        const entry_mod = @import("entry.zig");
         try entry_mod.Entry.voidEntry(database, opening_entry_id, "Period reopen cascade: stale opening entry", performed_by);
 
         // Sprint D.5: Mark all downstream period caches stale so subsequent
