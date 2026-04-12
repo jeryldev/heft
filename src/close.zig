@@ -344,81 +344,60 @@ fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_i
     try entry_mod.Entry.post(database, entry_id, performed_by);
 }
 
+/// Shared inner loop for twoStepClose: closes one side (revenue or expense)
+/// by zeroing each account's balance into the income summary account. The
+/// posting side is derived from the balance sign — credit balance produces a
+/// debit line and vice versa — which is the same for both revenue and expense.
+fn closeOneSide(database: db.Database, entry_id: i64, base_currency: []const u8, is_account_id: i64, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, close_revenue: bool, performed_by: []const u8) !void {
+    var line_num: i32 = 1;
+    var has_lines = false;
+    var is_debit_total: i64 = 0;
+    var is_credit_total: i64 = 0;
+    for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
+        if (close_revenue != is_rev) continue;
+        if (ds == cs) continue;
+        has_lines = true;
+        if (cs > ds) {
+            // Credit balance -> debit to close
+            const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            line_num += 1;
+            is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
+        } else {
+            // Debit balance -> credit to close
+            const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
+            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            line_num += 1;
+            is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
+        }
+    }
+    if (is_debit_total > 0) {
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+        line_num += 1;
+    }
+    if (is_credit_total > 0) {
+        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+    }
+    if (has_lines) {
+        try entry_mod.Entry.post(database, entry_id, performed_by);
+    } else {
+        try entry_mod.Entry.deleteDraft(database, entry_id, performed_by);
+    }
+}
+
 fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, is_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, close_revision: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, doc_buf: *[48]u8, performed_by: []const u8) !void {
+    // Step 1: Close revenue accounts to income summary
     {
         const doc = formatCloseDoc(doc_buf, "CLOSE-REV", period_number, period_year, close_revision) catch unreachable;
         const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":1}", .closing, performed_by);
-        var line_num: i32 = 1;
-        var has_lines = false;
-        var is_debit_total: i64 = 0;
-        var is_credit_total: i64 = 0;
-        for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
-            if (!is_rev) continue;
-            if (ds == cs) continue;
-            has_lines = true;
-            if (cs > ds) {
-                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
-                line_num += 1;
-                is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
-            } else {
-                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
-                line_num += 1;
-                is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
-            }
-        }
-        if (is_debit_total > 0) {
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-            line_num += 1;
-        }
-        if (is_credit_total > 0) {
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-            line_num += 1;
-        }
-        if (has_lines) {
-            try entry_mod.Entry.post(database, entry_id, performed_by);
-        } else {
-            try entry_mod.Entry.deleteDraft(database, entry_id, performed_by);
-        }
+        try closeOneSide(database, entry_id, base_currency, is_account_id, account_ids, debit_sums, credit_sums, is_revenue_flags, true, performed_by);
     }
 
+    // Step 2: Close expense accounts to income summary
     {
         const doc = formatCloseDoc(doc_buf, "CLOSE-EXP", period_number, period_year, close_revision) catch unreachable;
         const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":2}", .closing, performed_by);
-        var line_num: i32 = 1;
-        var has_lines = false;
-        var is_debit_total: i64 = 0;
-        var is_credit_total: i64 = 0;
-        for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
-            if (is_rev) continue;
-            if (ds == cs) continue;
-            has_lines = true;
-            if (ds > cs) {
-                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
-                line_num += 1;
-                is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
-            } else {
-                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
-                line_num += 1;
-                is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
-            }
-        }
-        if (is_debit_total > 0) {
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-            line_num += 1;
-        }
-        if (is_credit_total > 0) {
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-            line_num += 1;
-        }
-        if (has_lines) {
-            try entry_mod.Entry.post(database, entry_id, performed_by);
-        } else {
-            try entry_mod.Entry.deleteDraft(database, entry_id, performed_by);
-        }
+        try closeOneSide(database, entry_id, base_currency, is_account_id, account_ids, debit_sums, credit_sums, is_revenue_flags, false, performed_by);
     }
 
     {
@@ -648,7 +627,10 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
         try stmt.bindInt(1, book_id);
         try stmt.bindInt(2, next_period_id);
         _ = try stmt.step();
-        if (stmt.columnInt(0) > 0) return; // already exists, don't duplicate
+        // status='posted' filter is load-bearing: cascadeReopen voids
+            // the prior opening entry, so this check correctly misses after
+            // reopen and allows a fresh opening entry to be generated.
+            if (stmt.columnInt(0) > 0) return;
     }
 
     // 3. Query all balance sheet accounts with non-zero cumulative balance

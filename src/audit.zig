@@ -24,6 +24,14 @@ pub fn computeHash(prev_hash: []const u8, book_id: i64, entity_type: []const u8,
     return std.fmt.bytesToHex(digest, .lower);
 }
 
+/// Reads the most recent hash_chain value for a book from the audit log.
+/// Returns genesis_hash if no prior entries exist.
+///
+/// IMPORTANT: This function assumes single-writer serialized access (no
+/// concurrent writers). Under SQLITE_THREADSAFE=0 and single-process use,
+/// this holds. If Sprint 8 (NIF) or Sprint 9 (WASM) introduces concurrent
+/// writers, two threads could read the same prev_hash and fork the chain.
+/// Revisit before enabling multi-writer access.
 fn getPreviousHash(database: db.Database, book_id: i64) [64]u8 {
     var stmt = database.prepare("SELECT hash_chain FROM ledger_audit_log WHERE book_id = ? ORDER BY id DESC LIMIT 1;") catch {
         std.log.warn("audit: failed to prepare hash chain query, using genesis hash", .{});

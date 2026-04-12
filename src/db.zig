@@ -40,10 +40,18 @@ pub const Database = struct {
     /// a C caller or BEAM GC (Sprint 8) leaks statements. The loop is guaranteed
     /// to terminate: sqlite3_finalize removes the statement from SQLite's internal
     /// linked list, so each iteration shrinks the list by exactly one.
-    pub fn drainLeakedStatements(self: Database) void {
+    /// Returns the number of statements finalized. In debug builds, a nonzero
+    /// count indicates a genuine leak that should be fixed at the source.
+    pub fn drainLeakedStatements(self: Database) usize {
+        var count: usize = 0;
         while (c.sqlite3_next_stmt(self.handle, null)) |stmt| {
             _ = c.sqlite3_finalize(stmt);
+            count += 1;
         }
+        if (count > 0) {
+            std.log.warn("drainLeakedStatements: finalized {d} leaked statement(s)", .{count});
+        }
+        return count;
     }
 
     pub fn close(self: Database) void {
@@ -265,7 +273,7 @@ test "step returns false when no rows" {
 test "drainLeakedStatements finalizes leaked statement" {
     const db = try Database.open(":memory:");
     _ = try db.prepare("SELECT 1;");
-    db.drainLeakedStatements();
+    _ = db.drainLeakedStatements();
     db.close();
 }
 
@@ -274,13 +282,13 @@ test "drainLeakedStatements handles multiple leaked statements" {
     _ = try db.prepare("SELECT 1;");
     _ = try db.prepare("SELECT 2;");
     _ = try db.prepare("SELECT 3;");
-    db.drainLeakedStatements();
+    _ = db.drainLeakedStatements();
     db.close();
 }
 
 test "drainLeakedStatements is safe when nothing is leaked" {
     const db = try Database.open(":memory:");
-    db.drainLeakedStatements();
+    _ = db.drainLeakedStatements();
     db.close();
 }
 

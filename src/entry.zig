@@ -71,6 +71,22 @@ pub const Entry = struct {
         \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now');
     ;
 
+    /// Verifies an account exists, is active (not inactive/archived), and belongs
+    /// to the expected book. Returns NotFound if missing, AccountInactive if not
+    /// active, CrossBookViolation if the account is in a different book.
+    /// Used by addLine, editLine, and post() rounding-line auto-insertion so all
+    /// three call sites share the same validation semantics.
+    fn verifyAccountPostable(database: db.Database, account_id: i64, expected_book_id: i64) !void {
+        var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, account_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        const status = stmt.columnText(0).?;
+        if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
+        if (stmt.columnInt64(1) != expected_book_id) return error.CrossBookViolation;
+    }
+
     pub fn createDraft(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, performed_by: []const u8) !i64 {
         return createDraftAs(database, book_id, document_number, transaction_date, posting_date, description, period_id, metadata, .standard, performed_by);
     }
@@ -128,6 +144,12 @@ pub const Entry = struct {
     }
 
     pub fn addLine(database: db.Database, entry_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !i64 {
+        // Rule 16 / CLAUDE.md: validate before mutation. The schema CHECK also
+        // enforces this, but a Zig-layer guard returns a meaningful domain error
+        // instead of a generic SqliteStepFailed.
+        if (debit_amount < 0 or credit_amount < 0) return error.InvalidAmount;
+        if ((debit_amount > 0 and credit_amount > 0) or (debit_amount == 0 and credit_amount == 0)) return error.InvalidAmount;
+
         // Verify entry exists and is draft
         var entry_book_id: i64 = 0;
 
@@ -146,16 +168,7 @@ pub const Entry = struct {
         }
 
         // Verify account exists, is active, and belongs to same book
-        {
-            var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, account_id);
-            const has_row = try stmt.step();
-            if (!has_row) return error.NotFound;
-            const status = stmt.columnText(0).?;
-            if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
-            if (stmt.columnInt64(1) != entry_book_id) return error.InvalidInput;
-        }
+        try verifyAccountPostable(database, account_id, entry_book_id);
 
         var stmt = try database.prepare(line_sql);
         defer stmt.finalize();
@@ -216,6 +229,10 @@ pub const Entry = struct {
     const amt_buf_len = 24;
 
     pub fn editLine(database: db.Database, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !void {
+        // Rule 16 / CLAUDE.md: validate before mutation. Same guard as addLine.
+        if (debit_amount < 0 or credit_amount < 0) return error.InvalidAmount;
+        if ((debit_amount > 0 and credit_amount > 0) or (debit_amount == 0 and credit_amount == 0)) return error.InvalidAmount;
+
         // Fetch line's entry, verify draft, and read old values
         var entry_book_id: i64 = 0;
         var old_debit: i64 = 0;
@@ -264,16 +281,7 @@ pub const Entry = struct {
         }
 
         // Verify account exists, is active, and belongs to same book
-        {
-            var stmt = try database.prepare("SELECT status, book_id FROM ledger_accounts WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, account_id);
-            const has_row = try stmt.step();
-            if (!has_row) return error.NotFound;
-            const status = stmt.columnText(0).?;
-            if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
-            if (stmt.columnInt64(1) != entry_book_id) return error.InvalidInput;
-        }
+        try verifyAccountPostable(database, account_id, entry_book_id);
 
         {
             var stmt = try database.prepare(
@@ -558,12 +566,16 @@ pub const Entry = struct {
                 }
 
                 if (rounding_acct_id) |ra_id| {
+                    // Rounding line bypasses addLine, so validate the account
+                    // here. An archived/inactive or cross-book rounding account
+                    // would otherwise silently accept posts via the raw INSERT.
+                    try verifyAccountPostable(database, ra_id, entry_book_id);
                     // Auto-add rounding line
                     const next_line = line_count + 1;
                     var rounding_debit: i64 = 0;
                     var rounding_credit: i64 = 0;
                     if (diff > 0) {
-                        rounding_credit = diff; // credits > debits needed
+                        rounding_credit = diff; // debits exceed credits, add rounding credit
                     } else {
                         rounding_debit = std.math.negate(diff) catch return error.AmountOverflow;
                     }
@@ -703,7 +715,7 @@ pub const Entry = struct {
             defer line_stmt.finalize();
             try line_stmt.bindInt(1, entry_id);
 
-            var cache_stmt = try database.prepare("UPDATE ledger_account_balances SET debit_sum = debit_sum - ?, credit_sum = credit_sum - ?, balance = balance - (? - ?), entry_count = entry_count - 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE account_id = ? AND period_id = ?;");
+            var cache_stmt = try database.prepare("UPDATE ledger_account_balances SET debit_sum = debit_sum - ?, credit_sum = credit_sum - ?, balance = balance - (? - ?), entry_count = MAX(entry_count - 1, 0), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE account_id = ? AND period_id = ?;");
             defer cache_stmt.finalize();
 
             while (try line_stmt.step()) {
@@ -778,6 +790,21 @@ pub const Entry = struct {
         // Reversal period: use target if provided, otherwise original
         const reversal_period_id = target_period_id orelse original_period_id;
 
+        // Guard: reject if the original entry's period is permanently locked.
+        // reverse() only flips the original's status field (posted -> reversed)
+        // without changing lines, base amounts, or cache in the original period,
+        // so closed periods are allowed (the reversal's economic effect lands in
+        // a different period via reversal_period_id). But locked means absolute
+        // immutability — even a status field change is prohibited.
+        {
+            var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
+            defer stmt.finalize();
+            try stmt.bindInt(1, original_period_id);
+            _ = try stmt.step();
+            const orig_period_status = stmt.columnText(0).?;
+            if (std.mem.eql(u8, orig_period_status, "locked")) return error.PeriodLocked;
+        }
+
         // Verify reversal period is open or soft_closed and reversal_date is within range
         {
             var stmt = try database.prepare("SELECT status, start_date, end_date FROM ledger_periods WHERE id = ? AND book_id = ?;");
@@ -811,8 +838,8 @@ pub const Entry = struct {
         const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REV-{s}", .{doc_number_buf[0..max_doc_for_rev]}) catch return error.InvalidInput;
         {
             var stmt = try database.prepare(
-                \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, status, reverses_entry_id, posted_at, posted_by, period_id, book_id)
-                \\VALUES (?, ?, ?, ?, 'posted', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?, ?, ?);
+                \\INSERT INTO ledger_entries (document_number, transaction_date, posting_date, description, status, reverses_entry_id, posted_at, posted_by, period_id, book_id, entry_type)
+                \\VALUES (?, ?, ?, ?, 'posted', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?, ?, ?, 'reversal');
             );
             defer stmt.finalize();
             try stmt.bindText(1, rev_doc);
@@ -905,6 +932,11 @@ pub const Entry = struct {
             try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "reverse", "status", "posted", "reversed", performed_by, entry_book_id);
             try audit.logWithStmt(database, &audit_stmt, "entry", entry_id, "reverse", "reversed_reason", null, reason, performed_by, entry_book_id);
             try audit.logWithStmt(database, &audit_stmt, "entry", reversal_id, "create", null, null, null, performed_by, entry_book_id);
+            // The reversal entry is written directly with status='posted' (bypassing
+            // the normal post() path). verify.zig Check 5a requires every posted/
+            // reversed/void entry to have a 'post' audit record, so we log one
+            // explicitly here to preserve the invariant.
+            try audit.logWithStmt(database, &audit_stmt, "entry", reversal_id, "post", null, null, null, performed_by, entry_book_id);
         }
 
         if (owns_txn) try database.commit();
@@ -1696,6 +1728,43 @@ test "reverse creates new entry with flipped lines" {
     }
 }
 
+test "reverse writes entry_type = 'reversal' on new entry and preserves original" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-TYPE", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    _ = try Entry.addLine(database, 1, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, 1, "admin");
+
+    // Original should be entry_type = 'standard' before reverse.
+    {
+        var stmt = try database.prepare("SELECT entry_type FROM ledger_entries WHERE id = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("standard", stmt.columnText(0).?);
+    }
+
+    const reversal_id = try Entry.reverse(database, 1, "Entry type check", "2026-01-31", null, "admin");
+
+    // Original entry_type must remain 'standard' — reverse() only flips status.
+    {
+        var stmt = try database.prepare("SELECT entry_type FROM ledger_entries WHERE id = 1;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("standard", stmt.columnText(0).?);
+    }
+
+    // Reversal entry must be entry_type = 'reversal'.
+    {
+        var stmt = try database.prepare("SELECT entry_type FROM ledger_entries WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, reversal_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("reversal", stmt.columnText(0).?);
+    }
+}
+
 test "reverse rejects draft entry" {
     const database = try setupTestDb();
     defer database.close();
@@ -1830,18 +1899,50 @@ test "addLine rejects account from different book" {
 
     // Account 3 belongs to book 2, entry belongs to book 1
     const result = Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.CrossBookViolation, result);
 }
 
-test "post entry with zero-amount line rejected by schema" {
+test "addLine rejects zero debit and zero credit" {
     const database = try setupTestDb();
     defer database.close();
 
     _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
 
-    // Both debit and credit = 0 violates CHECK constraint
+    // Both debit and credit = 0 is caught by the Zig-layer XOR guard (Bug 5).
+    // The schema CHECK is defense in depth but the Zig guard fires first and
+    // returns a meaningful domain error instead of a generic SqliteStepFailed.
     const result = Entry.addLine(database, 1, 1, 0, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
-    try std.testing.expectError(error.SqliteStepFailed, result);
+    try std.testing.expectError(error.InvalidAmount, result);
+}
+
+test "addLine rejects both debit and credit positive" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    const result = Entry.addLine(database, 1, 1, 100, 200, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try std.testing.expectError(error.InvalidAmount, result);
+}
+
+test "addLine rejects negative debit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    const result = Entry.addLine(database, 1, 1, -100, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try std.testing.expectError(error.InvalidAmount, result);
+}
+
+test "addLine rejects negative credit" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    const result = Entry.addLine(database, 1, 1, 0, -100, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try std.testing.expectError(error.InvalidAmount, result);
 }
 
 test "full lifecycle: create -> post -> void -> verify cache zero" {

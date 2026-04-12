@@ -368,6 +368,10 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
+        // Hoist the period-existence check outside the loop. Preparing per-row
+        // is an N+1 that re-parses the same statement for every opening entry.
+        var check = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE id = ? AND book_id = ?;");
+        defer check.finalize();
         while (try stmt.step()) {
             const meta = stmt.columnText(1) orelse {
                 result.warnings += 1;
@@ -396,13 +400,27 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
                 result.warnings += 1;
                 continue;
             };
-            var check = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE id = ? AND book_id = ?;");
-            defer check.finalize();
             try check.bindInt(1, src_id);
             try check.bindInt(2, book_id);
             _ = try check.step();
             if (check.columnInt(0) == 0) result.errors += 1;
+            check.reset();
+            check.clearBindings();
         }
+    }
+
+    // Check 16: Negative entry_count in cache (defense-in-depth). Should be
+    // impossible under normal operation since post/void are symmetric, but guards
+    // against future concurrency changes or manual DB surgery.
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*) FROM ledger_account_balances
+            \\WHERE book_id = ? AND entry_count < 0;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) > 0) result.errors += 1;
     }
 
     return result;
@@ -567,6 +585,31 @@ test "verify: reversal checks both original and reversal entries" {
 
     const result = try verify(database, 1);
     try std.testing.expectEqual(@as(u32, 2), result.entries_checked);
+    // Regression guard for the Bug 2 false-warning: reverse() must log a 'post'
+    // audit record for the reversal entry so Check 5a does not flag it.
+    try std.testing.expectEqual(@as(u32, 0), result.warnings);
+    // NOTE: result.errors is NOT asserted here. Check 2 (cache integrity) has a
+    // pre-existing false positive for reversed entries — reverse() keeps the
+    // original's cache contributions while the 'real' recomputation filters
+    // reversed entries out (status = 'posted' excludes them). Separate fix.
+}
+
+test "verify: reversal entry has 'post' audit record (Bug 2 regression)" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-002", 1, 1_000_000_000_00, 3, 1_000_000_000_00);
+    const reversal_id = try entry_mod.Entry.reverse(database, 1, "Bug 2 regression", "2026-01-15", null, "admin");
+
+    // Explicit assertion that a 'post' audit action exists for the reversal.
+    var stmt = try database.prepare(
+        \\SELECT COUNT(*) FROM ledger_audit_log
+        \\WHERE entity_type = 'entry' AND entity_id = ? AND action = 'post';
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, reversal_id);
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
 }
 
 test "verify: corrupted reversal entry detected by check 1" {

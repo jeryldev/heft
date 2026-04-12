@@ -126,6 +126,19 @@ pub fn migrate(database: db.Database, from_version: i32) !void {
         };
     }
 
+    if (from_version < 13) {
+        // Sprint D added entry_type to ledger_entries. The DDL was updated in
+        // createAll but the v13 migration block was missing, so v12 databases
+        // upgrading to v13 silently lost the column. ALTER TABLE ADD COLUMN
+        // with CHECK is supported in SQLite 3.51.x (Heft vendors 3.51.3).
+        database.exec(
+            \\ALTER TABLE ledger_entries ADD COLUMN entry_type TEXT NOT NULL DEFAULT 'standard'
+            \\  CHECK (entry_type IN ('standard', 'opening', 'closing', 'reversal', 'adjusting'));
+        ) catch |err| {
+            std.log.debug("migrate v13: entry_type column: {s} (expected if exists)", .{@errorName(err)});
+        };
+    }
+
     const version_pragma = comptime std.fmt.comptimePrint("PRAGMA user_version = {d};", .{SCHEMA_VERSION});
     try database.exec(version_pragma);
 
@@ -2543,6 +2556,92 @@ test "migrate from v4 to v5 adds hash_chain and parent_value_id columns" {
 
     var dim_stmt = try database.prepare("SELECT parent_value_id FROM ledger_dimension_values LIMIT 0;");
     defer dim_stmt.finalize();
+}
+
+test "migrate from v12 to v13 adds entry_type column with default" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+
+    // Construct minimum v12-like state: ledger_books + ledger_entries without
+    // the entry_type column. This simulates a production database that was
+    // created under schema v12 before Sprint D.
+    try database.exec(
+        \\CREATE TABLE ledger_books (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  name TEXT NOT NULL,
+        \\  base_currency TEXT NOT NULL
+        \\);
+    );
+    try database.exec(
+        \\CREATE TABLE ledger_entries (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  document_number TEXT NOT NULL,
+        \\  transaction_date TEXT NOT NULL,
+        \\  posting_date TEXT NOT NULL,
+        \\  status TEXT NOT NULL DEFAULT 'draft',
+        \\  period_id INTEGER NOT NULL DEFAULT 1,
+        \\  book_id INTEGER NOT NULL REFERENCES ledger_books(id)
+        \\);
+    );
+    try database.exec("INSERT INTO ledger_books (name, base_currency) VALUES ('Test', 'PHP');");
+    try database.exec("INSERT INTO ledger_entries (document_number, transaction_date, posting_date, status, book_id) VALUES ('JE-V12', '2026-01-01', '2026-01-01', 'posted', 1);");
+    try database.exec("PRAGMA user_version = 12;");
+
+    // Sanity: entry_type does not exist yet.
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM pragma_table_info('ledger_entries') WHERE name = 'entry_type';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 0), stmt.columnInt(0));
+    }
+
+    try migrate(database, 12);
+
+    // user_version bumped to 13.
+    {
+        var stmt = try database.prepare("PRAGMA user_version;");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, SCHEMA_VERSION), stmt.columnInt(0));
+    }
+
+    // entry_type column now exists.
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM pragma_table_info('ledger_entries') WHERE name = 'entry_type';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
+    }
+
+    // Pre-existing v12 row got the default 'standard' value.
+    {
+        var stmt = try database.prepare("SELECT entry_type FROM ledger_entries WHERE document_number = 'JE-V12';");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("standard", stmt.columnText(0).?);
+    }
+
+    // CHECK constraint is enforced: invalid value rejected.
+    const bad_insert = database.exec("INSERT INTO ledger_entries (document_number, transaction_date, posting_date, status, book_id, entry_type) VALUES ('JE-BAD', '2026-01-02', '2026-01-02', 'posted', 1, 'not_a_type');");
+    try std.testing.expectError(error.SqliteExecFailed, bad_insert);
+
+    // Valid 'reversal' value accepted.
+    try database.exec("INSERT INTO ledger_entries (document_number, transaction_date, posting_date, status, book_id, entry_type) VALUES ('JE-REV', '2026-01-03', '2026-01-03', 'posted', 1, 'reversal');");
+}
+
+test "migrate from v12 to v13 is idempotent" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try createAll(database);
+
+    // Already at v13. Running migrate again must be a no-op and not error.
+    try migrate(database, SCHEMA_VERSION);
+    try migrate(database, SCHEMA_VERSION);
+
+    var stmt = try database.prepare("PRAGMA user_version;");
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i32, SCHEMA_VERSION), stmt.columnInt(0));
 }
 
 test "migrate is no-op when already at current version" {
