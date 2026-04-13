@@ -78,9 +78,9 @@ fn appendBookId(buf: []u8, pos: *usize, book_id: i64) !void {
     try appendJsonString(buf, pos, book_text);
 }
 
-fn appendPeriodId(buf: []u8, pos: *usize, period_id: i64) !void {
+fn appendPeriodId(buf: []u8, pos: *usize, year: i32, period_number: i32) !void {
     var period_buf: [48]u8 = undefined;
-    const period_text = std.fmt.bufPrint(&period_buf, "period-{d}", .{period_id}) catch unreachable;
+    const period_text = std.fmt.bufPrint(&period_buf, "period-{d}-{d:0>2}", .{ year, period_number }) catch unreachable;
     try appendJsonString(buf, pos, period_text);
 }
 
@@ -233,9 +233,7 @@ pub fn exportPeriodsJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
         first = false;
 
         try appendLiteral(buf, &pos, "{\"id\":");
-        var id_buf: [48]u8 = undefined;
-        const id_text = std.fmt.bufPrint(&id_buf, "period-{d}-{d}", .{ stmt.columnInt(6), stmt.columnInt(5) }) catch unreachable;
-        try appendJsonString(buf, &pos, id_text);
+        try appendPeriodId(buf, &pos, stmt.columnInt(6), stmt.columnInt(5));
         try appendLiteral(buf, &pos, ",\"book_id\":");
         try appendBookId(buf, &pos, book_id);
         try appendLiteral(buf, &pos, ",\"name\":");
@@ -294,17 +292,19 @@ pub fn exportCounterpartiesJson(database: db.Database, book_id: i64, buf: []u8) 
 pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     var header_stmt = try database.prepare(
         \\SELECT e.id, e.book_id, e.period_id, e.status, e.transaction_date, e.posting_date,
-        \\  e.document_number, e.description, b.decimal_places, e.entry_type, e.reverses_entry_id
+        \\  e.document_number, e.description, b.decimal_places, e.entry_type, e.reverses_entry_id,
+        \\  p.period_number, p.year
         \\FROM ledger_entries e
         \\JOIN ledger_books b ON b.id = e.book_id
+        \\JOIN ledger_periods p ON p.id = e.period_id
         \\WHERE e.id = ?;
     );
     defer header_stmt.finalize();
     try header_stmt.bindInt(1, entry_id);
     if (!try header_stmt.step()) return error.NotFound;
-
     const book_id = header_stmt.columnInt64(1);
-    const period_id = header_stmt.columnInt64(2);
+    const period_number = header_stmt.columnInt(11);
+    const period_year = header_stmt.columnInt(12);
     const decimal_places: u8 = @intCast(header_stmt.columnInt(8));
 
     var pos: usize = 0;
@@ -313,7 +313,7 @@ pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     try appendLiteral(buf, &pos, ",\"book_id\":");
     try appendBookId(buf, &pos, book_id);
     try appendLiteral(buf, &pos, ",\"period_id\":");
-    try appendPeriodId(buf, &pos, period_id);
+    try appendPeriodId(buf, &pos, period_year, period_number);
     try appendLiteral(buf, &pos, ",\"status\":");
     try appendJsonString(buf, &pos, header_stmt.columnText(3) orelse "");
     try appendLiteral(buf, &pos, ",\"transaction_date\":");

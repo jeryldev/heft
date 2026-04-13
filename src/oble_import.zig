@@ -6,6 +6,7 @@ const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
 const money = @import("money.zig");
+const oble_export = @import("oble_export.zig");
 
 pub const ImportContext = struct {
     allocator: std.mem.Allocator,
@@ -299,4 +300,64 @@ test "OBLE import: core example packet" {
         try std.testing.expectEqualStrings("posted", stmt.columnText(0).?);
         try std.testing.expectEqualStrings("JE-001", stmt.columnText(1).?);
     }
+}
+
+test "OBLE round-trip: export import export core packet" {
+    const allocator = std.testing.allocator;
+
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Example Entity", "PHP", 2, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital_id = try account_mod.Account.create(source_db, book_id, "3000", "Capital", .equity, false, "admin");
+    _ = try account_mod.Account.create(source_db, book_id, "4000", "Revenue", .revenue, false, "admin");
+
+    const closed_period_id = try period_mod.Period.create(source_db, book_id, "Dec 2025", 12, 2025, "2025-12-01", "2025-12-31", "regular", "admin");
+    try period_mod.Period.transition(source_db, closed_period_id, .soft_closed, "admin");
+    try period_mod.Period.transition(source_db, closed_period_id, .closed, "admin");
+
+    const open_period_id = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const entry_id = try entry_mod.Entry.createDraft(source_db, book_id, "JE-001", "2026-01-10", "2026-01-10", "Owner capital injection", open_period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, entry_id, 1, 1_000_00_000_000, 0, "PHP", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, entry_id, 2, 0, 1_000_00_000_000, "PHP", money.FX_RATE_SCALE, capital_id, null, null, "admin");
+    try entry_mod.Entry.post(source_db, entry_id, "admin");
+
+    var book_buf: [4096]u8 = undefined;
+    var accounts_buf: [8192]u8 = undefined;
+    var periods_buf: [8192]u8 = undefined;
+    var entry_buf: [8192]u8 = undefined;
+
+    const book_json = try oble_export.exportBookJson(source_db, book_id, &book_buf);
+    const accounts_json = try oble_export.exportAccountsJson(source_db, book_id, &accounts_buf);
+    const periods_json = try oble_export.exportPeriodsJson(source_db, book_id, &periods_buf);
+    const entry_json = try oble_export.exportEntryJson(source_db, entry_id, &entry_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var ctx = ImportContext.init(allocator);
+    defer ctx.deinit();
+
+    const imported_book_id = try importBookJson(target_db, &ctx, book_json, "admin");
+    try importAccountsJson(target_db, &ctx, accounts_json, "admin");
+    try importPeriodsJson(target_db, &ctx, periods_json, "admin");
+    const imported_entry_id = try importEntryJson(target_db, &ctx, entry_json, "admin");
+
+    var round_book_buf: [4096]u8 = undefined;
+    var round_accounts_buf: [8192]u8 = undefined;
+    var round_periods_buf: [8192]u8 = undefined;
+    var round_entry_buf: [8192]u8 = undefined;
+
+    const round_book_json = try oble_export.exportBookJson(target_db, imported_book_id, &round_book_buf);
+    const round_accounts_json = try oble_export.exportAccountsJson(target_db, imported_book_id, &round_accounts_buf);
+    const round_periods_json = try oble_export.exportPeriodsJson(target_db, imported_book_id, &round_periods_buf);
+    const round_entry_json = try oble_export.exportEntryJson(target_db, imported_entry_id, &round_entry_buf);
+
+    try std.testing.expectEqualStrings(book_json, round_book_json);
+    try std.testing.expectEqualStrings(accounts_json, round_accounts_json);
+    try std.testing.expectEqualStrings(periods_json, round_periods_json);
+    try std.testing.expectEqualStrings(entry_json, round_entry_json);
 }
