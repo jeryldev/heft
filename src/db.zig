@@ -35,6 +35,18 @@ pub const Database = struct {
         return self;
     }
 
+    fn drainLeakedStatementsImpl(self: Database, log_warning: bool) usize {
+        var count: usize = 0;
+        while (c.sqlite3_next_stmt(self.handle, null)) |stmt| {
+            _ = c.sqlite3_finalize(stmt);
+            count += 1;
+        }
+        if (log_warning and count > 0) {
+            std.log.warn("drainLeakedStatements: finalized {d} leaked statement(s)", .{count});
+        }
+        return count;
+    }
+
     /// Finalize any leaked prepared statements before close. Called at the C ABI
     /// boundary (internal_close) to prevent the close() assert from firing when
     /// a C caller or BEAM GC (Sprint 8) leaks statements. The loop is guaranteed
@@ -43,15 +55,13 @@ pub const Database = struct {
     /// Returns the number of statements finalized. In debug builds, a nonzero
     /// count indicates a genuine leak that should be fixed at the source.
     pub fn drainLeakedStatements(self: Database) usize {
-        var count: usize = 0;
-        while (c.sqlite3_next_stmt(self.handle, null)) |stmt| {
-            _ = c.sqlite3_finalize(stmt);
-            count += 1;
-        }
-        if (count > 0) {
-            std.log.warn("drainLeakedStatements: finalized {d} leaked statement(s)", .{count});
-        }
-        return count;
+        return self.drainLeakedStatementsImpl(true);
+    }
+
+    /// Test-only helper for leak-cleanup assertions where the cleanup is expected
+    /// and should not emit warning noise into the normal test output.
+    pub fn drainLeakedStatementsSilent(self: Database) usize {
+        return self.drainLeakedStatementsImpl(false);
     }
 
     pub fn close(self: Database) void {
@@ -273,7 +283,7 @@ test "step returns false when no rows" {
 test "drainLeakedStatements finalizes leaked statement" {
     const db = try Database.open(":memory:");
     _ = try db.prepare("SELECT 1;");
-    _ = db.drainLeakedStatements();
+    try std.testing.expectEqual(@as(usize, 1), db.drainLeakedStatementsSilent());
     db.close();
 }
 
@@ -282,13 +292,13 @@ test "drainLeakedStatements handles multiple leaked statements" {
     _ = try db.prepare("SELECT 1;");
     _ = try db.prepare("SELECT 2;");
     _ = try db.prepare("SELECT 3;");
-    _ = db.drainLeakedStatements();
+    try std.testing.expectEqual(@as(usize, 3), db.drainLeakedStatementsSilent());
     db.close();
 }
 
 test "drainLeakedStatements is safe when nothing is leaked" {
     const db = try Database.open(":memory:");
-    _ = db.drainLeakedStatements();
+    try std.testing.expectEqual(@as(usize, 0), db.drainLeakedStatementsSilent());
     db.close();
 }
 

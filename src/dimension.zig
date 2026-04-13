@@ -333,13 +333,13 @@ pub const LineDimension = struct {
 pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, start_date: []const u8, end_date: []const u8, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
     var stmt = try database.prepare(
         \\SELECT dv.code, dv.label,
-        \\  COALESCE(SUM(el.base_debit_amount), 0),
-        \\  COALESCE(SUM(el.base_credit_amount), 0)
+        \\  COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN el.base_debit_amount ELSE 0 END), 0),
+        \\  COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN el.base_credit_amount ELSE 0 END), 0)
         \\FROM ledger_dimension_values dv
         \\LEFT JOIN ledger_line_dimensions ld ON ld.dimension_value_id = dv.id
         \\LEFT JOIN ledger_entry_lines el ON el.id = ld.line_id
         \\LEFT JOIN ledger_entries e ON e.id = el.entry_id
-        \\  AND e.status = 'posted' AND e.book_id = ?
+        \\  AND e.status IN ('posted', 'reversed') AND e.book_id = ?
         \\  AND e.posting_date >= ? AND e.posting_date <= ?
         \\WHERE dv.dimension_id = ?
         \\GROUP BY dv.id
@@ -433,13 +433,13 @@ pub fn dimensionSummaryRollup(database: db.Database, book_id: i64, dimension_id:
     {
         var stmt = try database.prepare(
             \\SELECT dv.id, dv.code, dv.label, COALESCE(dv.parent_value_id, 0),
-            \\  COALESCE(SUM(el.base_debit_amount), 0),
-            \\  COALESCE(SUM(el.base_credit_amount), 0)
+            \\  COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN el.base_debit_amount ELSE 0 END), 0),
+            \\  COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN el.base_credit_amount ELSE 0 END), 0)
             \\FROM ledger_dimension_values dv
             \\LEFT JOIN ledger_line_dimensions ld ON ld.dimension_value_id = dv.id
             \\LEFT JOIN ledger_entry_lines el ON el.id = ld.line_id
             \\LEFT JOIN ledger_entries e ON e.id = el.entry_id
-            \\  AND e.status = 'posted' AND e.book_id = ?
+            \\  AND e.status IN ('posted', 'reversed') AND e.book_id = ?
             \\  AND e.posting_date >= ? AND e.posting_date <= ?
             \\WHERE dv.dimension_id = ?
             \\GROUP BY dv.id
@@ -1147,6 +1147,32 @@ test "dimensionSummary with tax_code dimension produces correct tax totals" {
     const result = try dimensionSummary(database, 1, dim_id, "2026-01-01", "2026-01-31", &buf, .json);
     try std.testing.expect(std.mem.indexOf(u8, result, "VAT12") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"total_debits\":") != null);
+}
+
+test "reverse copies line dimensions into reversal period" {
+    const database = try setupFullDb();
+    defer database.close();
+
+    try database.exec(
+        \\INSERT INTO ledger_periods (name, period_number, year, start_date, end_date, book_id)
+        \\VALUES ('Feb 2026', 2, 2026, '2026-02-01', '2026-02-28', 1);
+    );
+
+    const dim_id = try Dimension.create(database, 1, "Project", .project, "admin");
+    const val_id = try DimensionValue.create(database, dim_id, "PRJ-A", "Alpha", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, 1, "JE-REV-DIM", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line1 = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, 2, null, null, "admin");
+    try LineDimension.assign(database, line1, val_id, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    _ = try entry_mod.Entry.reverse(database, entry_id, "Move to February", "2026-02-10", 2, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const result = try dimensionSummary(database, 1, dim_id, "2026-02-01", "2026-02-28", &buf, .json);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"total_debits\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"total_credits\":100000000000") != null);
 }
 
 test "create dimension with profit_center type" {

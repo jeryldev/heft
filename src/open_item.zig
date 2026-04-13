@@ -31,6 +31,36 @@ pub fn createOpenItem(database: db.Database, entry_line_id: i64, counterparty_id
     const owns_txn = try database.beginTransactionIfNeeded();
     errdefer if (owns_txn) database.rollback();
 
+    {
+        var validate_stmt = try database.prepare(
+            \\SELECT e.status, e.book_id, el.counterparty_id, el.base_debit_amount, el.base_credit_amount,
+            \\  cp.book_id
+            \\FROM ledger_entry_lines el
+            \\JOIN ledger_entries e ON e.id = el.entry_id
+            \\JOIN ledger_subledger_accounts cp ON cp.id = ?
+            \\WHERE el.id = ?;
+        );
+        defer validate_stmt.finalize();
+        try validate_stmt.bindInt(1, counterparty_id);
+        try validate_stmt.bindInt(2, entry_line_id);
+        const has_row = try validate_stmt.step();
+        if (!has_row) return error.NotFound;
+
+        const entry_status = validate_stmt.columnText(0).?;
+        const entry_book_id = validate_stmt.columnInt64(1);
+        const line_counterparty_id = validate_stmt.columnInt64(2);
+        const base_debit_amount = validate_stmt.columnInt64(3);
+        const base_credit_amount = validate_stmt.columnInt64(4);
+        const counterparty_book_id = validate_stmt.columnInt64(5);
+
+        if (!std.mem.eql(u8, entry_status, "posted")) return error.InvalidInput;
+        if (entry_book_id != book_id or counterparty_book_id != book_id) return error.CrossBookViolation;
+        if (line_counterparty_id == 0 or line_counterparty_id != counterparty_id) return error.InvalidCounterparty;
+
+        const line_amount = @max(base_debit_amount, base_credit_amount);
+        if (original_amount > line_amount) return error.InvalidAmount;
+    }
+
     var stmt = try database.prepare(
         \\INSERT INTO ledger_open_items (entry_line_id, counterparty_id, original_amount, remaining_amount, due_date, book_id)
         \\VALUES (?, ?, ?, ?, ?, ?);
@@ -335,4 +365,36 @@ test "createOpenItem rejects duplicate entry_line_id" {
     _ = try createOpenItem(s.database, line_id, s.customer, 100_000_000_000, "2026-02-14", s.book_id, "admin");
     const result = createOpenItem(s.database, line_id, s.customer, 100_000_000_000, "2026-02-14", s.book_id, "admin");
     try std.testing.expectError(error.DuplicateNumber, result);
+}
+
+test "createOpenItem rejects draft source line" {
+    const s = try setupOpenItemDb();
+    defer s.database.close();
+
+    const eid = try entry_mod.Entry.createDraft(s.database, s.book_id, "INV-DRAFT", "2026-01-15", "2026-01-15", null, s.period_id, null, "admin");
+    const line_id = try entry_mod.Entry.addLine(s.database, eid, 1, 100_000_000_000, 0, "PHP", money.FX_RATE_SCALE, s.ar_acct, s.customer, null, "admin");
+    _ = try entry_mod.Entry.addLine(s.database, eid, 2, 0, 100_000_000_000, "PHP", money.FX_RATE_SCALE, 3, null, null, "admin");
+
+    const result = createOpenItem(s.database, line_id, s.customer, 100_000_000_000, "2026-02-14", s.book_id, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
+}
+
+test "createOpenItem rejects mismatched counterparty" {
+    const s = try setupOpenItemDb();
+    defer s.database.close();
+
+    const line_id = try postInvoice(s.database, s, "INV-001", 100_000_000_000);
+    const other_customer = try subledger_mod.SubledgerAccount.create(s.database, s.book_id, "CUST-002", "Beta Corp", "customer", 1, "admin");
+
+    const result = createOpenItem(s.database, line_id, other_customer, 100_000_000_000, "2026-02-14", s.book_id, "admin");
+    try std.testing.expectError(error.InvalidCounterparty, result);
+}
+
+test "createOpenItem rejects oversized amount" {
+    const s = try setupOpenItemDb();
+    defer s.database.close();
+
+    const line_id = try postInvoice(s.database, s, "INV-001", 100_000_000_000);
+    const result = createOpenItem(s.database, line_id, s.customer, 100_000_000_001, "2026-02-14", s.book_id, "admin");
+    try std.testing.expectError(error.InvalidAmount, result);
 }

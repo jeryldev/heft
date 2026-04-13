@@ -59,6 +59,11 @@ pub const Entry = struct {
         \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
     ;
 
+    const line_with_base_sql: [*:0]const u8 =
+        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, transaction_currency, fx_rate, account_id, entry_id, description, counterparty_id)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    ;
+
     const balance_sql: [*:0]const u8 =
         \\INSERT INTO ledger_account_balances (account_id, period_id, debit_sum, credit_sum, balance, entry_count, book_id)
         \\VALUES (?, ?, ?, ?, ? - ?, 1, ?)
@@ -70,6 +75,24 @@ pub const Entry = struct {
         \\  is_stale = 0,
         \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now');
     ;
+
+    const balance_delta_sql: [*:0]const u8 =
+        \\INSERT INTO ledger_account_balances (account_id, period_id, debit_sum, credit_sum, balance, entry_count, book_id)
+        \\VALUES (?, ?, ?, ?, ? - ?, ?, ?)
+        \\ON CONFLICT (account_id, period_id) DO UPDATE SET
+        \\  debit_sum = debit_sum + excluded.debit_sum,
+        \\  credit_sum = credit_sum + excluded.credit_sum,
+        \\  balance = balance + excluded.balance,
+        \\  entry_count = entry_count + excluded.entry_count,
+        \\  is_stale = 0,
+        \\  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now');
+    ;
+
+    const CacheDelta = struct {
+        debit_sum: i64 = 0,
+        credit_sum: i64 = 0,
+        entry_count: i64 = 0,
+    };
 
     /// Verifies an account exists, is active (not inactive/archived), and belongs
     /// to the expected book. Returns NotFound if missing, AccountInactive if not
@@ -86,6 +109,126 @@ pub const Entry = struct {
         if (std.mem.eql(u8, status, "inactive") or std.mem.eql(u8, status, "archived")) return error.AccountInactive;
         if (stmt.columnInt64(1) != expected_book_id) return error.CrossBookViolation;
     }
+
+    fn markFuturePeriodsStale(database: db.Database, book_id: i64, period_end_date: []const u8) !void {
+        var stale_stmt = try database.prepare(
+            \\UPDATE ledger_account_balances
+            \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            \\WHERE book_id = ? AND is_stale = 0
+            \\  AND period_id IN (
+            \\    SELECT id FROM ledger_periods
+            \\    WHERE book_id = ? AND start_date > ?
+            \\  );
+        );
+        defer stale_stmt.finalize();
+        try stale_stmt.bindInt(1, book_id);
+        try stale_stmt.bindInt(2, book_id);
+        try stale_stmt.bindText(3, period_end_date);
+        _ = try stale_stmt.step();
+    }
+
+    fn insertLine(database: db.Database, entry_id: i64, entry_book_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !i64 {
+        var stmt = try database.prepare(line_sql);
+        defer stmt.finalize();
+
+        try stmt.bindInt(1, @intCast(line_number));
+        try stmt.bindInt(2, debit_amount);
+        try stmt.bindInt(3, credit_amount);
+        try stmt.bindText(4, transaction_currency);
+        try stmt.bindInt(5, fx_rate);
+        try stmt.bindInt(6, account_id);
+        try stmt.bindInt(7, entry_id);
+        if (description) |d| try stmt.bindText(8, d) else try stmt.bindNull(8);
+        if (counterparty_id) |cp| try stmt.bindInt(9, cp) else try stmt.bindNull(9);
+
+        _ = try stmt.step();
+
+        const id = database.lastInsertRowId();
+        try audit.log(database, "entry_line", id, "create", null, null, null, performed_by, entry_book_id);
+        return id;
+    }
+
+    fn accumulateCacheDelta(cache_deltas: *std.AutoHashMap(i64, CacheDelta), account_id: i64, debit_amount: i64, credit_amount: i64, entry_count_delta: i64) !void {
+        const gop = try cache_deltas.getOrPut(account_id);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.debit_sum = std.math.add(i64, gop.value_ptr.debit_sum, debit_amount) catch return error.AmountOverflow;
+        gop.value_ptr.credit_sum = std.math.add(i64, gop.value_ptr.credit_sum, credit_amount) catch return error.AmountOverflow;
+        gop.value_ptr.entry_count = std.math.add(i64, gop.value_ptr.entry_count, entry_count_delta) catch return error.AmountOverflow;
+    }
+
+    fn flushCacheDeltas(database: db.Database, cache_deltas: *std.AutoHashMap(i64, CacheDelta), period_id: i64, book_id: i64) !void {
+        var cache_stmt = try database.prepare(balance_delta_sql);
+        defer cache_stmt.finalize();
+
+        var iter = cache_deltas.iterator();
+        while (iter.next()) |entry| {
+            const delta = entry.value_ptr.*;
+            try cache_stmt.bindInt(1, entry.key_ptr.*);
+            try cache_stmt.bindInt(2, period_id);
+            try cache_stmt.bindInt(3, delta.debit_sum);
+            try cache_stmt.bindInt(4, delta.credit_sum);
+            try cache_stmt.bindInt(5, delta.debit_sum);
+            try cache_stmt.bindInt(6, delta.credit_sum);
+            try cache_stmt.bindInt(7, delta.entry_count);
+            try cache_stmt.bindInt(8, book_id);
+            _ = try cache_stmt.step();
+            cache_stmt.reset();
+            cache_stmt.clearBindings();
+        }
+    }
+
+    pub const LineAppender = struct {
+        database: db.Database,
+        line_stmt: db.Statement,
+        audit_stmt: db.Statement,
+        entry_id: i64,
+        entry_book_id: i64,
+        performed_by: []const u8,
+
+        pub fn init(database: db.Database, entry_id: i64, entry_book_id: i64, performed_by: []const u8) !LineAppender {
+            return .{
+                .database = database,
+                .line_stmt = try database.prepare(line_with_base_sql),
+                .audit_stmt = try database.prepare(audit.insert_sql),
+                .entry_id = entry_id,
+                .entry_book_id = entry_book_id,
+                .performed_by = performed_by,
+            };
+        }
+
+        pub fn deinit(self: *LineAppender) void {
+            self.line_stmt.finalize();
+            self.audit_stmt.finalize();
+        }
+
+        pub fn add(self: *LineAppender, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8) !i64 {
+            if (debit_amount < 0 or credit_amount < 0) return error.InvalidAmount;
+            if ((debit_amount > 0 and credit_amount > 0) or (debit_amount == 0 and credit_amount == 0)) return error.InvalidAmount;
+
+            const base_debit = try money.computeBaseAmount(debit_amount, fx_rate);
+            const base_credit = try money.computeBaseAmount(credit_amount, fx_rate);
+
+            try self.line_stmt.bindInt(1, @intCast(line_number));
+            try self.line_stmt.bindInt(2, debit_amount);
+            try self.line_stmt.bindInt(3, credit_amount);
+            try self.line_stmt.bindInt(4, base_debit);
+            try self.line_stmt.bindInt(5, base_credit);
+            try self.line_stmt.bindText(6, transaction_currency);
+            try self.line_stmt.bindInt(7, fx_rate);
+            try self.line_stmt.bindInt(8, account_id);
+            try self.line_stmt.bindInt(9, self.entry_id);
+            if (description) |d| try self.line_stmt.bindText(10, d) else try self.line_stmt.bindNull(10);
+            if (counterparty_id) |cp| try self.line_stmt.bindInt(11, cp) else try self.line_stmt.bindNull(11);
+
+            _ = try self.line_stmt.step();
+            self.line_stmt.reset();
+            self.line_stmt.clearBindings();
+
+            const id = self.database.lastInsertRowId();
+            try audit.logWithStmt(self.database, &self.audit_stmt, "entry_line", id, "create", null, null, null, self.performed_by, self.entry_book_id);
+            return id;
+        }
+    };
 
     pub fn createDraft(database: db.Database, book_id: i64, document_number: []const u8, transaction_date: []const u8, posting_date: []const u8, description: ?[]const u8, period_id: i64, metadata: ?[]const u8, performed_by: []const u8) !i64 {
         return createDraftAs(database, book_id, document_number, transaction_date, posting_date, description, period_id, metadata, .standard, performed_by);
@@ -169,24 +312,23 @@ pub const Entry = struct {
 
         // Verify account exists, is active, and belongs to same book
         try verifyAccountPostable(database, account_id, entry_book_id);
+        const id = try insertLine(database, entry_id, entry_book_id, line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, counterparty_id, description, performed_by);
 
-        var stmt = try database.prepare(line_sql);
-        defer stmt.finalize();
+        if (owns_txn) try database.commit();
+        return id;
+    }
 
-        try stmt.bindInt(1, @intCast(line_number));
-        try stmt.bindInt(2, debit_amount);
-        try stmt.bindInt(3, credit_amount);
-        try stmt.bindText(4, transaction_currency);
-        try stmt.bindInt(5, fx_rate);
-        try stmt.bindInt(6, account_id);
-        try stmt.bindInt(7, entry_id);
-        if (description) |d| try stmt.bindText(8, d) else try stmt.bindNull(8);
-        if (counterparty_id) |cp| try stmt.bindInt(9, cp) else try stmt.bindNull(9);
+    /// Internal fast path for engine-generated entries such as close/opening/revaluation.
+    /// Callers must only use this when the draft entry, account, and book ownership
+    /// have already been validated by surrounding engine logic.
+    pub fn addLineFast(database: db.Database, entry_id: i64, entry_book_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !i64 {
+        if (debit_amount < 0 or credit_amount < 0) return error.InvalidAmount;
+        if ((debit_amount > 0 and credit_amount > 0) or (debit_amount == 0 and credit_amount == 0)) return error.InvalidAmount;
 
-        _ = try stmt.step();
+        const owns_txn = try database.beginTransactionIfNeeded();
+        errdefer if (owns_txn) database.rollback();
 
-        const id = database.lastInsertRowId();
-        try audit.log(database, "entry_line", id, "create", null, null, null, performed_by, entry_book_id);
+        const id = try insertLine(database, entry_id, entry_book_id, line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, counterparty_id, description, performed_by);
 
         if (owns_txn) try database.commit();
         return id;
@@ -393,16 +535,26 @@ pub const Entry = struct {
     }
 
     pub fn post(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
-        // Step 1: Fetch entry — verify status = 'draft', also read metadata to detect opening entries
+        // Step 1: Fetch entry, book, and period metadata in one round-trip.
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
+        var rounding_account_id: i64 = 0;
         var is_opening_entry = false;
+        var period_end_date_buf: [11]u8 = undefined;
+        var period_end_date_len: usize = 0;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
         {
-            var stmt = try database.prepare("SELECT status, period_id, book_id, entry_type FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare(
+                \\SELECT e.status, e.period_id, e.book_id, e.entry_type, e.approval_status,
+                \\  b.require_approval, b.rounding_account_id, p.status, p.end_date
+                \\FROM ledger_entries e
+                \\JOIN ledger_books b ON b.id = e.book_id
+                \\JOIN ledger_periods p ON p.id = e.period_id
+                \\WHERE e.id = ?;
+            );
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
@@ -411,51 +563,25 @@ pub const Entry = struct {
             if (status != .draft) return error.AlreadyPosted;
             period_id = stmt.columnInt64(1);
             entry_book_id = stmt.columnInt64(2);
-            // Opening entries skip cache update + future-stale propagation,
-            // preserving the existing cumulative-query architecture. The journal
-            // entry still exists for audit trail completeness (Rule 1 satisfied).
+            rounding_account_id = stmt.columnInt64(6);
             if (stmt.columnText(3)) |et| {
                 if (std.mem.eql(u8, et, "opening")) is_opening_entry = true;
             }
-        }
 
-        // Step 1b: Check approval requirement
-        {
-            var appr_stmt = try database.prepare("SELECT require_approval FROM ledger_books WHERE id = ?;");
-            defer appr_stmt.finalize();
-            try appr_stmt.bindInt(1, entry_book_id);
-            _ = try appr_stmt.step();
-            if (appr_stmt.columnInt(0) == 1) {
-                var es_stmt = try database.prepare("SELECT approval_status FROM ledger_entries WHERE id = ?;");
-                defer es_stmt.finalize();
-                try es_stmt.bindInt(1, entry_id);
-                _ = try es_stmt.step();
-                const approval = es_stmt.columnText(0).?;
+            if (stmt.columnInt(5) == 1) {
+                const approval = stmt.columnText(4).?;
                 if (!std.mem.eql(u8, approval, "approved")) return error.ApprovalRequired;
             }
-        }
 
-        // Step 2: Fetch period — verify status = 'open' or 'soft_closed'
-        {
-            var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, period_id);
-            _ = try stmt.step();
-            const period_status = stmt.columnText(0).?;
+            const period_status = stmt.columnText(7).?;
             if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
             if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
+            if (stmt.columnText(8)) |end_date| {
+                period_end_date_len = @min(end_date.len, period_end_date_buf.len);
+                @memcpy(period_end_date_buf[0..period_end_date_len], end_date[0..period_end_date_len]);
+            }
         }
-
-        // Step 3: Count lines — verify >= 2
-        var line_count: i32 = 0;
-        {
-            var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_entry_lines WHERE entry_id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, entry_id);
-            _ = try stmt.step();
-            line_count = stmt.columnInt(0);
-            if (line_count < 2) return error.TooFewLines;
-        }
+        const period_end_date = period_end_date_buf[0..period_end_date_len];
 
         // Steps 3b + 4 + 5 combined into a single pass over entry_lines.
         // Previously this was 3 separate SELECT queries + 1 SUM query on the same table.
@@ -464,10 +590,11 @@ pub const Entry = struct {
         // iteration. Reduces DB round-trips from 6 to 3 (1 read + 1 update reuse + 1 cache reuse).
         {
             var read_stmt = try database.prepare(
-                \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.fx_rate,
-                \\  el.counterparty_id,
+                \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.base_debit_amount, el.base_credit_amount, el.fx_rate,
+                \\  el.counterparty_id, cp.status,
                 \\  (SELECT COUNT(*) FROM ledger_subledger_groups sg WHERE sg.gl_account_id = el.account_id)
                 \\FROM ledger_entry_lines el
+                \\LEFT JOIN ledger_subledger_accounts cp ON cp.id = el.counterparty_id
                 \\WHERE el.entry_id = ?;
             );
             defer read_stmt.finalize();
@@ -476,24 +603,26 @@ pub const Entry = struct {
             var update_stmt = try database.prepare("UPDATE ledger_entry_lines SET base_debit_amount = ?, base_credit_amount = ? WHERE id = ?;");
             defer update_stmt.finalize();
 
-            var cache_stmt = try database.prepare(balance_sql);
-            defer cache_stmt.finalize();
-
-            var cp_status_stmt = try database.prepare("SELECT status FROM ledger_subledger_accounts WHERE id = ?;");
-            defer cp_status_stmt.finalize();
+            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.page_allocator);
+            defer cache_deltas.deinit();
 
             var total_base_debits: i64 = 0;
             var total_base_credits: i64 = 0;
+            var line_count: i32 = 0;
 
             while (try read_stmt.step()) {
+                line_count += 1;
                 const line_id = read_stmt.columnInt64(0);
                 const acct_id = read_stmt.columnInt64(1);
                 const debit = read_stmt.columnInt64(2);
                 const credit = read_stmt.columnInt64(3);
-                const fx_rate = read_stmt.columnInt64(4);
-                const cp_id_raw = read_stmt.columnInt64(5);
+                const stored_base_debit = read_stmt.columnInt64(4);
+                const stored_base_credit = read_stmt.columnInt64(5);
+                const fx_rate = read_stmt.columnInt64(6);
+                const cp_id_raw = read_stmt.columnInt64(7);
+                const cp_status = read_stmt.columnText(8);
                 const has_counterparty = cp_id_raw != 0;
-                const is_control = read_stmt.columnInt(6) > 0;
+                const is_control = read_stmt.columnInt(9) > 0;
 
                 // Control account enforcement (skipped for opening entries — they
                 // bring forward control account balances without counterparty,
@@ -506,45 +635,29 @@ pub const Entry = struct {
 
                 // Counterparty status enforcement
                 if (has_counterparty) {
-                    const cp_id = cp_id_raw;
-                    cp_status_stmt.reset();
-                    cp_status_stmt.clearBindings();
-                    try cp_status_stmt.bindInt(1, cp_id);
-                    _ = try cp_status_stmt.step();
-                    const cp_status = cp_status_stmt.columnText(0).?;
-                    if (!std.mem.eql(u8, cp_status, "active")) return error.AccountInactive;
+                    if (cp_status == null or !std.mem.eql(u8, cp_status.?, "active")) return error.AccountInactive;
                 }
 
                 // Compute base amounts
                 const base_debit = try money.computeBaseAmount(debit, fx_rate);
                 const base_credit = try money.computeBaseAmount(credit, fx_rate);
 
-                // Update line with computed base amounts
-                try update_stmt.bindInt(1, base_debit);
-                try update_stmt.bindInt(2, base_credit);
-                try update_stmt.bindInt(3, line_id);
-                _ = try update_stmt.step();
-                update_stmt.reset();
-                update_stmt.clearBindings();
+                if (stored_base_debit != base_debit or stored_base_credit != base_credit) {
+                    try update_stmt.bindInt(1, base_debit);
+                    try update_stmt.bindInt(2, base_credit);
+                    try update_stmt.bindInt(3, line_id);
+                    _ = try update_stmt.step();
+                    update_stmt.reset();
+                    update_stmt.clearBindings();
+                }
 
                 total_base_debits = std.math.add(i64, total_base_debits, base_debit) catch return error.AmountOverflow;
                 total_base_credits = std.math.add(i64, total_base_credits, base_credit) catch return error.AmountOverflow;
 
-                // Update balance cache (skipped for opening entries — they are
-                // audit-trail markers that don't affect computed balances)
-                if (!is_opening_entry) {
-                    try cache_stmt.bindInt(1, acct_id);
-                    try cache_stmt.bindInt(2, period_id);
-                    try cache_stmt.bindInt(3, base_debit);
-                    try cache_stmt.bindInt(4, base_credit);
-                    try cache_stmt.bindInt(5, base_debit);
-                    try cache_stmt.bindInt(6, base_credit);
-                    try cache_stmt.bindInt(7, entry_book_id);
-                    _ = try cache_stmt.step();
-                    cache_stmt.reset();
-                    cache_stmt.clearBindings();
-                }
+                if (!is_opening_entry) try accumulateCacheDelta(&cache_deltas, acct_id, base_debit, base_credit, 1);
             }
+
+            if (line_count < 2) return error.TooFewLines;
 
             // Verify balance equation — auto-post rounding if book has rounding account
             if (total_base_debits != total_base_credits) {
@@ -555,15 +668,7 @@ pub const Entry = struct {
                 if (abs_diff > max_rounding) return error.UnbalancedEntry;
 
                 // Check if book has a rounding account
-                var rounding_acct_id: ?i64 = null;
-                {
-                    var ra_stmt = try database.prepare("SELECT rounding_account_id FROM ledger_books WHERE id = ?;");
-                    defer ra_stmt.finalize();
-                    try ra_stmt.bindInt(1, entry_book_id);
-                    _ = try ra_stmt.step();
-                    const ra = ra_stmt.columnInt64(0);
-                    if (ra > 0) rounding_acct_id = ra;
-                }
+                const rounding_acct_id: ?i64 = if (rounding_account_id > 0) rounding_account_id else null;
 
                 if (rounding_acct_id) |ra_id| {
                     // Rounding line bypasses addLine, so validate the account
@@ -601,21 +706,13 @@ pub const Entry = struct {
                     const rounding_line_id = database.lastInsertRowId();
                     try audit.log(database, "entry_line", rounding_line_id, "create", null, null, "FX rounding auto-post", performed_by, entry_book_id);
 
-                    // Update cache for rounding line
-                    try cache_stmt.bindInt(1, ra_id);
-                    try cache_stmt.bindInt(2, period_id);
-                    try cache_stmt.bindInt(3, rounding_debit);
-                    try cache_stmt.bindInt(4, rounding_credit);
-                    try cache_stmt.bindInt(5, rounding_debit);
-                    try cache_stmt.bindInt(6, rounding_credit);
-                    try cache_stmt.bindInt(7, entry_book_id);
-                    _ = try cache_stmt.step();
-                    cache_stmt.reset();
-                    cache_stmt.clearBindings();
+                    try accumulateCacheDelta(&cache_deltas, ra_id, rounding_debit, rounding_credit, 1);
                 } else {
                     return error.UnbalancedEntry;
                 }
             }
+
+            if (!is_opening_entry) try flushCacheDeltas(database, &cache_deltas, period_id, entry_book_id);
         }
 
         // Step 6: Update entry status to 'posted'
@@ -629,17 +726,7 @@ pub const Entry = struct {
 
         // Step 7: Mark future periods stale (skipped for opening entries)
         if (!is_opening_entry) {
-            var stale_stmt = try database.prepare(
-                \\UPDATE ledger_account_balances
-                \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE book_id = ? AND is_stale = 0
-                \\  AND period_id IN (SELECT id FROM ledger_periods WHERE book_id = ? AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?));
-            );
-            defer stale_stmt.finalize();
-            try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, entry_book_id);
-            try stale_stmt.bindInt(3, period_id);
-            _ = try stale_stmt.step();
+            try markFuturePeriodsStale(database, entry_book_id, period_end_date);
         }
 
         // Step 8: Audit log
@@ -654,12 +741,19 @@ pub const Entry = struct {
         var period_id: i64 = 0;
         var entry_book_id: i64 = 0;
         var is_opening_entry = false;
+        var period_end_date_buf: [11]u8 = undefined;
+        var period_end_date_len: usize = 0;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
 
         {
-            var stmt = try database.prepare("SELECT status, period_id, book_id, entry_type FROM ledger_entries WHERE id = ?;");
+            var stmt = try database.prepare(
+                \\SELECT e.status, e.period_id, e.book_id, e.entry_type, p.end_date
+                \\FROM ledger_entries e
+                \\JOIN ledger_periods p ON p.id = e.period_id
+                \\WHERE e.id = ?;
+            );
             defer stmt.finalize();
             try stmt.bindInt(1, entry_id);
             const has_row = try stmt.step();
@@ -673,7 +767,12 @@ pub const Entry = struct {
             if (stmt.columnText(3)) |et| {
                 if (std.mem.eql(u8, et, "opening")) is_opening_entry = true;
             }
+            if (stmt.columnText(4)) |end_date| {
+                period_end_date_len = @min(end_date.len, period_end_date_buf.len);
+                @memcpy(period_end_date_buf[0..period_end_date_len], end_date[0..period_end_date_len]);
+            }
         }
+        const period_end_date = period_end_date_buf[0..period_end_date_len];
 
         // Verify period is open or soft_closed
         {
@@ -714,40 +813,22 @@ pub const Entry = struct {
             var line_stmt = try database.prepare("SELECT account_id, base_debit_amount, base_credit_amount FROM ledger_entry_lines WHERE entry_id = ?;");
             defer line_stmt.finalize();
             try line_stmt.bindInt(1, entry_id);
-
-            var cache_stmt = try database.prepare("UPDATE ledger_account_balances SET debit_sum = debit_sum - ?, credit_sum = credit_sum - ?, balance = balance - (? - ?), entry_count = MAX(entry_count - 1, 0), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE account_id = ? AND period_id = ?;");
-            defer cache_stmt.finalize();
+            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.page_allocator);
+            defer cache_deltas.deinit();
 
             while (try line_stmt.step()) {
                 const acct_id = line_stmt.columnInt64(0);
                 const base_debit = line_stmt.columnInt64(1);
                 const base_credit = line_stmt.columnInt64(2);
-
-                try cache_stmt.bindInt(1, base_debit);
-                try cache_stmt.bindInt(2, base_credit);
-                try cache_stmt.bindInt(3, base_debit);
-                try cache_stmt.bindInt(4, base_credit);
-                try cache_stmt.bindInt(5, acct_id);
-                try cache_stmt.bindInt(6, period_id);
-                _ = try cache_stmt.step();
-                cache_stmt.reset();
-                cache_stmt.clearBindings();
+                try accumulateCacheDelta(&cache_deltas, acct_id, -base_debit, -base_credit, -1);
             }
+
+            try flushCacheDeltas(database, &cache_deltas, period_id, entry_book_id);
         }
 
         // Mark future periods stale
         {
-            var stale_stmt = try database.prepare(
-                \\UPDATE ledger_account_balances
-                \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE book_id = ? AND is_stale = 0
-                \\  AND period_id IN (SELECT id FROM ledger_periods WHERE book_id = ? AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?));
-            );
-            defer stale_stmt.finalize();
-            try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, entry_book_id);
-            try stale_stmt.bindInt(3, period_id);
-            _ = try stale_stmt.step();
+            try markFuturePeriodsStale(database, entry_book_id, period_end_date);
         }
 
         {
@@ -767,6 +848,8 @@ pub const Entry = struct {
         var entry_book_id: i64 = 0;
         var doc_number_buf: [128]u8 = undefined;
         var doc_number_len: usize = 0;
+        var reversal_period_end_date_buf: [11]u8 = undefined;
+        var reversal_period_end_date_len: usize = 0;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
@@ -805,6 +888,19 @@ pub const Entry = struct {
             if (std.mem.eql(u8, orig_period_status, "locked")) return error.PeriodLocked;
         }
 
+        // Reject reversal if entry has non-closed open items (prevents orphaned AR/AP)
+        {
+            var stmt = try database.prepare(
+                \\SELECT COUNT(*) FROM ledger_open_items oi
+                \\JOIN ledger_entry_lines el ON el.id = oi.entry_line_id
+                \\WHERE el.entry_id = ? AND oi.status != 'closed';
+            );
+            defer stmt.finalize();
+            try stmt.bindInt(1, entry_id);
+            _ = try stmt.step();
+            if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        }
+
         // Verify reversal period is open or soft_closed and reversal_date is within range
         {
             var stmt = try database.prepare("SELECT status, start_date, end_date FROM ledger_periods WHERE id = ? AND book_id = ?;");
@@ -818,10 +914,13 @@ pub const Entry = struct {
             if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
             const start = stmt.columnText(1).?;
             const end = stmt.columnText(2).?;
+            reversal_period_end_date_len = @min(end.len, reversal_period_end_date_buf.len);
+            @memcpy(reversal_period_end_date_buf[0..reversal_period_end_date_len], end[0..reversal_period_end_date_len]);
             if (std.mem.order(u8, reversal_date, start) == .lt or std.mem.order(u8, reversal_date, end) == .gt) {
                 return error.InvalidInput;
             }
         }
+        const reversal_period_end_date = reversal_period_end_date_buf[0..reversal_period_end_date_len];
 
         // Mark original as reversed
         {
@@ -856,7 +955,7 @@ pub const Entry = struct {
 
         // Copy lines with flipped debits/credits
         {
-            var read_stmt = try database.prepare("SELECT line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, fx_rate, transaction_currency, account_id, description, counterparty_id FROM ledger_entry_lines WHERE entry_id = ?;");
+            var read_stmt = try database.prepare("SELECT id, line_number, debit_amount, credit_amount, base_debit_amount, base_credit_amount, fx_rate, transaction_currency, account_id, description, counterparty_id FROM ledger_entry_lines WHERE entry_id = ?;");
             defer read_stmt.finalize();
             try read_stmt.bindInt(1, entry_id);
 
@@ -866,20 +965,27 @@ pub const Entry = struct {
             );
             defer write_stmt.finalize();
 
-            var cache_stmt = try database.prepare(balance_sql);
-            defer cache_stmt.finalize();
+            var dim_copy_stmt = try database.prepare(
+                \\INSERT INTO ledger_line_dimensions (line_id, dimension_value_id)
+                \\SELECT ?, dimension_value_id FROM ledger_line_dimensions WHERE line_id = ?;
+            );
+            defer dim_copy_stmt.finalize();
+
+            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.page_allocator);
+            defer cache_deltas.deinit();
 
             while (try read_stmt.step()) {
-                const line_num = read_stmt.columnInt64(0);
-                const orig_debit = read_stmt.columnInt64(1);
-                const orig_credit = read_stmt.columnInt64(2);
-                const orig_base_debit = read_stmt.columnInt64(3);
-                const orig_base_credit = read_stmt.columnInt64(4);
-                const fx_rate = read_stmt.columnInt64(5);
-                const currency = read_stmt.columnText(6).?;
-                const acct_id = read_stmt.columnInt64(7);
-                const line_desc = read_stmt.columnText(8);
-                const cp_id = read_stmt.columnInt64(9);
+                const orig_line_id = read_stmt.columnInt64(0);
+                const line_num = read_stmt.columnInt64(1);
+                const orig_debit = read_stmt.columnInt64(2);
+                const orig_credit = read_stmt.columnInt64(3);
+                const orig_base_debit = read_stmt.columnInt64(4);
+                const orig_base_credit = read_stmt.columnInt64(5);
+                const fx_rate = read_stmt.columnInt64(6);
+                const currency = read_stmt.columnText(7).?;
+                const acct_id = read_stmt.columnInt64(8);
+                const line_desc = read_stmt.columnText(9);
+                const cp_id = read_stmt.columnInt64(10);
 
                 // Flip: debit becomes credit, credit becomes debit
                 try write_stmt.bindInt(1, line_num);
@@ -894,36 +1000,25 @@ pub const Entry = struct {
                 if (line_desc) |d| try write_stmt.bindText(10, d) else try write_stmt.bindNull(10);
                 if (cp_id != 0) try write_stmt.bindInt(11, cp_id) else try write_stmt.bindNull(11);
                 _ = try write_stmt.step();
+                const reversal_line_id = database.lastInsertRowId();
                 write_stmt.reset();
                 write_stmt.clearBindings();
 
-                // Update balance cache with flipped amounts in reversal period
-                try cache_stmt.bindInt(1, acct_id);
-                try cache_stmt.bindInt(2, reversal_period_id);
-                try cache_stmt.bindInt(3, orig_base_credit); // flipped debit
-                try cache_stmt.bindInt(4, orig_base_debit); // flipped credit
-                try cache_stmt.bindInt(5, orig_base_credit);
-                try cache_stmt.bindInt(6, orig_base_debit);
-                try cache_stmt.bindInt(7, entry_book_id);
-                _ = try cache_stmt.step();
-                cache_stmt.reset();
-                cache_stmt.clearBindings();
+                try dim_copy_stmt.bindInt(1, reversal_line_id);
+                try dim_copy_stmt.bindInt(2, orig_line_id);
+                _ = try dim_copy_stmt.step();
+                dim_copy_stmt.reset();
+                dim_copy_stmt.clearBindings();
+
+                try accumulateCacheDelta(&cache_deltas, acct_id, orig_base_credit, orig_base_debit, 1);
             }
+
+            try flushCacheDeltas(database, &cache_deltas, reversal_period_id, entry_book_id);
         }
 
         // Mark future periods stale
         {
-            var stale_stmt = try database.prepare(
-                \\UPDATE ledger_account_balances
-                \\SET is_stale = 1, stale_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-                \\WHERE book_id = ? AND is_stale = 0
-                \\  AND period_id IN (SELECT id FROM ledger_periods WHERE book_id = ? AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?));
-            );
-            defer stale_stmt.finalize();
-            try stale_stmt.bindInt(1, entry_book_id);
-            try stale_stmt.bindInt(2, entry_book_id);
-            try stale_stmt.bindInt(3, reversal_period_id);
-            _ = try stale_stmt.step();
+            try markFuturePeriodsStale(database, entry_book_id, reversal_period_end_date);
         }
 
         {
@@ -3554,4 +3649,26 @@ test "void succeeds when entry has no open items" {
     _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
     try Entry.post(database, eid, "admin");
     try Entry.voidEntry(database, eid, "No open items", "admin");
+}
+
+test "reverse rejects entry with open open items" {
+    const subledger_mod = @import("subledger.zig");
+    const open_item_mod = @import("open_item.zig");
+
+    const database = try setupTestDb();
+    defer database.close();
+
+    const ar = try account_mod.Account.create(database, 1, "1100", "AR", .asset, false, "admin");
+    const group_id = try subledger_mod.SubledgerGroup.create(database, 1, "Customers", "customer", 1, ar, null, null, "admin");
+    const customer = try subledger_mod.SubledgerAccount.create(database, 1, "C001", "Acme", "customer", group_id, "admin");
+
+    const eid = try Entry.createDraft(database, 1, "INV-REV-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, eid, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, ar, customer, null, "admin");
+    _ = try Entry.addLine(database, eid, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try Entry.post(database, eid, "admin");
+
+    _ = try open_item_mod.createOpenItem(database, line_id, customer, 1_000_000_000_00, "2026-02-14", 1, "admin");
+
+    const result = Entry.reverse(database, eid, "Wrong invoice", "2026-01-31", null, "admin");
+    try std.testing.expectError(error.InvalidInput, result);
 }

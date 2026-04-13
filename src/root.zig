@@ -20,6 +20,7 @@ pub const budget = @import("budget.zig");
 pub const batch = @import("batch.zig");
 pub const describe = @import("describe.zig");
 pub const open_item = @import("open_item.zig");
+pub const version = @import("version.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
 comptime {
@@ -45,6 +46,7 @@ comptime {
     _ = batch;
     _ = describe;
     _ = open_item;
+    _ = version;
     _ = LedgerError;
     _ = @import("lifecycle_test.zig");
     _ = @import("characterization_test.zig");

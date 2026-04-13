@@ -577,9 +577,10 @@ const tables = [_][*:0]const u8{
 // ── Indexes (13) ────────────────────────────────────────────────
 
 const indexes = [_][*:0]const u8{
-    // Primary query path: find posted entries by book and date
+    // Primary query path: find posted entries by book and date, preserving a
+    // stable entry order for ledger scans.
     \\CREATE INDEX IF NOT EXISTS idx_entries_book_status_date
-    \\  ON ledger_entries (book_id, status, posting_date);
+    \\  ON ledger_entries (book_id, status, posting_date, id);
     ,
     // Balance computation: aggregate lines by account
     \\CREATE INDEX IF NOT EXISTS idx_lines_account
@@ -593,6 +594,10 @@ const indexes = [_][*:0]const u8{
     \\CREATE INDEX IF NOT EXISTS idx_lines_counterparty
     \\  ON ledger_entry_lines (counterparty_id)
     \\  WHERE counterparty_id IS NOT NULL;
+    ,
+    // Subledger reporting: counterparties by group and display order
+    \\CREATE INDEX IF NOT EXISTS idx_subledger_accounts_group_number
+    \\  ON ledger_subledger_accounts (group_id, number);
     ,
     // Classification tree traversal
     \\CREATE INDEX IF NOT EXISTS idx_class_nodes_tree
@@ -715,7 +720,7 @@ test "createAll creates 18 tables" {
     try std.testing.expectEqual(@as(i32, 18), stmt.columnInt(0));
 }
 
-test "createAll creates 15 indexes" {
+test "createAll creates 16 indexes" {
     const database = try db.Database.open(":memory:");
     defer database.close();
     try createAll(database);
@@ -725,7 +730,7 @@ test "createAll creates 15 indexes" {
     );
     defer stmt.finalize();
     _ = try stmt.step();
-    try std.testing.expectEqual(@as(i32, 15), stmt.columnInt(0));
+    try std.testing.expectEqual(@as(i32, 16), stmt.columnInt(0));
 }
 
 test "createAll creates transaction history view" {

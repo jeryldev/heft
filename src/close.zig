@@ -5,18 +5,40 @@ const entry_mod = @import("entry.zig");
 const period_mod = @import("period.zig");
 const money = @import("money.zig");
 
+pub const ClosePeriodProfile = struct {
+    preflight_ns: u64 = 0,
+    recalculate_stale_ns: u64 = 0,
+    load_accounts_ns: u64 = 0,
+    close_entries_ns: u64 = 0,
+    opening_entry_ns: u64 = 0,
+    transitions_ns: u64 = 0,
+};
+
 pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8) !void {
+    return closePeriodInternal(database, book_id, period_id, performed_by, null);
+}
+
+pub fn closePeriodProfiled(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8, profile: *ClosePeriodProfile) !void {
+    profile.* = .{};
+    return closePeriodInternal(database, book_id, period_id, performed_by, profile);
+}
+
+fn closePeriodInternal(database: db.Database, book_id: i64, period_id: i64, performed_by: []const u8, profile: ?*ClosePeriodProfile) !void {
     const owns_txn = try database.beginTransactionIfNeeded();
     errdefer if (owns_txn) database.rollback();
+    var phase_timer: ?std.time.Timer = if (profile != null) try std.time.Timer.start() else null;
 
     var re_account_id: i64 = 0;
     var is_account_id: i64 = 0;
+    var suspense_account_id: i64 = 0;
+    var dividends_drawings_account_id: i64 = 0;
     var book_currency_buf: [4]u8 = undefined;
     var book_currency_len: usize = 0;
     var entity_type: book_mod.EntityType = .corporation;
     {
         var stmt = try database.prepare(
-            \\SELECT status, retained_earnings_account_id, income_summary_account_id, base_currency, entity_type
+            \\SELECT status, retained_earnings_account_id, income_summary_account_id,
+            \\  suspense_account_id, dividends_drawings_account_id, base_currency, entity_type
             \\FROM ledger_books WHERE id = ?;
         );
         defer stmt.finalize();
@@ -26,11 +48,13 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         re_account_id = stmt.columnInt64(1);
         is_account_id = stmt.columnInt64(2);
-        if (stmt.columnText(3)) |cur| {
+        suspense_account_id = stmt.columnInt64(3);
+        dividends_drawings_account_id = stmt.columnInt64(4);
+        if (stmt.columnText(5)) |cur| {
             book_currency_len = @min(cur.len, book_currency_buf.len);
             @memcpy(book_currency_buf[0..book_currency_len], cur[0..book_currency_len]);
         }
-        entity_type = book_mod.EntityType.fromString(stmt.columnText(4).?) orelse return error.InvalidInput;
+        entity_type = book_mod.EntityType.fromString(stmt.columnText(6).?) orelse return error.InvalidInput;
     }
 
     // Partnership and LLC use the allocation table. All other entity types
@@ -81,7 +105,17 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         if (stmt.columnInt(0) > 0) return error.InvalidInput;
     }
 
+    if (phase_timer) |*timer| {
+        profile.?.preflight_ns += timer.read();
+        timer.* = try std.time.Timer.start();
+    }
+
     _ = try cache.recalculateStale(database, book_id, &.{period_id});
+
+    if (phase_timer) |*timer| {
+        profile.?.recalculate_stale_ns += timer.read();
+        timer.* = try std.time.Timer.start();
+    }
 
     {
         var stmt = try database.prepare(
@@ -99,29 +133,26 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
     // it carries any non-zero cumulative balance. Unresolved suspense items
     // are a control failure — they must be reclassified before period-end.
     {
-        var susp_id: i64 = 0;
-        {
-            var stmt = try database.prepare("SELECT COALESCE(suspense_account_id, 0) FROM ledger_books WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindInt(1, book_id);
-            _ = try stmt.step();
-            susp_id = stmt.columnInt64(0);
-        }
-        if (susp_id > 0) {
+        if (suspense_account_id > 0) {
             var stmt = try database.prepare(
                 \\SELECT COALESCE(SUM(debit_sum) - SUM(credit_sum), 0)
                 \\FROM ledger_account_balances ab
                 \\JOIN ledger_periods p ON p.id = ab.period_id
                 \\WHERE ab.book_id = ? AND ab.account_id = ?
-                \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?);
+                \\  AND p.end_date <= ?;
             );
             defer stmt.finalize();
             try stmt.bindInt(1, book_id);
-            try stmt.bindInt(2, susp_id);
-            try stmt.bindInt(3, period_id);
+            try stmt.bindInt(2, suspense_account_id);
+            try stmt.bindText(3, end_date);
             _ = try stmt.step();
             if (stmt.columnInt64(0) != 0) return error.SuspenseNotClear;
         }
+    }
+
+    if (phase_timer) |*timer| {
+        profile.?.preflight_ns += timer.read();
+        timer.* = try std.time.Timer.start();
     }
 
     const MaxAccounts = 2000;
@@ -153,24 +184,40 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         }
     }
 
+    if (phase_timer) |*timer| {
+        profile.?.load_accounts_ns += timer.read();
+        timer.* = try std.time.Timer.start();
+    }
+
     if (acct_count == 0) {
-        const is_year_end_zero = try isYearEndPeriod(database, book_id, period_id, period_year);
+        const is_year_end_zero = try isYearEndPeriod(database, book_id, period_id, period_year, end_date);
         if (is_year_end_zero) {
-            try closeDividendsDrawings(database, book_id, period_id, re_account_id, base_currency, end_date, period_number, period_year, 0, performed_by);
+            try closeDividendsDrawings(database, book_id, period_id, dividends_drawings_account_id, re_account_id, base_currency, end_date, period_number, period_year, 0, performed_by);
+        }
+        if (phase_timer) |*timer| {
+            profile.?.close_entries_ns += timer.read();
+            timer.* = try std.time.Timer.start();
         }
         // Even with no rev/exp activity, balance sheet balances must be carried
         // forward to the next period via an opening entry (Rule 1: everything
         // is a journal entry). Skipping this would orphan future periods from
         // their prior balances.
-        generateOpeningEntry(database, book_id, period_id, base_currency, performed_by) catch |err| switch (err) {
+        generateOpeningEntry(database, book_id, period_id, end_date, base_currency, performed_by) catch |err| switch (err) {
             error.NoNextPeriod => {},
             else => return err,
         };
+        if (phase_timer) |*timer| {
+            profile.?.opening_entry_ns += timer.read();
+            timer.* = try std.time.Timer.start();
+        }
         if (std.mem.eql(u8, period_status, "open")) {
             try period_mod.Period.transition(database, period_id, .soft_closed, performed_by);
         }
         if (is_year_end_zero) {
             try period_mod.Period.transition(database, period_id, .closed, performed_by);
+        }
+        if (phase_timer) |*timer| {
+            profile.?.transitions_ns += timer.read();
         }
         if (owns_txn) try database.commit();
         return;
@@ -196,11 +243,16 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
     // (mid-year monthly/quarterly) or HARD close (last period of fiscal year).
     // Soft closes transition to soft_closed (late entries allowed via reopen).
     // Hard closes additionally sweep dividends/drawings and transition to closed.
-    const is_year_end = try isYearEndPeriod(database, book_id, period_id, period_year);
+    const is_year_end = try isYearEndPeriod(database, book_id, period_id, period_year, end_date);
 
     if (is_year_end) {
         // Sprint D.3: Year-end dividends/drawings sweep.
-        try closeDividendsDrawings(database, book_id, period_id, re_account_id, base_currency, end_date, period_number, period_year, close_revision, performed_by);
+        try closeDividendsDrawings(database, book_id, period_id, dividends_drawings_account_id, re_account_id, base_currency, end_date, period_number, period_year, close_revision, performed_by);
+    }
+
+    if (phase_timer) |*timer| {
+        profile.?.close_entries_ns += timer.read();
+        timer.* = try std.time.Timer.start();
     }
 
     // Sprint C.1: Generate opening balance entry in the next period, if it exists.
@@ -208,12 +260,17 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
     // balances now appear as a real posted entry in the journal. The entry is
     // marked entry_type='opening' so post() skips cache updates and the existing
     // cumulative-query report architecture continues to work.
-    generateOpeningEntry(database, book_id, period_id, base_currency, performed_by) catch |err| switch (err) {
+    generateOpeningEntry(database, book_id, period_id, end_date, base_currency, performed_by) catch |err| switch (err) {
         // If no next period exists, that's fine — application can create periods
         // later and call generateOpeningEntry manually. Any other error is a real bug.
         error.NoNextPeriod => {},
         else => return err,
     };
+
+    if (phase_timer) |*timer| {
+        profile.?.opening_entry_ns += timer.read();
+        timer.* = try std.time.Timer.start();
+    }
 
     if (std.mem.eql(u8, period_status, "open")) {
         try period_mod.Period.transition(database, period_id, .soft_closed, performed_by);
@@ -222,33 +279,29 @@ pub fn closePeriod(database: db.Database, book_id: i64, period_id: i64, performe
         try period_mod.Period.transition(database, period_id, .closed, performed_by);
     }
 
+    if (phase_timer) |*timer| {
+        profile.?.transitions_ns += timer.read();
+    }
+
     if (owns_txn) try database.commit();
 }
 
-fn isYearEndPeriod(database: db.Database, book_id: i64, period_id: i64, period_year: i32) !bool {
+fn isYearEndPeriod(database: db.Database, book_id: i64, period_id: i64, period_year: i32, period_end_date: []const u8) !bool {
     var stmt = try database.prepare(
         \\SELECT COUNT(*) FROM ledger_periods
         \\WHERE book_id = ? AND year = ? AND id != ?
-        \\  AND start_date > (SELECT start_date FROM ledger_periods WHERE id = ?);
+        \\  AND start_date > ?;
     );
     defer stmt.finalize();
     try stmt.bindInt(1, book_id);
     try stmt.bindInt(2, period_year);
     try stmt.bindInt(3, period_id);
-    try stmt.bindInt(4, period_id);
+    try stmt.bindText(4, period_end_date);
     _ = try stmt.step();
     return stmt.columnInt(0) == 0;
 }
 
-fn closeDividendsDrawings(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, close_revision: i32, performed_by: []const u8) !void {
-    var div_account_id: i64 = 0;
-    {
-        var stmt = try database.prepare("SELECT COALESCE(dividends_drawings_account_id, 0) FROM ledger_books WHERE id = ?;");
-        defer stmt.finalize();
-        try stmt.bindInt(1, book_id);
-        _ = try stmt.step();
-        div_account_id = stmt.columnInt64(0);
-    }
+fn closeDividendsDrawings(database: db.Database, book_id: i64, period_id: i64, div_account_id: i64, re_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, close_revision: i32, performed_by: []const u8) !void {
     if (div_account_id == 0) return;
     if (re_account_id <= 0) return;
 
@@ -260,12 +313,12 @@ fn closeDividendsDrawings(database: db.Database, book_id: i64, period_id: i64, r
             \\FROM ledger_account_balances ab
             \\JOIN ledger_periods p ON p.id = ab.period_id
             \\WHERE ab.book_id = ? AND ab.account_id = ?
-            \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?);
+            \\  AND p.end_date <= ?;
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
         try stmt.bindInt(2, div_account_id);
-        try stmt.bindInt(3, period_id);
+        try stmt.bindText(3, end_date);
         _ = try stmt.step();
         net = stmt.columnInt64(0);
     }
@@ -274,15 +327,17 @@ fn closeDividendsDrawings(database: db.Database, book_id: i64, period_id: i64, r
     var doc_buf: [48]u8 = undefined;
     const doc = formatCloseDoc(&doc_buf, "CLOSE-DIV", period_number, period_year, close_revision) catch unreachable;
     const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"dividends_sweep\"}", .closing, performed_by);
+    var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+    defer appender.deinit();
 
     if (net > 0) {
         // Dividends has a debit balance — credit it to zero, debit RE.
-        _ = try entry_mod.Entry.addLine(database, entry_id, 1, 0, net, base_currency, money.FX_RATE_SCALE, div_account_id, null, null, performed_by);
-        _ = try entry_mod.Entry.addLine(database, entry_id, 2, net, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+        _ = try appender.add(1, 0, net, base_currency, money.FX_RATE_SCALE, div_account_id, null, null);
+        _ = try appender.add(2, net, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null);
     } else {
         const abs_net = std.math.negate(net) catch return error.AmountOverflow;
-        _ = try entry_mod.Entry.addLine(database, entry_id, 1, abs_net, 0, base_currency, money.FX_RATE_SCALE, div_account_id, null, null, performed_by);
-        _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, abs_net, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+        _ = try appender.add(1, abs_net, 0, base_currency, money.FX_RATE_SCALE, div_account_id, null, null);
+        _ = try appender.add(2, 0, abs_net, base_currency, money.FX_RATE_SCALE, re_account_id, null, null);
     }
 
     try entry_mod.Entry.post(database, entry_id, performed_by);
@@ -313,6 +368,8 @@ fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_i
     const doc_number = formatCloseDoc(doc_buf, "CLOSE", period_number, period_year, close_revision) catch unreachable;
 
     const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc_number, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"direct\"}", .closing, performed_by);
+    var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+    defer appender.deinit();
 
     var line_num: i32 = 1;
     var re_debit_total: i64 = 0;
@@ -321,62 +378,74 @@ fn directClose(database: db.Database, book_id: i64, period_id: i64, re_account_i
     for (account_ids, debit_sums, credit_sums) |acct_id, ds, cs| {
         if (ds > cs) {
             const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
             line_num += 1;
             re_debit_total = std.math.add(i64, re_debit_total, amount) catch return error.AmountOverflow;
         } else if (cs > ds) {
             const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
             line_num += 1;
             re_credit_total = std.math.add(i64, re_credit_total, amount) catch return error.AmountOverflow;
         }
     }
 
     if (re_debit_total > 0) {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, re_debit_total, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+        _ = try appender.add(line_num, re_debit_total, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null);
         line_num += 1;
     }
     if (re_credit_total > 0) {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, re_credit_total, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+        _ = try appender.add(line_num, 0, re_credit_total, base_currency, money.FX_RATE_SCALE, re_account_id, null, null);
         line_num += 1;
     }
 
     try entry_mod.Entry.post(database, entry_id, performed_by);
 }
 
-/// Shared inner loop for twoStepClose: closes one side (revenue or expense)
-/// by zeroing each account's balance into the income summary account. The
-/// posting side is derived from the balance sign — credit balance produces a
-/// debit line and vice versa — which is the same for both revenue and expense.
-fn closeOneSide(database: db.Database, entry_id: i64, base_currency: []const u8, is_account_id: i64, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, close_revenue: bool, performed_by: []const u8) !void {
+/// Closes all revenue and expense accounts into the income summary account in a
+/// single netted entry. Account-level close lines are preserved, while the
+/// income-summary side is reduced to at most one debit and one credit line.
+fn closeToIncomeSummary(database: db.Database, book_id: i64, entry_id: i64, base_currency: []const u8, is_account_id: i64, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, performed_by: []const u8) !void {
+    var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+    defer appender.deinit();
     var line_num: i32 = 1;
     var has_lines = false;
     var is_debit_total: i64 = 0;
     var is_credit_total: i64 = 0;
     for (account_ids, debit_sums, credit_sums, is_revenue_flags) |acct_id, ds, cs, is_rev| {
-        if (close_revenue != is_rev) continue;
         if (ds == cs) continue;
         has_lines = true;
-        if (cs > ds) {
-            // Credit balance -> debit to close
-            const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
-            line_num += 1;
-            is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
+        if (is_rev) {
+            if (cs > ds) {
+                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
+                _ = try appender.add(line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
+                line_num += 1;
+                is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
+            } else {
+                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
+                _ = try appender.add(line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
+                line_num += 1;
+                is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
+            }
         } else {
-            // Debit balance -> credit to close
-            const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
-            line_num += 1;
-            is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
+            if (ds > cs) {
+                const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
+                _ = try appender.add(line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
+                line_num += 1;
+                is_debit_total = std.math.add(i64, is_debit_total, amount) catch return error.AmountOverflow;
+            } else {
+                const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
+                _ = try appender.add(line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
+                line_num += 1;
+                is_credit_total = std.math.add(i64, is_credit_total, amount) catch return error.AmountOverflow;
+            }
         }
     }
     if (is_debit_total > 0) {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+        _ = try appender.add(line_num, is_debit_total, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null);
         line_num += 1;
     }
     if (is_credit_total > 0) {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+        _ = try appender.add(line_num, 0, is_credit_total, base_currency, money.FX_RATE_SCALE, is_account_id, null, null);
     }
     if (has_lines) {
         try entry_mod.Entry.post(database, entry_id, performed_by);
@@ -386,23 +455,19 @@ fn closeOneSide(database: db.Database, entry_id: i64, base_currency: []const u8,
 }
 
 fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_id: i64, is_account_id: i64, base_currency: []const u8, end_date: []const u8, period_number: i32, period_year: i32, close_revision: i32, account_ids: []const i64, debit_sums: []const i64, credit_sums: []const i64, is_revenue_flags: []const bool, doc_buf: *[48]u8, performed_by: []const u8) !void {
-    // Step 1: Close revenue accounts to income summary
+    // Step 1: Close all revenue and expense accounts to income summary.
     {
-        const doc = formatCloseDoc(doc_buf, "CLOSE-REV", period_number, period_year, close_revision) catch unreachable;
+        const doc = formatCloseDoc(doc_buf, "CLOSE-ISUM", period_number, period_year, close_revision) catch unreachable;
         const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":1}", .closing, performed_by);
-        try closeOneSide(database, entry_id, base_currency, is_account_id, account_ids, debit_sums, credit_sums, is_revenue_flags, true, performed_by);
+        try closeToIncomeSummary(database, book_id, entry_id, base_currency, is_account_id, account_ids, debit_sums, credit_sums, is_revenue_flags, performed_by);
     }
 
-    // Step 2: Close expense accounts to income summary
-    {
-        const doc = formatCloseDoc(doc_buf, "CLOSE-EXP", period_number, period_year, close_revision) catch unreachable;
-        const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":2}", .closing, performed_by);
-        try closeOneSide(database, entry_id, base_currency, is_account_id, account_ids, debit_sums, credit_sums, is_revenue_flags, false, performed_by);
-    }
-
+    // Step 2: Close income summary to retained earnings.
     {
         const doc = formatCloseDoc(doc_buf, "CLOSE-IS", period_number, period_year, close_revision) catch unreachable;
-        const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":3}", .closing, performed_by);
+        const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"income_summary\",\"step\":2}", .closing, performed_by);
+        var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+        defer appender.deinit();
 
         var is_debit: i64 = 0;
         var is_credit: i64 = 0;
@@ -423,13 +488,13 @@ fn twoStepClose(database: db.Database, book_id: i64, period_id: i64, re_account_
 
         if (is_credit > is_debit) {
             const amount = std.math.sub(i64, is_credit, is_debit) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, 1, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
-            _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, amount, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
+            _ = try appender.add(1, amount, 0, base_currency, money.FX_RATE_SCALE, is_account_id, null, null);
+            _ = try appender.add(2, 0, amount, base_currency, money.FX_RATE_SCALE, re_account_id, null, null);
             try entry_mod.Entry.post(database, entry_id, performed_by);
         } else if (is_debit > is_credit) {
             const amount = std.math.sub(i64, is_debit, is_credit) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, 1, amount, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null, performed_by);
-            _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null, performed_by);
+            _ = try appender.add(1, amount, 0, base_currency, money.FX_RATE_SCALE, re_account_id, null, null);
+            _ = try appender.add(2, 0, amount, base_currency, money.FX_RATE_SCALE, is_account_id, null, null);
             try entry_mod.Entry.post(database, entry_id, performed_by);
         } else {
             try entry_mod.Entry.deleteDraft(database, entry_id, performed_by);
@@ -465,6 +530,8 @@ fn allocatedClose(
 ) !void {
     const doc_number = formatCloseDoc(doc_buf, "CLOSE", period_number, period_year, close_revision) catch unreachable;
     const entry_id = try entry_mod.Entry.createDraftAs(database, book_id, doc_number, end_date, end_date, null, period_id, "{\"closing_entry\":true,\"method\":\"allocated\"}", .closing, performed_by);
+    var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+    defer appender.deinit();
 
     var line_num: i32 = 1;
     var net_income: i64 = 0; // credit side minus debit side, signed
@@ -476,13 +543,13 @@ fn allocatedClose(
             // Revenue: credit balance. Close by debiting revenue.
             if (cs > ds) {
                 const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                _ = try appender.add(line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
                 line_num += 1;
                 net_income = std.math.add(i64, net_income, amount) catch return error.AmountOverflow;
             } else {
                 // Unusual: revenue with debit balance (e.g., sales returns net > sales). Credit it.
                 const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                _ = try appender.add(line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
                 line_num += 1;
                 net_income = std.math.sub(i64, net_income, amount) catch return error.AmountOverflow;
             }
@@ -490,13 +557,13 @@ fn allocatedClose(
             // Expense: debit balance. Close by crediting expense.
             if (ds > cs) {
                 const amount = std.math.sub(i64, ds, cs) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                _ = try appender.add(line_num, 0, amount, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
                 line_num += 1;
                 net_income = std.math.sub(i64, net_income, amount) catch return error.AmountOverflow;
             } else {
                 // Unusual: expense with credit balance (e.g., purchase returns > purchases). Debit it.
                 const amount = std.math.sub(i64, cs, ds) catch return error.AmountOverflow;
-                _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+                _ = try appender.add(line_num, amount, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
                 line_num += 1;
                 net_income = std.math.add(i64, net_income, amount) catch return error.AmountOverflow;
             }
@@ -567,10 +634,10 @@ fn allocatedClose(
         // Positive net income → credit partner capital (equity increases)
         // Negative net income (loss) → debit partner capital (equity decreases)
         if (share > 0) {
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, share, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, 0, share, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
         } else {
             const abs_share = std.math.negate(share) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, abs_share, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, abs_share, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
         }
         line_num += 1;
     }
@@ -590,7 +657,7 @@ fn allocatedClose(
 /// Returns error.NoNextPeriod if there is no period after the closed one.
 /// Callers should treat this as a non-error (the application will create
 /// the next period later and can call this function manually).
-pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_id: i64, base_currency: []const u8, performed_by: []const u8) !void {
+pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_id: i64, closed_period_end_date: []const u8, base_currency: []const u8, performed_by: []const u8) !void {
     // 1. Find the next period by start_date > closed_period.end_date
     var next_period_id: i64 = 0;
     var next_start_date_buf: [11]u8 = undefined;
@@ -599,13 +666,13 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
         var stmt = try database.prepare(
             \\SELECT id, start_date FROM ledger_periods
             \\WHERE book_id = ?
-            \\  AND start_date > (SELECT end_date FROM ledger_periods WHERE id = ?)
+            \\  AND start_date > ?
             \\  AND status IN ('open', 'soft_closed')
             \\ORDER BY start_date ASC LIMIT 1;
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        try stmt.bindInt(2, closed_period_id);
+        try stmt.bindText(2, closed_period_end_date);
         const has_row = try stmt.step();
         if (!has_row) return error.NoNextPeriod;
         next_period_id = stmt.columnInt64(0);
@@ -628,9 +695,9 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
         try stmt.bindInt(2, next_period_id);
         _ = try stmt.step();
         // status='posted' filter is load-bearing: cascadeReopen voids
-            // the prior opening entry, so this check correctly misses after
-            // reopen and allows a fresh opening entry to be generated.
-            if (stmt.columnInt(0) > 0) return;
+        // the prior opening entry, so this check correctly misses after
+        // reopen and allows a fresh opening entry to be generated.
+        if (stmt.columnInt(0) > 0) return;
     }
 
     // 3. Query all balance sheet accounts with non-zero cumulative balance
@@ -647,7 +714,7 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
             \\JOIN ledger_accounts a ON a.id = ab.account_id
             \\JOIN ledger_periods p ON p.id = ab.period_id
             \\WHERE ab.book_id = ?
-            \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?)
+            \\  AND p.end_date <= ?
             \\  AND a.account_type IN ('asset', 'liability', 'equity')
             \\GROUP BY a.id
             \\HAVING SUM(ab.debit_sum) != 0 OR SUM(ab.credit_sum) != 0
@@ -655,7 +722,7 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
         );
         defer stmt.finalize();
         try stmt.bindInt(1, book_id);
-        try stmt.bindInt(2, closed_period_id);
+        try stmt.bindText(2, closed_period_end_date);
         while (try stmt.step()) {
             if (bs_count >= MaxAccounts) return error.TooManyAccounts;
             bs_account_ids[bs_count] = stmt.columnInt64(0);
@@ -702,6 +769,8 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
         .opening,
         performed_by,
     );
+    var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+    defer appender.deinit();
 
     // 5. Add one line per balance sheet account, debit or credit based on sign
     var line_num: i32 = 1;
@@ -709,11 +778,11 @@ pub fn generateOpeningEntry(database: db.Database, book_id: i64, closed_period_i
         if (net == 0) continue;
         if (net > 0) {
             // Debit balance → debit the account in the opening entry
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, net, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, net, 0, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
         } else {
             // Credit balance → credit the account in the opening entry
             const abs_net = std.math.negate(net) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, abs_net, base_currency, money.FX_RATE_SCALE, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, 0, abs_net, base_currency, money.FX_RATE_SCALE, acct_id, null, null);
         }
         line_num += 1;
     }
@@ -984,7 +1053,7 @@ test "closePeriod: two-step close via income summary" {
         defer stmt.finalize();
         try stmt.bindInt(1, s.book_id);
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
     }
 
     const is_bal = try queryBalance(s.database, is_id, s.period_id);
@@ -1358,7 +1427,7 @@ test "closePeriod: two-step close netted line count" {
 
     try closePeriod(s.database, s.book_id, s.period_id, "admin");
 
-    // Step 1 (CLOSE-REV): 2 revenue accounts + 1 IS line = 3 lines
+    // Step 1 (CLOSE-ISUM): 2 revenue accounts + 1 expense account + 2 IS lines = 5 lines
     {
         var stmt = try s.database.prepare(
             \\SELECT COUNT(*) FROM ledger_entry_lines el
@@ -1368,28 +1437,15 @@ test "closePeriod: two-step close netted line count" {
         defer stmt.finalize();
         try stmt.bindInt(1, s.book_id);
         _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 3), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 5), stmt.columnInt(0));
     }
 
-    // Step 2 (CLOSE-EXP): 1 expense account + 1 IS line = 2 lines
+    // Step 2 (CLOSE-IS): always 2 lines (IS -> RE)
     {
         var stmt = try s.database.prepare(
             \\SELECT COUNT(*) FROM ledger_entry_lines el
             \\JOIN ledger_entries e ON e.id = el.entry_id
             \\WHERE e.book_id = ? AND e.metadata LIKE '%"step":2%';
-        );
-        defer stmt.finalize();
-        try stmt.bindInt(1, s.book_id);
-        _ = try stmt.step();
-        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
-    }
-
-    // Step 3 (CLOSE-IS): always 2 lines (IS -> RE)
-    {
-        var stmt = try s.database.prepare(
-            \\SELECT COUNT(*) FROM ledger_entry_lines el
-            \\JOIN ledger_entries e ON e.id = el.entry_id
-            \\WHERE e.book_id = ? AND e.metadata LIKE '%"step":3%';
         );
         defer stmt.finalize();
         try stmt.bindInt(1, s.book_id);

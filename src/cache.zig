@@ -12,7 +12,7 @@ pub fn recalculateStale(database: db.Database, book_id: i64, period_ids: []const
         \\       COUNT(*)
         \\FROM ledger_entry_lines el
         \\JOIN ledger_entries e ON e.id = el.entry_id
-        \\WHERE e.book_id = ? AND e.period_id = ? AND e.status = 'posted'
+        \\WHERE e.book_id = ? AND e.period_id = ? AND e.status IN ('posted', 'reversed')
         \\  AND el.account_id = ?
         \\  AND e.entry_type != 'opening';
     );
@@ -294,6 +294,29 @@ test "recalculateStale with multiple accounts in same period" {
     try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 1));
     try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, 2));
     try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 1, acct3));
+}
+
+test "recalculateStale preserves reversed originals" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, 1, 2, 1_000_000_000_00);
+    _ = try entry_mod.Entry.reverse(database, 1, "Correction", "2026-01-20", null, "admin");
+
+    try corruptCache(database, 1, 1);
+    const fixed = try recalculateStale(database, 1, &.{1});
+    try std.testing.expectEqual(@as(u32, 2), fixed);
+
+    var stmt = try database.prepare(
+        \\SELECT debit_sum, credit_sum, balance
+        \\FROM ledger_account_balances
+        \\WHERE book_id = 1 AND period_id = 1 AND account_id = 1;
+    );
+    defer stmt.finalize();
+    _ = try stmt.step();
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), stmt.columnInt64(0));
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_00), stmt.columnInt64(1));
+    try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(2));
 }
 
 test "recalculateAllStale returns correct total count" {

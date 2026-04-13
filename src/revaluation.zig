@@ -77,7 +77,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
         \\JOIN ledger_entries e ON e.id = el.entry_id
         \\JOIN ledger_periods p ON p.id = e.period_id
         \\JOIN ledger_accounts a ON a.id = el.account_id
-        \\WHERE e.book_id = ? AND e.status = 'posted'
+        \\WHERE e.book_id = ? AND e.status IN ('posted', 'reversed')
         \\  AND p.end_date <= (SELECT end_date FROM ledger_periods WHERE id = ?)
         \\  AND el.transaction_currency = ?
         \\  AND a.is_monetary = 1
@@ -134,28 +134,30 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
         .adjusting,
         performed_by,
     );
+    var appender = try entry_mod.Entry.LineAppender.init(database, entry_id, book_id, performed_by);
+    defer appender.deinit();
 
     var line_num: i32 = 1;
     var fx_debit_total: i64 = 0;
     var fx_credit_total: i64 = 0;
     for (adj_account_ids[0..adj_count], adj_amounts[0..adj_count]) |acct_id, amount| {
         if (amount > 0) {
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, amount, 0, base_currency, fx_one, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, amount, 0, base_currency, fx_one, acct_id, null, null);
             line_num += 1;
             fx_credit_total = std.math.add(i64, fx_credit_total, amount) catch return error.AmountOverflow;
         } else {
             const abs_amount = std.math.negate(amount) catch return error.AmountOverflow;
-            _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, abs_amount, base_currency, fx_one, acct_id, null, null, performed_by);
+            _ = try appender.add(line_num, 0, abs_amount, base_currency, fx_one, acct_id, null, null);
             line_num += 1;
             fx_debit_total = std.math.add(i64, fx_debit_total, abs_amount) catch return error.AmountOverflow;
         }
     }
     if (fx_debit_total > 0) {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, fx_debit_total, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+        _ = try appender.add(line_num, fx_debit_total, 0, base_currency, fx_one, fx_gl_account_id, null, null);
         line_num += 1;
     }
     if (fx_credit_total > 0) {
-        _ = try entry_mod.Entry.addLine(database, entry_id, line_num, 0, fx_credit_total, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+        _ = try appender.add(line_num, 0, fx_credit_total, base_currency, fx_one, fx_gl_account_id, null, null);
         line_num += 1;
     }
 
@@ -194,28 +196,30 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
                 .adjusting,
                 performed_by,
             );
+            var rev_appender = try entry_mod.Entry.LineAppender.init(database, rev_id, book_id, performed_by);
+            defer rev_appender.deinit();
 
             var rev_line: i32 = 1;
             var rev_fx_debit: i64 = 0;
             var rev_fx_credit: i64 = 0;
             for (adj_account_ids[0..adj_count], adj_amounts[0..adj_count]) |acct_id, amount| {
                 if (amount > 0) {
-                    _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, 0, amount, base_currency, fx_one, acct_id, null, null, performed_by);
+                    _ = try rev_appender.add(rev_line, 0, amount, base_currency, fx_one, acct_id, null, null);
                     rev_line += 1;
                     rev_fx_debit = std.math.add(i64, rev_fx_debit, amount) catch return error.AmountOverflow;
                 } else {
                     const abs_amount = std.math.negate(amount) catch return error.AmountOverflow;
-                    _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, abs_amount, 0, base_currency, fx_one, acct_id, null, null, performed_by);
+                    _ = try rev_appender.add(rev_line, abs_amount, 0, base_currency, fx_one, acct_id, null, null);
                     rev_line += 1;
                     rev_fx_credit = std.math.add(i64, rev_fx_credit, abs_amount) catch return error.AmountOverflow;
                 }
             }
             if (rev_fx_debit > 0) {
-                _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, rev_fx_debit, 0, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+                _ = try rev_appender.add(rev_line, rev_fx_debit, 0, base_currency, fx_one, fx_gl_account_id, null, null);
                 rev_line += 1;
             }
             if (rev_fx_credit > 0) {
-                _ = try entry_mod.Entry.addLine(database, rev_id, rev_line, 0, rev_fx_credit, base_currency, fx_one, fx_gl_account_id, null, null, performed_by);
+                _ = try rev_appender.add(rev_line, 0, rev_fx_credit, base_currency, fx_one, fx_gl_account_id, null, null);
                 rev_line += 1;
             }
 
@@ -582,6 +586,20 @@ test "revalueForexBalances: no adjustment when rate unchanged" {
     const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 565_000_000_000 }};
     const result = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
     try std.testing.expectEqual(@as(i64, 0), result.entry_id);
+}
+
+test "revalueForexBalances: reversed FX position is not revalued" {
+    const s = try setupFxTestDb();
+    defer s.database.close();
+
+    try postFxEntry(s.database, s.book_id, "FX-REV-001", s.cash_usd, 10_000_000_000, "USD", 565_000_000_000, s.cash_php, 565_000_000_000, "PHP", 10_000_000_000, s.period_id);
+    _ = try entry_mod.Entry.reverse(s.database, 1, "Cancelled", "2026-01-20", null, "admin");
+
+    const rates = [_]CurrencyRate{.{ .currency = "USD", .new_rate = 570_000_000_000 }};
+    const result = try revalueForexBalances(s.database, s.book_id, s.period_id, &rates, "admin");
+
+    try std.testing.expectEqual(@as(i64, 0), result.entry_id);
+    try std.testing.expectEqual(@as(i64, 0), result.reversal_id);
 }
 
 test "revalueForexBalances: base currency rate skipped" {

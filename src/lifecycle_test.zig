@@ -978,7 +978,10 @@ test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
         try std.testing.expect(ctb.rows.len > 3);
         var has_unclassified = false;
         for (ctb.rows) |row| {
-            if (row.depth == -1) { has_unclassified = true; break; }
+            if (row.depth == -1) {
+                has_unclassified = true;
+                break;
+            }
         }
         try std.testing.expect(has_unclassified);
     }

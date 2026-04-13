@@ -69,7 +69,7 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
             \\      SUM(el.base_credit_amount) AS real_credit
             \\    FROM ledger_entry_lines el
             \\    JOIN ledger_entries e ON e.id = el.entry_id
-            \\    WHERE e.book_id = ? AND e.status = 'posted'
+            \\    WHERE e.book_id = ? AND e.status IN ('posted', 'reversed')
             \\      AND e.entry_type != 'opening'
             \\    GROUP BY el.account_id, e.period_id
             \\) computed ON computed.account_id = ab.account_id AND computed.period_id = ab.period_id
@@ -585,13 +585,8 @@ test "verify: reversal checks both original and reversal entries" {
 
     const result = try verify(database, 1);
     try std.testing.expectEqual(@as(u32, 2), result.entries_checked);
-    // Regression guard for the Bug 2 false-warning: reverse() must log a 'post'
-    // audit record for the reversal entry so Check 5a does not flag it.
+    try std.testing.expect(result.passed());
     try std.testing.expectEqual(@as(u32, 0), result.warnings);
-    // NOTE: result.errors is NOT asserted here. Check 2 (cache integrity) has a
-    // pre-existing false positive for reversed entries — reverse() keeps the
-    // original's cache contributions while the 'real' recomputation filters
-    // reversed entries out (status = 'posted' excludes them). Separate fix.
 }
 
 test "verify: reversal entry has 'post' audit record (Bug 2 regression)" {

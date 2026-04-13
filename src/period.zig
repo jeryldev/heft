@@ -218,8 +218,8 @@ pub const Period = struct {
         // Sprint D.9: closing entries become void on reopen so a fresh close
         // can run and produce a revision-suffixed document number.
         {
-            // Max 3 posted closing entries per period (twoStepClose: CLOSE-REV,
-            // CLOSE-EXP, CLOSE-IS) or 1 (allocatedClose). The status='posted'
+            // Max 2 posted closing entries per period for the income-summary
+            // path (CLOSE-ISUM, CLOSE-IS) or 1 for direct/allocated close. The status='posted'
             // filter excludes voided entries from prior reopen cycles, so the
             // live count never accumulates across cycles. [16] is 5x headroom.
             var ids: [16]i64 = undefined;

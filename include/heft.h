@@ -47,7 +47,7 @@ extern "C" {
 #define HEFT_MAX_ACCOUNTS      2000   /* max accounts per close/revalue operation */
 #define HEFT_AMOUNT_SCALE      100000000LL      /* 10^8: multiply to convert decimal to int */
 #define HEFT_FX_RATE_SCALE     10000000000LL    /* 10^10: multiply to convert FX rate to int */
-#define HEFT_SCHEMA_VERSION    9
+#define HEFT_SCHEMA_VERSION    13
 
 /* Opaque handle — one per .ledger file */
 typedef struct LedgerDB LedgerDB;
@@ -94,6 +94,12 @@ enum {
     HEFT_INCOME_SUMMARY_REQUIRED        = 29,
     HEFT_APPROVAL_REQUIRED              = 30,
     HEFT_TOO_MANY_ACCOUNTS              = 31,
+    HEFT_PERIOD_NOT_IN_BALANCE          = 32,
+    HEFT_NO_NEXT_PERIOD                 = 33,
+    HEFT_CANNOT_REOPEN_CASCADE          = 34,
+    HEFT_EQUITY_ALLOCATION_REQUIRED     = 35,
+    HEFT_EQUITY_ALLOCATION_TOTAL_INVALID = 36,
+    HEFT_SUSPENSE_NOT_CLEAR             = 37,
     HEFT_SQLITE_OPEN_FAILED             = 90,
     HEFT_SQLITE_EXEC_FAILED             = 91,
     HEFT_SQLITE_PREPARE_FAILED          = 92,

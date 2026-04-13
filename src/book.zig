@@ -2318,9 +2318,9 @@ test "create book with all 9 entity types via setEntityType" {
     defer database.close();
 
     const types = [_]EntityType{
-        .corporation,       .sole_proprietorship, .partnership,
-        .llc,               .nonprofit,           .cooperative,
-        .fund,              .government,          .other,
+        .corporation, .sole_proprietorship, .partnership,
+        .llc,         .nonprofit,           .cooperative,
+        .fund,        .government,          .other,
     };
 
     for (types, 0..) |entity_type, i| {
