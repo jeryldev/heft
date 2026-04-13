@@ -25,6 +25,16 @@ Heft provides:
 - reporting/query/export surfaces
 - audit logging
 
+If you are deciding between `Heft` and `OBLE` at integration time:
+
+- use `Heft` APIs for operational engine behavior
+- use `OBLE` imports/exports for portability and cross-system exchange
+
+See:
+
+- [Heft vs OBLE](architecture/heft-vs-oble.md)
+- [OBLE Drafts](oble/README.md)
+
 ## Basic embedding flow
 
 1. Open a ledger handle.
@@ -62,6 +72,7 @@ The C ABI gives you:
 - buffer-based read APIs
 - heap-allocated report APIs
 - error-code retrieval
+- canonical OBLE export surfaces for implemented packet families
 
 ## Handle rules
 
