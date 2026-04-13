@@ -109,6 +109,7 @@ const CounterpartyPayload = struct {
     name: []const u8,
     role: []const u8,
     status: ?[]const u8 = null,
+    control_account_id: ?[]const u8 = null,
 };
 
 const OpenItemLinePayload = struct {
@@ -159,6 +160,14 @@ const PolicyProfilePayload = struct {
     require_approval: bool,
     designations: PolicyDesignationPayload,
     policy_profiles: []const PolicyProfileNamePayload = &.{},
+};
+
+const BookSnapshotPayload = struct {
+    book: BookPayload,
+    accounts: []const AccountPayload,
+    periods: []const PeriodPayload,
+    counterparties: ?[]const CounterpartyPayload = null,
+    policy_profile: ?PolicyProfilePayload = null,
 };
 
 fn putUnique(map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
@@ -338,6 +347,19 @@ pub fn importEntryJson(database: db.Database, ctx: *ImportContext, json: []const
     return importEntryPayload(database, ctx, parsed.value, null, performed_by);
 }
 
+pub fn importCounterpartiesJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !void {
+    var parsed = try std.json.parseFromSlice([]CounterpartyPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    for (parsed.value) |payload| {
+        const gl_account_id = if (payload.control_account_id) |id|
+            try resolveId(&ctx.account_ids, id)
+        else
+            return error.InvalidInput;
+        _ = try ensureCounterpartyImported(database, ctx, payload, gl_account_id, performed_by);
+    }
+}
+
 fn importEntryPayload(
     database: db.Database,
     ctx: *ImportContext,
@@ -512,6 +534,77 @@ pub fn importPolicyProfileJson(database: db.Database, ctx: *ImportContext, json:
         try book_mod.Book.setDividendsDrawingsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
     if (payload.designations.current_year_earnings_account) |id|
         try book_mod.Book.setCurrentYearEarningsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+
+    return book_id;
+}
+
+pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    var parsed = try std.json.parseFromSlice(BookSnapshotPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const payload = parsed.value;
+    const book_id = try book_mod.Book.create(database, payload.book.name, payload.book.base_currency, payload.book.decimal_places, performed_by);
+    try putUnique(&ctx.book_ids, payload.book.id, book_id);
+
+    if (payload.book.status) |status| {
+        if (!std.mem.eql(u8, status, "active")) return error.InvalidInput;
+    }
+
+    for (payload.accounts) |account| {
+        const account_type = try parseAccountType(account.account_type);
+        const account_id = try account_mod.Account.create(database, book_id, account.number, account.name, account_type, false, performed_by);
+        try putUnique(&ctx.account_ids, account.id, account_id);
+        if (account.status) |status| try applyAccountStatus(database, account_id, status, performed_by);
+    }
+
+    for (payload.periods) |period| {
+        const period_id = try period_mod.Period.create(
+            database,
+            book_id,
+            period.name,
+            period.period_number,
+            period.year,
+            period.start_date,
+            period.end_date,
+            "regular",
+            performed_by,
+        );
+        try putUnique(&ctx.period_ids, period.id, period_id);
+        if (period.status) |status| try applyPeriodStatus(database, period_id, status, performed_by);
+    }
+
+    if (payload.counterparties) |counterparties| {
+        for (counterparties) |counterparty| {
+            const gl_account_id = if (counterparty.control_account_id) |id|
+                try resolveId(&ctx.account_ids, id)
+            else
+                return error.InvalidInput;
+            _ = try ensureCounterpartyImported(database, ctx, counterparty, gl_account_id, performed_by);
+        }
+    }
+
+    if (payload.policy_profile) |policy| {
+        try book_mod.Book.setEntityType(database, book_id, try parseEntityType(policy.entity_type), performed_by);
+        try book_mod.Book.setFyStartMonth(database, book_id, policy.fy_start_month, performed_by);
+        try book_mod.Book.setRequireApproval(database, book_id, policy.require_approval, performed_by);
+
+        if (policy.designations.rounding_account) |id|
+            try book_mod.Book.setRoundingAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.fx_gain_loss_account) |id|
+            try book_mod.Book.setFxGainLossAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.retained_earnings_account) |id|
+            try book_mod.Book.setRetainedEarningsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.income_summary_account) |id|
+            try book_mod.Book.setIncomeSummaryAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.opening_balance_account) |id|
+            try book_mod.Book.setOpeningBalanceAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.suspense_account) |id|
+            try book_mod.Book.setSuspenseAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.dividends_drawings_account) |id|
+            try book_mod.Book.setDividendsDrawingsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+        if (policy.designations.current_year_earnings_account) |id|
+            try book_mod.Book.setCurrentYearEarningsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    }
 
     return book_id;
 }
@@ -794,6 +887,46 @@ test "OBLE round-trip: export import export counterparty open item" {
     try std.testing.expectEqualStrings(open_item_json, round_open_item_json);
 }
 
+test "OBLE round-trip: export import export counterparties collection" {
+    const allocator = std.testing.allocator;
+
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Counterparty Source", "PHP", 2, "admin");
+    const ar_account_id = try account_mod.Account.create(source_db, book_id, "1100", "Accounts Receivable", .asset, false, "admin");
+    const ap_account_id = try account_mod.Account.create(source_db, book_id, "2000", "Accounts Payable", .liability, false, "admin");
+    const customers_group_id = try subledger_mod.SubledgerGroup.create(source_db, book_id, "Customers", "customer", 1, ar_account_id, null, null, "admin");
+    const suppliers_group_id = try subledger_mod.SubledgerGroup.create(source_db, book_id, "Suppliers", "supplier", 2, ap_account_id, null, null, "admin");
+    _ = try subledger_mod.SubledgerAccount.create(source_db, book_id, "C001", "Customer ABC", "customer", customers_group_id, "admin");
+    _ = try subledger_mod.SubledgerAccount.create(source_db, book_id, "S001", "Supplier XYZ", "supplier", suppliers_group_id, "admin");
+
+    var book_buf: [4096]u8 = undefined;
+    var accounts_buf: [8192]u8 = undefined;
+    var counterparties_buf: [8192]u8 = undefined;
+    const book_json = try oble_export.exportBookJson(source_db, book_id, &book_buf);
+    const accounts_json = try oble_export.exportAccountsJson(source_db, book_id, &accounts_buf);
+    const counterparties_json = try oble_export.exportCounterpartiesJson(source_db, book_id, &counterparties_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var ctx = ImportContext.init(allocator);
+    defer ctx.deinit();
+
+    const imported_book_id = try importBookJson(target_db, &ctx, book_json, "admin");
+    try importAccountsJson(target_db, &ctx, accounts_json, "admin");
+    try importCounterpartiesJson(target_db, &ctx, counterparties_json, "admin");
+
+    var round_counterparties_buf: [8192]u8 = undefined;
+    const round_counterparties_json = try oble_export.exportCounterpartiesJson(target_db, imported_book_id, &round_counterparties_buf);
+    try std.testing.expect(std.mem.indexOf(u8, round_counterparties_json, "\"role\":\"customer\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_counterparties_json, "\"role\":\"supplier\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_counterparties_json, "\"control_account_id\":\"acct-") != null);
+}
+
 test "OBLE round-trip: export import export policy profile" {
     const allocator = std.testing.allocator;
 
@@ -875,4 +1008,42 @@ test "OBLE round-trip: export import export policy profile" {
     try std.testing.expect(std.mem.indexOf(u8, round_policy_json, "\"fy_start_month\":4") != null);
     try std.testing.expect(std.mem.indexOf(u8, round_policy_json, "\"name\":\"income_summary_close\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, round_policy_json, "\"name\":\"approval_required\"") != null);
+}
+
+test "OBLE round-trip: export import export book snapshot" {
+    const allocator = std.testing.allocator;
+
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Snapshot Source", "PHP", 2, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const ar_id = try account_mod.Account.create(source_db, book_id, "1100", "Accounts Receivable", .asset, false, "admin");
+    const re_id = try account_mod.Account.create(source_db, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(source_db, book_id, re_id, "admin");
+    try book_mod.Book.setEntityType(source_db, book_id, .corporation, "admin");
+    _ = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const customers_group_id = try subledger_mod.SubledgerGroup.create(source_db, book_id, "Customers", "customer", 1, ar_id, null, null, "admin");
+    _ = try subledger_mod.SubledgerAccount.create(source_db, book_id, "C001", "Customer ABC", "customer", customers_group_id, "admin");
+    _ = cash_id;
+
+    var snapshot_buf: [32768]u8 = undefined;
+    const snapshot_json = try oble_export.exportBookSnapshotJson(source_db, book_id, &snapshot_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var ctx = ImportContext.init(allocator);
+    defer ctx.deinit();
+
+    const imported_book_id = try importBookSnapshotJson(target_db, &ctx, snapshot_json, "admin");
+
+    var round_snapshot_buf: [32768]u8 = undefined;
+    const round_snapshot_json = try oble_export.exportBookSnapshotJson(target_db, imported_book_id, &round_snapshot_buf);
+    try std.testing.expect(std.mem.indexOf(u8, round_snapshot_json, "\"book\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_snapshot_json, "\"counterparties\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_snapshot_json, "\"policy_profile\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_snapshot_json, "\"retained_earnings_account\"") != null);
 }

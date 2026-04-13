@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/policy-profile.schema.json",
+  "title": "OBLE Policy Profile",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "book_id",
+    "entity_type",
+    "fy_start_month",
+    "require_approval",
+    "designations"
+  ],
+  "properties": {
+    "book_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entity_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fy_start_month": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    },
+    "require_approval": {
+      "type": "boolean"
+    },
+    "designations": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "policy_profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -19,6 +19,8 @@ An implementation can claim `OBLE Core` if all of the following are true:
 - The implementation distinguishes `draft` from `posted`.
 - Amounts are exact, not floating-point-only.
 - The implementation can serialize the core model to the OBLE JSON profile.
+- The implementation can emit at least one coherent exchange bundle such as a
+  `book_snapshot` or equivalent core packet set.
 
 ## Period-Aware
 

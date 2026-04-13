@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/book-snapshot.schema.json",
+  "title": "OBLE Book Snapshot",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "book",
+    "accounts",
+    "periods",
+    "counterparties",
+    "policy_profile"
+  ],
+  "properties": {
+    "book": {
+      "$ref": "book.schema.json"
+    },
+    "accounts": {
+      "$ref": "accounts.schema.json"
+    },
+    "periods": {
+      "$ref": "periods.schema.json"
+    },
+    "counterparties": {
+      "$ref": "counterparties.schema.json"
+    },
+    "policy_profile": {
+      "$ref": "policy-profile.schema.json"
+    }
+  }
+}

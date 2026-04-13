@@ -9,6 +9,9 @@ Current examples:
 - `core-accounts.json`
 - `core-periods.json`
 - `core-entry-posted.json`
+- `counterparties.json`
+- `policy-profile.json`
+- `book-snapshot.json`
 - `reversal-pair.json`
 - `counterparty-open-item.json`
 

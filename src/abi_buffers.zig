@@ -529,6 +529,15 @@ pub fn ledger_oble_export_book(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, bu
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_book_snapshot(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_export.exportBookSnapshotJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_oble_export_accounts(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const result = heft.oble_export.exportAccountsJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {

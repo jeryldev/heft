@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/counterparties.schema.json",
+  "title": "OBLE Counterparty Collection",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": [
+      "id",
+      "book_id",
+      "number",
+      "name",
+      "role"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "book_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "number": {
+        "type": "string",
+        "minLength": 1
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "role": {
+        "type": "string",
+        "minLength": 1
+      },
+      "status": {
+        "type": "string",
+        "minLength": 1
+      },
+      "control_account_id": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

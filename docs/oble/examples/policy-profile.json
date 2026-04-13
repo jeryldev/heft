@@ -1,0 +1,21 @@
+{
+  "book_id": "book-001",
+  "entity_type": "corporation",
+  "fy_start_month": 1,
+  "require_approval": false,
+  "designations": {
+    "rounding_account": null,
+    "fx_gain_loss_account": null,
+    "retained_earnings_account": "acct-3000",
+    "income_summary_account": null,
+    "opening_balance_account": null,
+    "suspense_account": null,
+    "dividends_drawings_account": null,
+    "current_year_earnings_account": null
+  },
+  "policy_profiles": [
+    {
+      "name": "equity_close_target"
+    }
+  ]
+}

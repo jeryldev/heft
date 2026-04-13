@@ -269,8 +269,9 @@ pub fn exportPeriodsJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
 
 pub fn exportCounterpartiesJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
     var stmt = try database.prepare(
-        \\SELECT sa.id, sa.number, sa.name, sa.type, sa.status
+        \\SELECT sa.id, sa.number, sa.name, sa.type, sa.status, sg.gl_account_id
         \\FROM ledger_subledger_accounts sa
+        \\JOIN ledger_subledger_groups sg ON sg.id = sa.group_id
         \\WHERE sa.book_id = ?
         \\ORDER BY sa.number ASC, sa.id ASC;
     );
@@ -296,9 +297,39 @@ pub fn exportCounterpartiesJson(database: db.Database, book_id: i64, buf: []u8) 
         try appendJsonString(buf, &pos, stmt.columnText(3) orelse "");
         try appendLiteral(buf, &pos, ",\"status\":");
         try appendJsonString(buf, &pos, stmt.columnText(4) orelse "");
+        try appendLiteral(buf, &pos, ",\"control_account_id\":");
+        try appendAccountId(buf, &pos, stmt.columnInt64(5));
         try appendLiteral(buf, &pos, "}");
     }
     try appendLiteral(buf, &pos, "]");
+    return buf[0..pos];
+}
+
+pub fn exportBookSnapshotJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
+    var book_buf: [4096]u8 = undefined;
+    var accounts_buf: [16384]u8 = undefined;
+    var periods_buf: [16384]u8 = undefined;
+    var counterparties_buf: [16384]u8 = undefined;
+    var policy_buf: [8192]u8 = undefined;
+
+    const book_json = try exportBookJson(database, book_id, &book_buf);
+    const accounts_json = try exportAccountsJson(database, book_id, &accounts_buf);
+    const periods_json = try exportPeriodsJson(database, book_id, &periods_buf);
+    const counterparties_json = try exportCounterpartiesJson(database, book_id, &counterparties_buf);
+    const policy_json = try exportPolicyProfileJson(database, book_id, &policy_buf);
+
+    var pos: usize = 0;
+    try appendLiteral(buf, &pos, "{\"book\":");
+    try appendLiteral(buf, &pos, book_json);
+    try appendLiteral(buf, &pos, ",\"accounts\":");
+    try appendLiteral(buf, &pos, accounts_json);
+    try appendLiteral(buf, &pos, ",\"periods\":");
+    try appendLiteral(buf, &pos, periods_json);
+    try appendLiteral(buf, &pos, ",\"counterparties\":");
+    try appendLiteral(buf, &pos, counterparties_json);
+    try appendLiteral(buf, &pos, ",\"policy_profile\":");
+    try appendLiteral(buf, &pos, policy_json);
+    try appendLiteral(buf, &pos, "}");
     return buf[0..pos];
 }
 
@@ -788,6 +819,28 @@ test "OBLE export: book accounts periods and entry" {
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"entry_type\":\"standard\"") != null);
 }
 
+test "OBLE export: book snapshot" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Snapshot Book", "PHP", 2, "admin");
+    const cash_id = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const re_id = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re_id, "admin");
+    _ = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = cash_id;
+
+    var buf: [32768]u8 = undefined;
+    const json = try exportBookSnapshotJson(database, book_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"book\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accounts\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"periods\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"counterparties\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"policy_profile\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"retained_earnings_account\"") != null);
+}
+
 test "OBLE export: multi-currency entry" {
     const database = try setupTestDb();
     defer database.close();
@@ -826,6 +879,7 @@ test "OBLE export: counterparties collection" {
     const json = try exportCounterpartiesJson(database, book_id, &buf);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"number\":\"C001\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"customer\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"control_account_id\":\"acct-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"number\":\"S001\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"supplier\"") != null);
 }

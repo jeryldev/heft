@@ -129,6 +129,7 @@ const ledger_export_periods = abi.ledger_export_periods;
 const ledger_export_subledger = abi.ledger_export_subledger;
 const ledger_export_book_metadata = abi.ledger_export_book_metadata;
 const ledger_oble_export_book = abi.ledger_oble_export_book;
+const ledger_oble_export_book_snapshot = abi.ledger_oble_export_book_snapshot;
 const ledger_oble_export_accounts = abi.ledger_oble_export_accounts;
 const ledger_oble_export_periods = abi.ledger_oble_export_periods;
 const ledger_oble_export_counterparties = abi.ledger_oble_export_counterparties;
@@ -1913,6 +1914,12 @@ test "C ABI: OBLE export happy paths" {
     const book_len = ledger_oble_export_book(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(book_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(book_len)], "\"id\":\"book-") != null);
+
+    const snapshot_len = ledger_oble_export_book_snapshot(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(snapshot_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(snapshot_len)], "\"book\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(snapshot_len)], "\"counterparties\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(snapshot_len)], "\"policy_profile\"") != null);
 
     const accounts_len = ledger_oble_export_accounts(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(accounts_len > 0);

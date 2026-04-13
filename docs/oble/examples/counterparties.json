@@ -1,0 +1,20 @@
+[
+  {
+    "id": "cp-001",
+    "book_id": "book-001",
+    "number": "C001",
+    "name": "Customer ABC",
+    "role": "customer",
+    "status": "active",
+    "control_account_id": "acct-1100"
+  },
+  {
+    "id": "cp-002",
+    "book_id": "book-001",
+    "number": "S001",
+    "name": "Supplier XYZ",
+    "role": "supplier",
+    "status": "active",
+    "control_account_id": "acct-2000"
+  }
+]

@@ -17,6 +17,18 @@
       "schema": "entry.schema.json"
     },
     {
+      "example": "../examples/counterparties.json",
+      "schema": "counterparties.schema.json"
+    },
+    {
+      "example": "../examples/policy-profile.json",
+      "schema": "policy-profile.schema.json"
+    },
+    {
+      "example": "../examples/book-snapshot.json",
+      "schema": "book-snapshot.schema.json"
+    },
+    {
       "example": "../examples/reversal-pair.json",
       "schema": "reversal-pair.schema.json"
     },

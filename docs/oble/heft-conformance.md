@@ -52,8 +52,8 @@ standard boundary or testable conformance surface.
 | Designations and Policy Profiles | Confirmed | Heft already uses designation-driven book policy heavily. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Partial | Heft now has executable round-trip tests for the implemented OBLE packets, but profile-wide fixture coverage is not complete yet. |
-| Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `Counterparty[]`, `ReversalPair`, and `CounterpartyOpenItem`. |
-| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully, but importer support remains Zig-first and not every lifecycle-derived packet is imported directly. |
+| Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
+| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, book snapshot, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully, but importer support remains Zig-first and not every lifecycle-derived packet is imported directly. |
 
 ## Detail by draft area
 
@@ -117,6 +117,7 @@ Heft now implements the first real OBLE serialization boundary in code:
 - canonical JSON import for the implemented packet set
 - round-trip tests for core and extension packets
 - schema/example validation guidance and machine-readable example mapping
+- bundle-level exchange via `book_snapshot`
 
 What is still missing is breadth, not the existence of the boundary:
 

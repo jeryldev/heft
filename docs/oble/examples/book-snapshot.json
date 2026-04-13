@@ -1,0 +1,101 @@
+{
+  "book": {
+    "id": "book-001",
+    "name": "Example Entity",
+    "base_currency": "PHP",
+    "decimal_places": 2,
+    "status": "active"
+  },
+  "accounts": [
+    {
+      "id": "acct-1000",
+      "book_id": "book-001",
+      "number": "1000",
+      "name": "Cash",
+      "account_type": "asset",
+      "normal_balance": "debit",
+      "status": "active"
+    },
+    {
+      "id": "acct-1100",
+      "book_id": "book-001",
+      "number": "1100",
+      "name": "Accounts Receivable",
+      "account_type": "asset",
+      "normal_balance": "debit",
+      "status": "active"
+    },
+    {
+      "id": "acct-3000",
+      "book_id": "book-001",
+      "number": "3000",
+      "name": "Capital",
+      "account_type": "equity",
+      "normal_balance": "credit",
+      "status": "active"
+    },
+    {
+      "id": "acct-4000",
+      "book_id": "book-001",
+      "number": "4000",
+      "name": "Revenue",
+      "account_type": "revenue",
+      "normal_balance": "credit",
+      "status": "active"
+    }
+  ],
+  "periods": [
+    {
+      "id": "period-2025-12",
+      "book_id": "book-001",
+      "name": "Dec 2025",
+      "start_date": "2025-12-01",
+      "end_date": "2025-12-31",
+      "status": "closed",
+      "period_number": 12,
+      "year": 2025
+    },
+    {
+      "id": "period-2026-01",
+      "book_id": "book-001",
+      "name": "Jan 2026",
+      "start_date": "2026-01-01",
+      "end_date": "2026-01-31",
+      "status": "open",
+      "period_number": 1,
+      "year": 2026
+    }
+  ],
+  "counterparties": [
+    {
+      "id": "cp-001",
+      "book_id": "book-001",
+      "number": "C001",
+      "name": "Customer ABC",
+      "role": "customer",
+      "status": "active",
+      "control_account_id": "acct-1100"
+    }
+  ],
+  "policy_profile": {
+    "book_id": "book-001",
+    "entity_type": "corporation",
+    "fy_start_month": 1,
+    "require_approval": false,
+    "designations": {
+      "rounding_account": null,
+      "fx_gain_loss_account": null,
+      "retained_earnings_account": "acct-3000",
+      "income_summary_account": null,
+      "opening_balance_account": null,
+      "suspense_account": null,
+      "dividends_drawings_account": null,
+      "current_year_earnings_account": null
+    },
+    "policy_profiles": [
+      {
+        "name": "equity_close_target"
+      }
+    ]
+  }
+}
