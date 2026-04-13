@@ -80,7 +80,8 @@ fn appendBookId(buf: []u8, pos: *usize, book_id: i64) !void {
 
 fn appendPeriodId(buf: []u8, pos: *usize, year: i32, period_number: i32) !void {
     var period_buf: [48]u8 = undefined;
-    const period_text = std.fmt.bufPrint(&period_buf, "period-{d}-{d:0>2}", .{ year, period_number }) catch unreachable;
+    const period_no: u32 = @intCast(period_number);
+    const period_text = std.fmt.bufPrint(&period_buf, "period-{d}-{d:0>2}", .{ year, period_no }) catch unreachable;
     try appendJsonString(buf, pos, period_text);
 }
 
@@ -505,6 +506,62 @@ pub fn exportCloseReopenProfileJson(database: db.Database, book_id: i64, period_
     return buf[0..pos];
 }
 
+pub fn exportRevaluationPacketJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
+    var header_stmt = try database.prepare(
+        \\SELECT e.book_id, e.period_id, p.period_number, p.year, e.metadata
+        \\FROM ledger_entries e
+        \\JOIN ledger_periods p ON p.id = e.period_id
+        \\WHERE e.id = ?;
+    );
+    defer header_stmt.finalize();
+    try header_stmt.bindInt(1, entry_id);
+    if (!try header_stmt.step()) return error.NotFound;
+
+    const metadata = header_stmt.columnText(4) orelse return error.InvalidInput;
+    if (std.mem.indexOf(u8, metadata, "\"revaluation\":true") == null) return error.InvalidInput;
+
+    const book_id = header_stmt.columnInt64(0);
+    const source_period_id = header_stmt.columnInt64(1);
+    const source_period_number = header_stmt.columnInt(2);
+    const source_period_year = header_stmt.columnInt(3);
+
+    var reval_buf: [16384]u8 = undefined;
+    const reval_json = try exportEntryJson(database, entry_id, &reval_buf);
+
+    var pos: usize = 0;
+    try appendLiteral(buf, &pos, "{\"book_id\":");
+    try appendBookId(buf, &pos, book_id);
+    try appendLiteral(buf, &pos, ",\"source_period_id\":");
+    try appendPeriodId(buf, &pos, source_period_year, source_period_number);
+    try appendLiteral(buf, &pos, ",\"revaluation_entry\":");
+    try appendLiteral(buf, &pos, reval_json);
+
+    var reversal_stmt = try database.prepare(
+        \\SELECT id
+        \\FROM ledger_entries
+        \\WHERE metadata LIKE ?
+        \\ORDER BY id ASC
+        \\LIMIT 1;
+    );
+    defer reversal_stmt.finalize();
+    var pattern_buf: [96]u8 = undefined;
+    const pattern = std.fmt.bufPrint(&pattern_buf, "%\"reverses_revaluation\":{d}%", .{entry_id}) catch unreachable;
+    try reversal_stmt.bindText(1, pattern);
+
+    try appendLiteral(buf, &pos, ",\"reversal_entry\":");
+    if (try reversal_stmt.step()) {
+        var reversal_buf: [16384]u8 = undefined;
+        const reversal_json = try exportEntryJson(database, reversal_stmt.columnInt64(0), &reversal_buf);
+        try appendLiteral(buf, &pos, reversal_json);
+    } else {
+        try appendLiteral(buf, &pos, "null");
+    }
+
+    try appendLiteral(buf, &pos, "}");
+    _ = source_period_id;
+    return buf[0..pos];
+}
+
 pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     var header_stmt = try database.prepare(
         \\SELECT e.id, e.book_id, e.period_id, e.status, e.transaction_date, e.posting_date,
@@ -691,6 +748,7 @@ const entry_mod = @import("entry.zig");
 const subledger_mod = @import("subledger.zig");
 const open_item_mod = @import("open_item.zig");
 const close_mod = @import("close.zig");
+const revaluation_mod = @import("revaluation.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -887,4 +945,38 @@ test "OBLE export: counterparty open item" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"original_amount\":\"500.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"remaining_amount\":\"300.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"partial\"") != null);
+}
+
+test "OBLE export: revaluation packet" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "FX Book", "USD", 2, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .corporation, "admin");
+
+    const cash_id = try account_mod.Account.create(database, book_id, "1010", "Cash USD", .asset, false, "admin");
+    const payable_id = try account_mod.Account.create(database, book_id, "2010", "Payable EUR", .liability, false, "admin");
+    const fx_gain_loss_id = try account_mod.Account.create(database, book_id, "7990", "FX Gain Loss", .revenue, false, "admin");
+    try book_mod.Book.setFxGainLossAccount(database, book_id, fx_gain_loss_id, "admin");
+
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, "FX-001", "2026-01-15", "2026-01-15", "Foreign payable", jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, 110_00_000_000, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 100_00_000_000, "EUR", 1_100_000_0000, payable_id, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const rates = [_]revaluation_mod.CurrencyRate{
+        .{ .currency = "EUR", .new_rate = 1_200_000_0000 },
+    };
+    const result = try revaluation_mod.revalueForexBalances(database, book_id, jan_id, &rates, "admin");
+    try std.testing.expect(result.entry_id > 0);
+
+    var buf: [32768]u8 = undefined;
+    const json = try exportRevaluationPacketJson(database, result.entry_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"revaluation_entry\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"reversal_entry\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"source_period_id\":\"period-2026-01\"") != null);
 }

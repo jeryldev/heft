@@ -24,6 +24,7 @@ Current draft set:
 10. [Conformance Checklist](conformance-checklist.md)
 11. [Examples](examples/README.md)
 12. [JSON Schemas](schema/README.md)
+13. [Import Boundary](import-boundary.md)
 
 Intended reading order:
 

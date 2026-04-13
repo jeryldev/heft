@@ -22,3 +22,6 @@ jobs:
 
       - name: Run Quality Gate
         run: bash scripts/quality-gate.sh
+
+      - name: Validate OBLE Draft Bundle
+        run: bash scripts/validate-oble.sh

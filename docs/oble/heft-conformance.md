@@ -45,7 +45,7 @@ standard boundary or testable conformance surface.
 | OBLE Core | Confirmed | Heft has `Book`, `Account`, `Period`, `Entry`, and `Line` with exact balancing and book/period boundaries. |
 | Lifecycle and Invariants | Confirmed | Draft/post/void/reverse states, period state enforcement, and audit-backed lifecycle semantics are present. |
 | Counterparties and Subledgers | Confirmed | Heft supports subledger groups/accounts, line-level counterparty linkage, open items, allocation, aging, and reconciliation. |
-| Serialization and Conformance | Confirmed | Heft now exports canonical OBLE JSON for the implemented core and extension packets, imports those packets back into live ledgers, and validates its draft examples against the published schemas. |
+| Serialization and Conformance | Confirmed | Heft now exports canonical OBLE JSON for the implemented core and extension packets, imports those packets back into live ledgers, and runs lightweight draft-bundle validation in the repo today. |
 | Heft Mapping | Confirmed | The mapping is documented explicitly in the OBLE docs. |
 | Multi-Currency Semantics | Confirmed | Heft stores transaction amounts, base amounts, and FX rates with exact integer arithmetic and revaluation flows. |
 | Close and Reopen Profile | Confirmed | Heft implements close-generated state, opening carry-forward, reopen cascades, and stale derived-state invalidation. |
@@ -53,7 +53,7 @@ standard boundary or testable conformance surface.
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Partial | Heft now has executable round-trip tests for the implemented OBLE packets, but profile-wide fixture coverage is not complete yet. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `Counterparty[]`, `ReversalPair`, and `CounterpartyOpenItem`. |
-| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully, but importer support is not yet exposed through every public boundary and not every lifecycle-derived packet is imported directly. |
+| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully, but importer support remains Zig-first and not every lifecycle-derived packet is imported directly. |
 
 ## Detail by draft area
 
@@ -121,7 +121,7 @@ Heft now implements the first real OBLE serialization boundary in code:
 What is still missing is breadth, not the existence of the boundary:
 
 - wider profile coverage beyond the currently implemented packets
-- automation that validates all exports against schemas in CI
+- full draft-2020-12 schema validation of live exports in CI
 - broader import coverage for lifecycle-derived profile packets where replaying the packet directly is safe and semantically honest
 
 ## OBLE-0006 Multi-Currency

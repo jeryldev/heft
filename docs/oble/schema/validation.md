@@ -20,14 +20,31 @@ That mapping currently covers:
 - `reversal-pair.json`
 - `counterparty-open-item.json`
 
-## Why there is no bundled validator yet
+## What the repo validates today
+
+The repo now ships a lightweight validation script:
+
+- [`scripts/validate-oble.sh`](../../../scripts/validate-oble.sh)
+
+That script intentionally does not claim full JSON Schema conformance.
+
+It validates the parts we can support without introducing a new validator
+dependency:
+
+- every mapped schema/example file exists
+- every mapped schema/example file parses as valid JSON
+- the documented schema/example map stays consistent
+- the main OBLE schema docs keep their internal links valid
+
+## Why there is still no bundled full schema validator yet
 
 The repo currently ships:
 
 - OBLE draft schemas
 - OBLE example payloads
+- a lightweight OBLE validation script
 
-But it does not yet vendor one required JSON Schema validator tool.
+But it does not yet vendor a full JSON Schema validator tool.
 
 That is intentional for now. The draft is still evolving, and it is better to
 keep the validation process explicit than to pretend the repo has one canonical
@@ -93,5 +110,6 @@ schema validation.
 
 Once OBLE stabilizes a bit more, the next useful move is:
 
-- add one small validator script or CI job
-- use `example-map.json` as the source of truth for what gets validated
+- keep using `example-map.json` as the source of truth for what gets validated
+- add one full draft-2020-12 schema validator to CI once the toolchain choice
+  is stable

@@ -601,6 +601,15 @@ pub fn ledger_oble_export_counterparty_open_item(handle: ?*LedgerDB, open_item_i
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_revaluation_packet(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_export.exportRevaluationPacketJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_list_open_items(handle: ?*LedgerDB, counterparty_id: i64, include_closed: bool, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const fmt = exportFormat(format) orelse {

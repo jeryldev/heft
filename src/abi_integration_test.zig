@@ -137,6 +137,7 @@ const ledger_oble_export_close_profile = abi.ledger_oble_export_close_profile;
 const ledger_oble_export_entry = abi.ledger_oble_export_entry;
 const ledger_oble_export_reversal_pair = abi.ledger_oble_export_reversal_pair;
 const ledger_oble_export_counterparty_open_item = abi.ledger_oble_export_counterparty_open_item;
+const ledger_oble_export_revaluation_packet = abi.ledger_oble_export_revaluation_packet;
 const ledger_transition_budget = abi.ledger_transition_budget;
 const ledger_create_open_item = abi.ledger_create_open_item;
 const ledger_allocate_payment = abi.ledger_allocate_payment;
@@ -1951,6 +1952,18 @@ test "C ABI: OBLE export happy paths" {
     const open_item_len = ledger_oble_export_counterparty_open_item(handle, open_item_id, &buf, buf.len);
     try std.testing.expect(open_item_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(open_item_len)], "\"remaining_amount\":\"3000.00\"") != null);
+
+    const fx_gl_id = ledger_create_account(handle, s.book_id, "5999", "FX Gain Loss", "expense", 0, "admin");
+    try std.testing.expect(fx_gl_id > 0);
+    try std.testing.expect(ledger_set_fx_gain_loss_account(handle, s.book_id, fx_gl_id, "admin"));
+
+    const fx_reval_id = ledger_revalue_forex_balances(handle, s.book_id, s.jan_2026_id, "[{\"currency\":\"USD\",\"rate\":570000000000}]", "admin");
+    try std.testing.expect(fx_reval_id > 0);
+
+    const reval_len = ledger_oble_export_revaluation_packet(handle, fx_reval_id, &buf, buf.len);
+    try std.testing.expect(reval_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(reval_len)], "\"revaluation_entry\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(reval_len)], "\"reversal_entry\"") != null);
 
     try std.testing.expect(ledger_close_period(handle, s.book_id, s.jan_2026_id, "admin"));
     const close_profile_len = ledger_oble_export_close_profile(handle, s.book_id, s.jan_2026_id, &buf, buf.len);

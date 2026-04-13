@@ -41,3 +41,4 @@ See also:
 
 - [Validation Guide](validation.md)
 - [Example Map](example-map.json)
+- [`scripts/validate-oble.sh`](../../../scripts/validate-oble.sh)

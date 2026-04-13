@@ -147,6 +147,10 @@ For now, the standard only assumes:
 
 Detailed revaluation profiles can come later.
 
+Implementations may still expose a revaluation packet or profile for exchange.
+Heft already does this at the exporter boundary, but OBLE does not yet treat
+that packet as fully normative core behavior.
+
 ## Serialization guidance
 
 Recommended JSON representation for a foreign-currency line:
