@@ -177,6 +177,25 @@ If it supports designation-driven workflows, it should be able to state:
 This makes policy-bearing behavior portable enough to reason about, even if not
 every engine supports the same profiles.
 
+## Import guidance
+
+This profile is a good candidate for direct import because it mostly describes
+user-authored or administrator-authored configuration rather than derived
+lifecycle state.
+
+That means implementations can usually import:
+
+- entity type
+- fiscal-year start month
+- approval requirement
+- designation bindings
+
+as configuration updates on top of an already-imported book and chart of
+accounts.
+
+The main requirement is that referenced designation accounts already exist in
+the target book or are resolvable from imported account identifiers.
+
 ## What should remain outside the core
 
 These should usually remain in profiles or extensions rather than core:

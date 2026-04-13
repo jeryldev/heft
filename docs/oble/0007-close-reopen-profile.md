@@ -165,6 +165,32 @@ A profile implementation must be able to recover:
 The audit mechanism may vary by implementation, but the lifecycle history must
 not be lost.
 
+## Import guidance
+
+Import for this profile should be treated more carefully than import for core
+entities or book policy configuration.
+
+Why:
+
+- close-derived entries are not just data rows
+- opening carry-forward reflects prior closed state
+- reopen invalidation reflects real lifecycle history
+
+So for many implementations, the correct import approach is:
+
+- import the underlying book, periods, accounts, and entries
+- then let the engine execute close or reopen behavior to reconstruct the
+  derived state
+
+rather than blindly replaying the exported derived artifacts as if they were
+ordinary user-authored records.
+
+An implementation may still support direct import of this profile, but it
+should do so only when it can preserve the distinction between:
+
+- configuration and user-authored state
+- engine-derived lifecycle state
+
 ## Presentation versus materialization
 
 Some systems project current earnings or carry-forward state at report time.

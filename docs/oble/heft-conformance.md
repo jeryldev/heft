@@ -53,7 +53,7 @@ standard boundary or testable conformance surface.
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Partial | Heft now has executable round-trip tests for the implemented OBLE packets, but profile-wide fixture coverage is not complete yet. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `Counterparty[]`, `ReversalPair`, and `CounterpartyOpenItem`. |
-| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented OBLE packets and round-trips them successfully, but the importer is not yet surfaced through every public integration boundary. |
+| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully, but importer support is not yet exposed through every public boundary and not every lifecycle-derived packet is imported directly. |
 
 ## Detail by draft area
 
@@ -122,6 +122,7 @@ What is still missing is breadth, not the existence of the boundary:
 
 - wider profile coverage beyond the currently implemented packets
 - automation that validates all exports against schemas in CI
+- broader import coverage for lifecycle-derived profile packets where replaying the packet directly is safe and semantically honest
 
 ## OBLE-0006 Multi-Currency
 
@@ -162,11 +163,19 @@ Examples already present in Heft include:
 - opening balance designation
 - dividends/drawings designation
 
+Heft now also imports and round-trips the exported policy-profile packet for the
+safe user-authored configuration layer:
+
+- entity type
+- fiscal-year start month
+- approval requirement
+- designation bindings
+
 ## Biggest remaining gaps
 
 The most important gaps are now about completeness, not first principles.
 
-1. broader packet coverage for policy profiles, close/reopen bundles, and richer multi-currency examples
+1. broader packet coverage for close/reopen bundles, richer multi-currency examples, and remaining profile extensions
 2. automated schema validation of exported payloads
 3. public-surface exposure beyond the current Zig bridge
 4. explicit profile claim validation at a fuller feature matrix level
