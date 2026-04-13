@@ -154,6 +154,18 @@ fn appendLineObject(
     try appendLiteral(buf, pos, "}");
 }
 
+fn parseSourcePeriodId(metadata: ?[]const u8) ?i64 {
+    const m = metadata orelse return null;
+    const needle = "\"source_period_id\":";
+    const start = std.mem.indexOf(u8, m, needle) orelse return null;
+    var i = start + needle.len;
+    while (i < m.len and (m[i] == ' ' or m[i] == '\t')) : (i += 1) {}
+    var j = i;
+    while (j < m.len and std.ascii.isDigit(m[j])) : (j += 1) {}
+    if (j == i) return null;
+    return std.fmt.parseInt(i64, m[i..j], 10) catch null;
+}
+
 pub fn exportBookJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
     var stmt = try database.prepare(
         \\SELECT id, name, base_currency, decimal_places, status
@@ -368,6 +380,131 @@ pub fn exportPolicyProfileJson(database: db.Database, book_id: i64, buf: []u8) !
     return buf[0..pos];
 }
 
+pub fn exportCloseReopenProfileJson(database: db.Database, book_id: i64, period_id: i64, buf: []u8) ![]u8 {
+    var period_stmt = try database.prepare(
+        \\SELECT status, period_number, year, start_date, end_date
+        \\FROM ledger_periods
+        \\WHERE id = ? AND book_id = ?;
+    );
+    defer period_stmt.finalize();
+    try period_stmt.bindInt(1, period_id);
+    try period_stmt.bindInt(2, book_id);
+    if (!try period_stmt.step()) return error.NotFound;
+
+    const period_status = period_stmt.columnText(0) orelse "";
+    const period_number = period_stmt.columnInt(1);
+    const period_year = period_stmt.columnInt(2);
+    const period_end_date = period_stmt.columnText(4) orelse "";
+
+    var pos: usize = 0;
+    try appendLiteral(buf, &pos, "{\"book_id\":");
+    try appendBookId(buf, &pos, book_id);
+    try appendLiteral(buf, &pos, ",\"period_id\":");
+    try appendPeriodId(buf, &pos, period_year, period_number);
+    try appendLiteral(buf, &pos, ",\"period_status\":");
+    try appendJsonString(buf, &pos, period_status);
+    try appendLiteral(buf, &pos, ",\"closing_entries\":[");
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, document_number, status
+            \\FROM ledger_entries
+            \\WHERE book_id = ? AND period_id = ? AND entry_type = 'closing'
+            \\ORDER BY id ASC;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, period_id);
+
+        var first = true;
+        while (try stmt.step()) {
+            if (!first) try appendLiteral(buf, &pos, ",");
+            first = false;
+            try appendLiteral(buf, &pos, "{\"id\":");
+            try appendEntryId(buf, &pos, stmt.columnInt64(0));
+            try appendLiteral(buf, &pos, ",\"document_number\":");
+            try appendJsonString(buf, &pos, stmt.columnText(1) orelse "");
+            try appendLiteral(buf, &pos, ",\"status\":");
+            try appendJsonString(buf, &pos, stmt.columnText(2) orelse "");
+            try appendLiteral(buf, &pos, "}");
+        }
+    }
+
+    try appendLiteral(buf, &pos, "],\"next_period\":");
+
+    var next_period_id: i64 = 0;
+    var next_period_number: i32 = 0;
+    var next_period_year: i32 = 0;
+    var next_period_status: []const u8 = "";
+    {
+        var stmt = try database.prepare(
+            \\SELECT id, period_number, year, status
+            \\FROM ledger_periods
+            \\WHERE book_id = ?
+            \\  AND start_date > ?
+            \\ORDER BY start_date ASC
+            \\LIMIT 1;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindText(2, period_end_date);
+        if (try stmt.step()) {
+            next_period_id = stmt.columnInt64(0);
+            next_period_number = stmt.columnInt(1);
+            next_period_year = stmt.columnInt(2);
+            next_period_status = stmt.columnText(3) orelse "";
+            try appendLiteral(buf, &pos, "{\"id\":");
+            try appendPeriodId(buf, &pos, next_period_year, next_period_number);
+            try appendLiteral(buf, &pos, ",\"status\":");
+            try appendJsonString(buf, &pos, next_period_status);
+            try appendLiteral(buf, &pos, "}");
+        } else {
+            try appendLiteral(buf, &pos, "null");
+        }
+    }
+
+    try appendLiteral(buf, &pos, ",\"next_opening_entry\":");
+    if (next_period_id > 0) {
+        var stmt = try database.prepare(
+            \\SELECT id, document_number, status, metadata
+            \\FROM ledger_entries
+            \\WHERE book_id = ? AND period_id = ? AND entry_type = 'opening'
+            \\ORDER BY id DESC
+            \\LIMIT 1;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, next_period_id);
+        if (try stmt.step()) {
+            try appendLiteral(buf, &pos, "{\"id\":");
+            try appendEntryId(buf, &pos, stmt.columnInt64(0));
+            try appendLiteral(buf, &pos, ",\"document_number\":");
+            try appendJsonString(buf, &pos, stmt.columnText(1) orelse "");
+            try appendLiteral(buf, &pos, ",\"status\":");
+            try appendJsonString(buf, &pos, stmt.columnText(2) orelse "");
+            if (parseSourcePeriodId(stmt.columnText(3))) |source_period_id| {
+                var src_stmt = try database.prepare(
+                    \\SELECT period_number, year FROM ledger_periods WHERE id = ?;
+                );
+                defer src_stmt.finalize();
+                try src_stmt.bindInt(1, source_period_id);
+                if (try src_stmt.step()) {
+                    try appendLiteral(buf, &pos, ",\"source_period_id\":");
+                    try appendPeriodId(buf, &pos, src_stmt.columnInt(1), src_stmt.columnInt(0));
+                }
+            }
+            try appendLiteral(buf, &pos, "}");
+        } else {
+            try appendLiteral(buf, &pos, "null");
+        }
+    } else {
+        try appendLiteral(buf, &pos, "null");
+    }
+
+    try appendLiteral(buf, &pos, "}");
+    return buf[0..pos];
+}
+
 pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     var header_stmt = try database.prepare(
         \\SELECT e.id, e.book_id, e.period_id, e.status, e.transaction_date, e.posting_date,
@@ -553,6 +690,7 @@ const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
 const subledger_mod = @import("subledger.zig");
 const open_item_mod = @import("open_item.zig");
+const close_mod = @import("close.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -590,6 +728,28 @@ test "OBLE export: book accounts periods and entry" {
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"debit_amount\":\"1000.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"fx_rate\":\"1.0000000000\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"entry_type\":\"standard\"") != null);
+}
+
+test "OBLE export: multi-currency entry" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try book_mod.Book.create(database, "FX Entity", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, "FX-001", "2026-01-10", "2026-01-10", "USD funding", period_id, null, "admin");
+    const usd_fx_rate: i64 = 565_000_000_000; // 56.5000000000
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, 10_000_000_000, 0, "USD", usd_fx_rate, 1, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 565_000_000_000, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    var buf: [8192]u8 = undefined;
+    const json = try exportEntryJson(database, entry_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"transaction_currency\":\"USD\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"fx_rate\":\"56.5000000000\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_debit_amount\":\"5650.00\"") != null);
 }
 
 test "OBLE export: counterparties collection" {
@@ -640,6 +800,38 @@ test "OBLE export: policy profile" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"retained_earnings_account\":\"acct-") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"income_summary_close\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"approval_required\"") != null);
+}
+
+test "OBLE export: close and reopen profile" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Close Book", "PHP", 2, "admin");
+    const cash_id = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const re_id = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re_id, "admin");
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_id = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, "SALE-001", "2026-01-10", "2026-01-10", null, jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 1_000_000_000_00, "PHP", money.FX_RATE_SCALE, revenue_id, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+    try close_mod.closePeriod(database, book_id, jan_id, "admin");
+
+    var buf: [8192]u8 = undefined;
+    var json = try exportCloseReopenProfileJson(database, book_id, jan_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"period_status\":\"soft_closed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"document_number\":\"CLOSE-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"next_opening_entry\":{\"id\":\"entry-") != null);
+
+    try period_mod.Period.transitionWithReason(database, jan_id, .open, "Reopen after close", "admin");
+    json = try exportCloseReopenProfileJson(database, book_id, jan_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"period_status\":\"open\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"void\"") != null);
+    _ = feb_id;
 }
 
 test "OBLE export: reversal pair" {

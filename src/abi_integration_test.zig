@@ -133,6 +133,7 @@ const ledger_oble_export_accounts = abi.ledger_oble_export_accounts;
 const ledger_oble_export_periods = abi.ledger_oble_export_periods;
 const ledger_oble_export_counterparties = abi.ledger_oble_export_counterparties;
 const ledger_oble_export_policy_profile = abi.ledger_oble_export_policy_profile;
+const ledger_oble_export_close_profile = abi.ledger_oble_export_close_profile;
 const ledger_oble_export_entry = abi.ledger_oble_export_entry;
 const ledger_oble_export_reversal_pair = abi.ledger_oble_export_reversal_pair;
 const ledger_oble_export_counterparty_open_item = abi.ledger_oble_export_counterparty_open_item;
@@ -1932,6 +1933,17 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(policy_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_len)], "\"policy_profiles\"") != null);
 
+    const fx_entry_id = ledger_create_draft(handle, s.book_id, "FX-2026-001", "2026-01-25", "2026-01-25", "USD funding", s.jan_2026_id, null, "admin");
+    try std.testing.expect(fx_entry_id > 0);
+    _ = ledger_add_line(handle, fx_entry_id, 1, 10_000_000_000, 0, "USD", 565_000_000_000, s.cash_id, 0, null, "admin");
+    _ = ledger_add_line(handle, fx_entry_id, 2, 0, 565_000_000_000, "PHP", 10_000_000_000, s.capital_id, 0, null, "admin");
+    try std.testing.expect(ledger_post_entry(handle, fx_entry_id, "admin"));
+
+    const fx_entry_len = ledger_oble_export_entry(handle, fx_entry_id, &buf, buf.len);
+    try std.testing.expect(fx_entry_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(fx_entry_len)], "\"transaction_currency\":\"USD\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(fx_entry_len)], "\"fx_rate\":\"56.5000000000\"") != null);
+
     const reversal_pair_len = ledger_oble_export_reversal_pair(handle, adj_entry_id, &buf, buf.len);
     try std.testing.expect(reversal_pair_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(reversal_pair_len)], "\"reversal_entry\"") != null);
@@ -1939,6 +1951,12 @@ test "C ABI: OBLE export happy paths" {
     const open_item_len = ledger_oble_export_counterparty_open_item(handle, open_item_id, &buf, buf.len);
     try std.testing.expect(open_item_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(open_item_len)], "\"remaining_amount\":\"3000.00\"") != null);
+
+    try std.testing.expect(ledger_close_period(handle, s.book_id, s.jan_2026_id, "admin"));
+    const close_profile_len = ledger_oble_export_close_profile(handle, s.book_id, s.jan_2026_id, &buf, buf.len);
+    try std.testing.expect(close_profile_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(close_profile_len)], "\"closing_entries\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(close_profile_len)], "\"next_opening_entry\"") != null);
 }
 
 test "C ABI: ledger_transition_budget via C boundary" {

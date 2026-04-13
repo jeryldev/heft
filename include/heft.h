@@ -312,6 +312,7 @@ int32_t ledger_oble_export_accounts(LedgerDB* h, int64_t book_id, uint8_t* buf, 
 int32_t ledger_oble_export_periods(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_counterparties(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_policy_profile(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_close_profile(LedgerDB* h, int64_t book_id, int64_t period_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_entry(LedgerDB* h, int64_t entry_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_reversal_pair(LedgerDB* h, int64_t original_entry_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_counterparty_open_item(LedgerDB* h, int64_t open_item_id, uint8_t* buf, int32_t buf_len);

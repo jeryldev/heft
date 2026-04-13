@@ -681,6 +681,10 @@ pub export fn ledger_oble_export_policy_profile(handle: ?*LedgerDB, book_id: i64
     return abi_buffers.ledger_oble_export_policy_profile(handle, book_id, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_close_profile(handle: ?*LedgerDB, book_id: i64, period_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_close_profile(handle, book_id, period_id, buf, buf_len);
+}
+
 pub export fn ledger_oble_export_entry(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     return abi_buffers.ledger_oble_export_entry(handle, entry_id, buf, buf_len);
 }

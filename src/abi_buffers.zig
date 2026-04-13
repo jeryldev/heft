@@ -565,6 +565,15 @@ pub fn ledger_oble_export_policy_profile(handle: ?*LedgerDB, book_id: i64, buf: 
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_close_profile(handle: ?*LedgerDB, book_id: i64, period_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_export.exportCloseReopenProfileJson(h.sqlite, book_id, period_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_oble_export_entry(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const result = heft.oble_export.exportEntryJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
