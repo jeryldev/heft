@@ -1,0 +1,26 @@
+{
+  "id": "entry-2026-01-001",
+  "book_id": "book-001",
+  "period_id": "period-2026-01",
+  "status": "posted",
+  "transaction_date": "2026-01-10",
+  "posting_date": "2026-01-10",
+  "document_number": "JE-001",
+  "description": "Owner capital injection",
+  "lines": [
+    {
+      "id": "line-001",
+      "line_number": 1,
+      "account_id": "acct-1000",
+      "debit_amount": "1000.00",
+      "credit_amount": "0.00"
+    },
+    {
+      "id": "line-002",
+      "line_number": 2,
+      "account_id": "acct-3000",
+      "debit_amount": "0.00",
+      "credit_amount": "1000.00"
+    }
+  ]
+}

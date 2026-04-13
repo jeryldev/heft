@@ -1,0 +1,29 @@
+{
+  "counterparty": {
+    "id": "cp-001",
+    "book_id": "book-001",
+    "number": "C001",
+    "name": "Customer ABC",
+    "role": "customer",
+    "status": "active"
+  },
+  "line": {
+    "id": "line-100",
+    "entry_id": "entry-2026-01-020",
+    "line_number": 1,
+    "account_id": "acct-1100",
+    "debit_amount": "500.00",
+    "credit_amount": "0.00",
+    "counterparty_id": "cp-001"
+  },
+  "open_item": {
+    "id": "oi-001",
+    "book_id": "book-001",
+    "entry_line_id": "line-100",
+    "counterparty_id": "cp-001",
+    "original_amount": "500.00",
+    "remaining_amount": "300.00",
+    "status": "partial",
+    "due_date": "2026-02-15"
+  }
+}

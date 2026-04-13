@@ -1,0 +1,7 @@
+{
+  "id": "book-001",
+  "name": "Example Entity",
+  "base_currency": "PHP",
+  "decimal_places": 2,
+  "status": "active"
+}

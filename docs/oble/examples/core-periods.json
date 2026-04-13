@@ -1,0 +1,22 @@
+[
+  {
+    "id": "period-2025-12",
+    "book_id": "book-001",
+    "name": "Dec 2025",
+    "start_date": "2025-12-01",
+    "end_date": "2025-12-31",
+    "status": "closed",
+    "period_number": 12,
+    "year": 2025
+  },
+  {
+    "id": "period-2026-01",
+    "book_id": "book-001",
+    "name": "Jan 2026",
+    "start_date": "2026-01-01",
+    "end_date": "2026-01-31",
+    "status": "open",
+    "period_number": 1,
+    "year": 2026
+  }
+]

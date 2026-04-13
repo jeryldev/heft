@@ -1,0 +1,55 @@
+{
+  "original_entry": {
+    "id": "entry-2026-01-010",
+    "book_id": "book-001",
+    "period_id": "period-2026-01",
+    "status": "reversed",
+    "transaction_date": "2026-01-15",
+    "posting_date": "2026-01-15",
+    "document_number": "ACC-001",
+    "description": "Accrual",
+    "lines": [
+      {
+        "id": "line-010",
+        "line_number": 1,
+        "account_id": "acct-1000",
+        "debit_amount": "0.00",
+        "credit_amount": "250.00"
+      },
+      {
+        "id": "line-011",
+        "line_number": 2,
+        "account_id": "acct-4000",
+        "debit_amount": "250.00",
+        "credit_amount": "0.00"
+      }
+    ]
+  },
+  "reversal_entry": {
+    "id": "entry-2026-01-011",
+    "book_id": "book-001",
+    "period_id": "period-2026-01",
+    "status": "posted",
+    "transaction_date": "2026-01-31",
+    "posting_date": "2026-01-31",
+    "document_number": "REV-ACC-001",
+    "description": "Accrual reversal",
+    "reverses_entry_id": "entry-2026-01-010",
+    "lines": [
+      {
+        "id": "line-012",
+        "line_number": 1,
+        "account_id": "acct-1000",
+        "debit_amount": "250.00",
+        "credit_amount": "0.00"
+      },
+      {
+        "id": "line-013",
+        "line_number": 2,
+        "account_id": "acct-4000",
+        "debit_amount": "0.00",
+        "credit_amount": "250.00"
+      }
+    ]
+  }
+}

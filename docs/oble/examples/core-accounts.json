@@ -1,0 +1,29 @@
+[
+  {
+    "id": "acct-1000",
+    "book_id": "book-001",
+    "number": "1000",
+    "name": "Cash",
+    "account_type": "asset",
+    "normal_balance": "debit",
+    "status": "active"
+  },
+  {
+    "id": "acct-3000",
+    "book_id": "book-001",
+    "number": "3000",
+    "name": "Capital",
+    "account_type": "equity",
+    "normal_balance": "credit",
+    "status": "active"
+  },
+  {
+    "id": "acct-4000",
+    "book_id": "book-001",
+    "number": "4000",
+    "name": "Revenue",
+    "account_type": "revenue",
+    "normal_balance": "credit",
+    "status": "active"
+  }
+]
