@@ -1,0 +1,28 @@
+{
+  "mappings": [
+    {
+      "example": "../examples/core-book.json",
+      "schema": "book.schema.json"
+    },
+    {
+      "example": "../examples/core-accounts.json",
+      "schema": "accounts.schema.json"
+    },
+    {
+      "example": "../examples/core-periods.json",
+      "schema": "periods.schema.json"
+    },
+    {
+      "example": "../examples/core-entry-posted.json",
+      "schema": "entry.schema.json"
+    },
+    {
+      "example": "../examples/reversal-pair.json",
+      "schema": "reversal-pair.schema.json"
+    },
+    {
+      "example": "../examples/counterparty-open-item.json",
+      "schema": "counterparty-open-item.schema.json"
+    }
+  ]
+}
