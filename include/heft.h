@@ -154,6 +154,7 @@ bool    ledger_close_period(LedgerDB* h, int64_t book_id, int64_t period_id, con
 
 /* ── Journal Entries ───────────────────────────────────────── */
 
+/* description and metadata are nullable. Pass NULL when omitted. */
 int64_t ledger_create_draft(LedgerDB* h, int64_t book_id, const char* document_number, const char* transaction_date, const char* posting_date, const char* description, int64_t period_id, const char* metadata, const char* performed_by);
 bool    ledger_edit_draft(LedgerDB* h, int64_t entry_id, const char* document_number, const char* transaction_date, const char* posting_date, const char* description, const char* metadata, int64_t period_id, const char* performed_by);
 bool    ledger_edit_posted(LedgerDB* h, int64_t entry_id, const char* description, const char* metadata, const char* performed_by);
@@ -215,6 +216,7 @@ bool    ledger_transition_budget(LedgerDB* h, int64_t budget_id, const char* tar
 
 /* ── Open Items (AR/AP) ───────────────────────────────────── */
 
+/* due_date is nullable. Pass NULL when omitted. */
 int64_t ledger_create_open_item(LedgerDB* h, int64_t entry_line_id, int64_t counterparty_id, int64_t original_amount, const char* due_date, int64_t book_id, const char* performed_by);
 bool    ledger_allocate_payment(LedgerDB* h, int64_t open_item_id, int64_t amount, const char* performed_by);
 

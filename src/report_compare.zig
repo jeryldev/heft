@@ -32,11 +32,13 @@ fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeR
 
     var rows = std.ArrayListUnmanaged(ComparativeReportRow){};
 
+    // Bounded transitively by MAX_REPORT_ROWS because both inputs are report outputs.
     var prior_map = std.AutoHashMapUnmanaged(i64, usize){};
     for (prior.rows, 0..) |_, idx| {
         try prior_map.put(allocator, prior.rows[idx].account_id, idx);
     }
 
+    // Bounded transitively by MAX_REPORT_ROWS because both inputs are report outputs.
     var used_prior = std.AutoHashMapUnmanaged(i64, void){};
     for (current.rows) |crow| {
         var comp_row = std.mem.zeroes(ComparativeReportRow);

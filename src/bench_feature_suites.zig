@@ -524,8 +524,9 @@ fn benchAbiListOpenItems(sink: *usize, workload: *AbiBufferWorkload) !void {
 }
 
 fn benchAbiExportJournalEntries(sink: *usize, workload: *AbiBufferWorkload) !void {
-    var buf: [2 * 1024 * 1024]u8 = undefined;
-    const len = abi_buffers.ledger_export_journal_entries(&workload.handle, workload.book_id, "2026-01-01", "2026-12-31", &buf, @intCast(buf.len), 1);
+    const buf = try std.heap.c_allocator.alloc(u8, 2 * 1024 * 1024);
+    defer std.heap.c_allocator.free(buf);
+    const len = abi_buffers.ledger_export_journal_entries(&workload.handle, workload.book_id, "2026-01-01", "2026-12-31", buf.ptr, @intCast(buf.len), 1);
     if (len < 0) return error.InvalidInput;
     sink.* +%= @as(usize, @intCast(len));
 }

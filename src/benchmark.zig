@@ -624,14 +624,16 @@ fn benchExportChartOfAccounts(workload: *ReportWorkload) !void {
 }
 
 fn benchExportJournalEntries(workload: *ReportWorkload) !void {
-    var buf: [2 * 1024 * 1024]u8 = undefined;
-    const payload = try heft.export_mod.exportJournalEntries(workload.database, workload.book_id, "2026-01-01", "2026-12-31", &buf, .json);
+    const buf = try std.heap.c_allocator.alloc(u8, 2 * 1024 * 1024);
+    defer std.heap.c_allocator.free(buf);
+    const payload = try heft.export_mod.exportJournalEntries(workload.database, workload.book_id, "2026-01-01", "2026-12-31", buf, .json);
     bench_sink +%= payload.len;
 }
 
 fn benchExportAuditTrail(workload: *ReportWorkload) !void {
-    var buf: [2 * 1024 * 1024]u8 = undefined;
-    const payload = try heft.export_mod.exportAuditTrail(workload.database, workload.book_id, "2026-01-01", "2026-12-31", &buf, .json);
+    const buf = try std.heap.c_allocator.alloc(u8, 2 * 1024 * 1024);
+    defer std.heap.c_allocator.free(buf);
+    const payload = try heft.export_mod.exportAuditTrail(workload.database, workload.book_id, "2026-01-01", "2026-12-31", buf, .json);
     bench_sink +%= payload.len;
 }
 

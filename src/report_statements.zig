@@ -267,10 +267,9 @@ pub fn balanceSheetWithProjectedRE(database: db.Database, book_id: i64, as_of_da
                 }
 
                 const allocator = result.arena.allocator();
-                var rows_list = std.ArrayListUnmanaged(ReportRow){};
-                try rows_list.appendSlice(allocator, result.rows);
-                try rows_list.append(allocator, ni_row);
-                result.rows = try rows_list.toOwnedSlice(allocator);
+                const old_len = result.rows.len;
+                result.rows = try allocator.realloc(result.rows, old_len + 1);
+                result.rows[old_len] = ni_row;
             }
         }
     }

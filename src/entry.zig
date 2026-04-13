@@ -603,7 +603,9 @@ pub const Entry = struct {
             var update_stmt = try database.prepare("UPDATE ledger_entry_lines SET base_debit_amount = ?, base_credit_amount = ? WHERE id = ?;");
             defer update_stmt.finalize();
 
-            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.page_allocator);
+            // Bounded by the number of distinct accounts on one entry, which is
+            // small in normal use and still transitively bounded by engine rules.
+            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.c_allocator);
             defer cache_deltas.deinit();
 
             var total_base_debits: i64 = 0;
@@ -813,7 +815,9 @@ pub const Entry = struct {
             var line_stmt = try database.prepare("SELECT account_id, base_debit_amount, base_credit_amount FROM ledger_entry_lines WHERE entry_id = ?;");
             defer line_stmt.finalize();
             try line_stmt.bindInt(1, entry_id);
-            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.page_allocator);
+            // Bounded by the number of distinct accounts on one entry, which is
+            // small in normal use and still transitively bounded by engine rules.
+            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.c_allocator);
             defer cache_deltas.deinit();
 
             while (try line_stmt.step()) {
@@ -971,7 +975,9 @@ pub const Entry = struct {
             );
             defer dim_copy_stmt.finalize();
 
-            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.page_allocator);
+            // Bounded by the number of distinct accounts on one entry, which is
+            // small in normal use and still transitively bounded by engine rules.
+            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.c_allocator);
             defer cache_deltas.deinit();
 
             while (try read_stmt.step()) {

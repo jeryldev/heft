@@ -60,12 +60,18 @@ pub fn ledger_balance_sheet_auto(handle: ?*LedgerDB, book_id: i64, as_of_date: [
 }
 
 pub fn ledger_translate_report(source: ?*heft.report.ReportResult, closing_rate: i64, average_rate: i64) ?*heft.report.ReportResult {
-    const src = source orelse return null;
+    const src = source orelse {
+        common.setError(common.mapError(error.InvalidInput));
+        return null;
+    };
     const rates = heft.report.TranslationRates{
         .closing_rate = closing_rate,
         .average_rate = average_rate,
     };
-    return heft.report.translateReportResult(src, rates) catch return null;
+    return heft.report.translateReportResult(src, rates) catch |err| {
+        common.setError(common.mapError(err));
+        return null;
+    };
 }
 
 pub fn ledger_general_ledger(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8) ?*heft.report.LedgerResult {
@@ -223,7 +229,10 @@ pub fn ledger_cash_flow_indirect(handle: ?*LedgerDB, book_id: i64, start_date: [
         common.setError(common.mapError(error.InvalidInput));
         return null;
     };
-    return heft.classification.cashFlowStatementIndirect(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), classification_id) catch null;
+    return heft.classification.cashFlowStatementIndirect(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), classification_id) catch |err| {
+        common.setError(common.mapError(err));
+        return null;
+    };
 }
 
 pub fn ledger_free_cash_flow_indirect(result: ?*heft.classification.CashFlowIndirectResult) void {
@@ -235,5 +244,8 @@ pub fn ledger_classified_trial_balance(handle: ?*LedgerDB, classification_id: i6
         common.setError(common.mapError(error.InvalidInput));
         return null;
     };
-    return heft.classification.classifiedTrialBalance(h.sqlite, classification_id, std.mem.span(as_of_date)) catch null;
+    return heft.classification.classifiedTrialBalance(h.sqlite, classification_id, std.mem.span(as_of_date)) catch |err| {
+        common.setError(common.mapError(err));
+        return null;
+    };
 }
