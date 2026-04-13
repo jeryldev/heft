@@ -7,22 +7,22 @@ standard from the accounting semantics that Heft already implements.
 
 Entry points:
 
-- [Introducing OBLE](</Users/jeryldev/code/zig_projects/heft/docs/oble/introduction.md>)
-- [Glossary](</Users/jeryldev/code/zig_projects/heft/docs/oble/glossary.md>)
+- [Introducing OBLE](introduction.md)
+- [Glossary](glossary.md)
 
 Current draft set:
 
-1. [OBLE-0000 Vision](</Users/jeryldev/code/zig_projects/heft/docs/oble/0000-vision.md>)
-2. [OBLE-0001 Core Model](</Users/jeryldev/code/zig_projects/heft/docs/oble/0001-core-model.md>)
-3. [OBLE-0002 Lifecycle and Invariants](</Users/jeryldev/code/zig_projects/heft/docs/oble/0002-lifecycle-invariants.md>)
-4. [OBLE-0003 Counterparties and Subledgers](</Users/jeryldev/code/zig_projects/heft/docs/oble/0003-counterparties-subledgers.md>)
-5. [OBLE-0004 Serialization and Conformance](</Users/jeryldev/code/zig_projects/heft/docs/oble/0004-serialization-conformance.md>)
-6. [OBLE-0005 Heft Mapping](</Users/jeryldev/code/zig_projects/heft/docs/oble/0005-heft-mapping.md>)
-7. [OBLE-0006 Multi-Currency Semantics](</Users/jeryldev/code/zig_projects/heft/docs/oble/0006-multi-currency-semantics.md>)
-8. [OBLE-0007 Close and Reopen Profile](</Users/jeryldev/code/zig_projects/heft/docs/oble/0007-close-reopen-profile.md>)
-9. [OBLE-0008 Designations and Policy Profiles](</Users/jeryldev/code/zig_projects/heft/docs/oble/0008-designations-and-policy-profiles.md>)
-10. [Conformance Checklist](</Users/jeryldev/code/zig_projects/heft/docs/oble/conformance-checklist.md>)
-11. [Examples](</Users/jeryldev/code/zig_projects/heft/docs/oble/examples/README.md>)
+1. [OBLE-0000 Vision](0000-vision.md)
+2. [OBLE-0001 Core Model](0001-core-model.md)
+3. [OBLE-0002 Lifecycle and Invariants](0002-lifecycle-invariants.md)
+4. [OBLE-0003 Counterparties and Subledgers](0003-counterparties-subledgers.md)
+5. [OBLE-0004 Serialization and Conformance](0004-serialization-conformance.md)
+6. [OBLE-0005 Heft Mapping](0005-heft-mapping.md)
+7. [OBLE-0006 Multi-Currency Semantics](0006-multi-currency-semantics.md)
+8. [OBLE-0007 Close and Reopen Profile](0007-close-reopen-profile.md)
+9. [OBLE-0008 Designations and Policy Profiles](0008-designations-and-policy-profiles.md)
+10. [Conformance Checklist](conformance-checklist.md)
+11. [Examples](examples/README.md)
 
 Intended reading order:
 

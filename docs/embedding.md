@@ -53,7 +53,7 @@ Main modules are exported there, including:
 
 ## C ABI entry point
 
-Use [include/heft.h](/Users/jeryldev/code/zig_projects/heft/include/heft.h).
+Use [include/heft.h](../include/heft.h).
 
 The C ABI gives you:
 

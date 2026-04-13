@@ -108,21 +108,21 @@ Useful benchmark groups:
 Heft has two main entry points:
 
 - Zig API via `src/root.zig`
-- C ABI via [include/heft.h](/Users/jeryldev/code/zig_projects/heft/include/heft.h)
+- C ABI via [include/heft.h](include/heft.h)
 
-The C ABI entry implementation lives in [src/main.zig](/Users/jeryldev/code/zig_projects/heft/src/main.zig).
+The C ABI entry implementation lives in [src/main.zig](src/main.zig).
 
 ## Docs
 
-- [Architecture](/Users/jeryldev/code/zig_projects/heft/docs/architecture.md)
-- [Book Designations](/Users/jeryldev/code/zig_projects/heft/docs/designations.md)
-- [Accounting Lifecycle](/Users/jeryldev/code/zig_projects/heft/docs/lifecycle.md)
-- [Embedding Guide](/Users/jeryldev/code/zig_projects/heft/docs/embedding.md)
-- [Benchmark Guide](/Users/jeryldev/code/zig_projects/heft/docs/benchmarks.md)
-- [Performance Matrix](/Users/jeryldev/code/zig_projects/heft/docs/performance-matrix.md)
-- [Stability Statement](/Users/jeryldev/code/zig_projects/heft/docs/stability.md)
-- [v0.1.1 Release Notes](/Users/jeryldev/code/zig_projects/heft/docs/releases/v0.1.1.md)
-- [Release Checklist](/Users/jeryldev/code/zig_projects/heft/RELEASE.md)
+- [Architecture](docs/architecture.md)
+- [Book Designations](docs/designations.md)
+- [Accounting Lifecycle](docs/lifecycle.md)
+- [Embedding Guide](docs/embedding.md)
+- [Benchmark Guide](docs/benchmarks.md)
+- [Performance Matrix](docs/performance-matrix.md)
+- [Stability Statement](docs/stability.md)
+- [v0.1.1 Release Notes](docs/releases/v0.1.1.md)
+- [Release Checklist](RELEASE.md)
 
 ## Release posture
 
@@ -174,17 +174,17 @@ The codebase is strongest in:
 
 The main maintainability hotspots are:
 
-- [src/query_impl.zig](/Users/jeryldev/code/zig_projects/heft/src/query_impl.zig)
-- [src/report_impl.zig](/Users/jeryldev/code/zig_projects/heft/src/report_impl.zig)
-- [src/schema.zig](/Users/jeryldev/code/zig_projects/heft/src/schema.zig)
+- [src/query_impl.zig](src/query_impl.zig)
+- [src/report_impl.zig](src/report_impl.zig)
+- [src/schema.zig](src/schema.zig)
 
 The current ABI root has already been split into focused modules:
 
-- [src/abi_common.zig](/Users/jeryldev/code/zig_projects/heft/src/abi_common.zig)
-- [src/abi_core.zig](/Users/jeryldev/code/zig_projects/heft/src/abi_core.zig)
-- [src/abi_buffers.zig](/Users/jeryldev/code/zig_projects/heft/src/abi_buffers.zig)
-- [src/abi_reports.zig](/Users/jeryldev/code/zig_projects/heft/src/abi_reports.zig)
-- [src/abi_integration_test.zig](/Users/jeryldev/code/zig_projects/heft/src/abi_integration_test.zig)
+- [src/abi_common.zig](src/abi_common.zig)
+- [src/abi_core.zig](src/abi_core.zig)
+- [src/abi_buffers.zig](src/abi_buffers.zig)
+- [src/abi_reports.zig](src/abi_reports.zig)
+- [src/abi_integration_test.zig](src/abi_integration_test.zig)
 
 ## License
 
