@@ -318,22 +318,6 @@ pub const Entry = struct {
         return id;
     }
 
-    /// Internal fast path for engine-generated entries such as close/opening/revaluation.
-    /// Callers must only use this when the draft entry, account, and book ownership
-    /// have already been validated by surrounding engine logic.
-    pub fn addLineFast(database: db.Database, entry_id: i64, entry_book_id: i64, line_number: i32, debit_amount: i64, credit_amount: i64, transaction_currency: []const u8, fx_rate: i64, account_id: i64, counterparty_id: ?i64, description: ?[]const u8, performed_by: []const u8) !i64 {
-        if (debit_amount < 0 or credit_amount < 0) return error.InvalidAmount;
-        if ((debit_amount > 0 and credit_amount > 0) or (debit_amount == 0 and credit_amount == 0)) return error.InvalidAmount;
-
-        const owns_txn = try database.beginTransactionIfNeeded();
-        errdefer if (owns_txn) database.rollback();
-
-        const id = try insertLine(database, entry_id, entry_book_id, line_number, debit_amount, credit_amount, transaction_currency, fx_rate, account_id, counterparty_id, description, performed_by);
-
-        if (owns_txn) try database.commit();
-        return id;
-    }
-
     pub fn removeLine(database: db.Database, line_id: i64, performed_by: []const u8) !void {
         var entry_book_id: i64 = 0;
 
@@ -2595,6 +2579,20 @@ test "editLine rejects nonexistent line" {
     try std.testing.expectError(error.NotFound, result);
 }
 
+test "editLine handles direct i64 boundary values safely" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-BOUNDARY", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    const line_id = try Entry.addLine(database, 1, 1, 1_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+
+    try Entry.editLine(database, line_id, std.math.maxInt(i64), 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try std.testing.expectError(
+        error.InvalidAmount,
+        Entry.editLine(database, line_id, std.math.minInt(i64), 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin"),
+    );
+}
+
 test "editLine writes rich audit log with field names and old/new values" {
     const database = try setupTestDb();
     defer database.close();
@@ -2735,6 +2733,20 @@ test "post rejects entry when FX computation overflows i64" {
 
     const result = Entry.post(database, 1, "admin");
     try std.testing.expectError(error.AmountOverflow, result);
+}
+
+test "addLine handles direct i64 boundary values safely" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try Entry.createDraft(database, 1, "JE-BOUNDARY", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+
+    const line_id = try Entry.addLine(database, 1, 1, std.math.maxInt(i64), 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try std.testing.expect(line_id > 0);
+    try std.testing.expectError(
+        error.InvalidAmount,
+        Entry.addLine(database, 1, 2, std.math.minInt(i64), 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin"),
+    );
 }
 
 test "post entries in two periods: cache independent per period" {
@@ -3431,7 +3443,7 @@ test "post: stale marking only affects future periods" {
     {
         var reset_stmt = try database.prepare("UPDATE ledger_account_balances SET is_stale = 0;");
         defer reset_stmt.finalize();
-        _ = reset_stmt.step() catch {};
+        _ = try reset_stmt.step();
     }
 
     // Post in Jan (period 1, end_date = 2026-01-31) — should mark Feb stale but not Dec

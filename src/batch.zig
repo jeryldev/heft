@@ -6,17 +6,22 @@ pub const BatchResult = struct {
     succeeded: u32,
     failed: u32,
     first_error_index: ?u32,
+    first_error: ?anyerror,
 };
 
 pub fn batchPost(database: db.Database, entry_ids: []const i64, performed_by: []const u8) BatchResult {
     var succeeded: u32 = 0;
     var failed: u32 = 0;
     var first_error_index: ?u32 = null;
+    var first_error: ?anyerror = null;
 
     for (entry_ids, 0..) |eid, i| {
-        entry_mod.Entry.post(database, eid, performed_by) catch {
+        entry_mod.Entry.post(database, eid, performed_by) catch |err| {
             failed += 1;
-            if (first_error_index == null) first_error_index = @intCast(i);
+            if (first_error_index == null) {
+                first_error_index = @intCast(i);
+                first_error = err;
+            }
             continue;
         };
         succeeded += 1;
@@ -26,6 +31,7 @@ pub fn batchPost(database: db.Database, entry_ids: []const i64, performed_by: []
         .succeeded = succeeded,
         .failed = failed,
         .first_error_index = first_error_index,
+        .first_error = first_error,
     };
 }
 
@@ -33,11 +39,15 @@ pub fn batchVoid(database: db.Database, entry_ids: []const i64, reason: []const 
     var succeeded: u32 = 0;
     var failed: u32 = 0;
     var first_error_index: ?u32 = null;
+    var first_error: ?anyerror = null;
 
     for (entry_ids, 0..) |eid, i| {
-        entry_mod.Entry.voidEntry(database, eid, reason, performed_by) catch {
+        entry_mod.Entry.voidEntry(database, eid, reason, performed_by) catch |err| {
             failed += 1;
-            if (first_error_index == null) first_error_index = @intCast(i);
+            if (first_error_index == null) {
+                first_error_index = @intCast(i);
+                first_error = err;
+            }
             continue;
         };
         succeeded += 1;
@@ -47,6 +57,7 @@ pub fn batchVoid(database: db.Database, entry_ids: []const i64, reason: []const 
         .succeeded = succeeded,
         .failed = failed,
         .first_error_index = first_error_index,
+        .first_error = first_error,
     };
 }
 
@@ -132,6 +143,7 @@ test "batchPost all 3 succeed" {
     try std.testing.expectEqual(@as(u32, 3), result.succeeded);
     try std.testing.expectEqual(@as(u32, 0), result.failed);
     try std.testing.expect(result.first_error_index == null);
+    try std.testing.expect(result.first_error == null);
 }
 
 test "batchPost partial failure" {
@@ -151,6 +163,7 @@ test "batchPost partial failure" {
     try std.testing.expectEqual(@as(u32, 2), result.succeeded);
     try std.testing.expectEqual(@as(u32, 1), result.failed);
     try std.testing.expectEqual(@as(u32, 1), result.first_error_index.?);
+    try std.testing.expectEqual(error.TooFewLines, result.first_error.?);
 }
 
 test "batchPost empty" {
@@ -163,6 +176,7 @@ test "batchPost empty" {
     try std.testing.expectEqual(@as(u32, 0), result.succeeded);
     try std.testing.expectEqual(@as(u32, 0), result.failed);
     try std.testing.expect(result.first_error_index == null);
+    try std.testing.expect(result.first_error == null);
 }
 
 test "batchVoid all succeed" {
@@ -182,6 +196,7 @@ test "batchVoid all succeed" {
     try std.testing.expectEqual(@as(u32, 3), result.succeeded);
     try std.testing.expectEqual(@as(u32, 0), result.failed);
     try std.testing.expect(result.first_error_index == null);
+    try std.testing.expect(result.first_error == null);
 }
 
 test "batchVoid partial — one already voided" {
@@ -203,6 +218,7 @@ test "batchVoid partial — one already voided" {
     try std.testing.expectEqual(@as(u32, 2), result.succeeded);
     try std.testing.expectEqual(@as(u32, 1), result.failed);
     try std.testing.expectEqual(@as(u32, 1), result.first_error_index.?);
+    try std.testing.expectEqual(error.InvalidTransition, result.first_error.?);
 }
 
 test "parseIdArray valid inputs" {

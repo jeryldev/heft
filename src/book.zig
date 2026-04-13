@@ -838,19 +838,27 @@ pub const Book = struct {
         if (owns_txn) try database.commit();
     }
 
-    pub fn getFyStartDate(as_of_date: []const u8, fy_start_month: i32) [10]u8 {
+    pub fn getFyStartDate(as_of_date: []const u8, fy_start_month: i32) ![10]u8 {
+        if (as_of_date.len < 10) return error.InvalidInput;
+        if (fy_start_month < 1 or fy_start_month > 12) return error.InvalidInput;
+        if (as_of_date[4] != '-' or as_of_date[7] != '-') return error.InvalidInput;
+
         var result: [10]u8 = "0000-00-01".*;
         var year: i32 = 0;
         for (as_of_date[0..4]) |c| {
+            if (c < '0' or c > '9') return error.InvalidInput;
             year = year * 10 + @as(i32, c - '0');
         }
         var month: i32 = 0;
         for (as_of_date[5..7]) |c| {
+            if (c < '0' or c > '9') return error.InvalidInput;
             month = month * 10 + @as(i32, c - '0');
         }
+        if (month < 1 or month > 12) return error.InvalidInput;
         if (fy_start_month > 1 and month < fy_start_month) {
             year -= 1;
         }
+        if (year < 1) return error.InvalidInput;
         const uy: u32 = @intCast(year);
         const um: u32 = @intCast(fy_start_month);
         result[0] = @intCast('0' + (uy / 1000) % 10);
@@ -1756,28 +1764,32 @@ test "setFyStartMonth: rejects archived book" {
 }
 
 test "getFyStartDate: calendar year (Jan start)" {
-    const result = Book.getFyStartDate("2026-06-15", 1);
+    const result = try Book.getFyStartDate("2026-06-15", 1);
     try std.testing.expect(std.mem.eql(u8, &result, "2026-01-01"));
 }
 
 test "getFyStartDate: India April start, date in FY" {
-    const result = Book.getFyStartDate("2026-06-15", 4);
+    const result = try Book.getFyStartDate("2026-06-15", 4);
     try std.testing.expect(std.mem.eql(u8, &result, "2026-04-01"));
 }
 
 test "getFyStartDate: India April start, date before April" {
-    const result = Book.getFyStartDate("2026-02-15", 4);
+    const result = try Book.getFyStartDate("2026-02-15", 4);
     try std.testing.expect(std.mem.eql(u8, &result, "2025-04-01"));
 }
 
 test "getFyStartDate: Australia July start, date in FY" {
-    const result = Book.getFyStartDate("2026-09-30", 7);
+    const result = try Book.getFyStartDate("2026-09-30", 7);
     try std.testing.expect(std.mem.eql(u8, &result, "2026-07-01"));
 }
 
 test "getFyStartDate: Australia July start, date before July" {
-    const result = Book.getFyStartDate("2026-03-31", 7);
+    const result = try Book.getFyStartDate("2026-03-31", 7);
     try std.testing.expect(std.mem.eql(u8, &result, "2025-07-01"));
+}
+
+test "getFyStartDate rejects year underflow" {
+    try std.testing.expectError(error.InvalidInput, Book.getFyStartDate("0000-01-15", 4));
 }
 
 // ── Entity Type tests (Sprint A.1) ──────────────────────────────

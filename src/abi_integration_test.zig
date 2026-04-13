@@ -150,6 +150,113 @@ fn cleanupTestFile(name: [*:0]const u8) void {
     cwd.deleteFile(shm_name) catch {};
 }
 
+const AbiFeatureScenario = struct {
+    book_id: i64,
+    dec_2025_id: i64,
+    jan_2026_id: i64,
+    feb_2026_id: i64,
+    cash_id: i64,
+    ar_id: i64,
+    capital_id: i64,
+    retained_earnings_id: i64,
+    income_summary_id: i64,
+    opening_balance_id: i64,
+    revenue_id: i64,
+    customer_group_id: i64,
+    customer_id: i64,
+    cash_flow_classification_id: i64,
+    trial_balance_classification_id: i64,
+    dimension_id: i64,
+    dimension_value_id: i64,
+    invoice_entry_id: i64,
+    invoice_line_id: i64,
+};
+
+fn setupAbiFeatureScenario(handle: *abi.LedgerDB) !AbiFeatureScenario {
+    const book_id = ledger_create_book(handle, "Feature Test", "PHP", 2, "admin");
+    try std.testing.expect(book_id > 0);
+
+    const cash_id = ledger_create_account(handle, book_id, "1000", "Cash", "asset", 0, "admin");
+    const ar_id = ledger_create_account(handle, book_id, "1100", "Accounts Receivable", "asset", 0, "admin");
+    const capital_id = ledger_create_account(handle, book_id, "3000", "Capital", "equity", 0, "admin");
+    const retained_earnings_id = ledger_create_account(handle, book_id, "3100", "Retained Earnings", "equity", 0, "admin");
+    const income_summary_id = ledger_create_account(handle, book_id, "3200", "Income Summary", "equity", 0, "admin");
+    const opening_balance_id = ledger_create_account(handle, book_id, "3300", "Opening Balance Equity", "equity", 0, "admin");
+    const revenue_id = ledger_create_account(handle, book_id, "4000", "Revenue", "revenue", 0, "admin");
+    try std.testing.expect(cash_id > 0 and ar_id > 0 and capital_id > 0 and retained_earnings_id > 0 and income_summary_id > 0 and opening_balance_id > 0 and revenue_id > 0);
+
+    try std.testing.expect(ledger_set_retained_earnings_account(handle, book_id, retained_earnings_id, "admin"));
+    try std.testing.expect(ledger_set_income_summary_account(handle, book_id, income_summary_id, "admin"));
+    try std.testing.expect(ledger_set_opening_balance_account(handle, book_id, opening_balance_id, "admin"));
+    try std.testing.expect(ledger_validate_opening_balance(handle, book_id));
+
+    const dec_2025_id = ledger_create_period(handle, book_id, "Dec 2025", 12, 2025, "2025-12-01", "2025-12-31", "regular", "admin");
+    const jan_2026_id = ledger_create_period(handle, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_2026_id = ledger_create_period(handle, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    try std.testing.expect(dec_2025_id > 0 and jan_2026_id > 0 and feb_2026_id > 0);
+
+    const customer_group_id = ledger_create_subledger_group(handle, book_id, "AR Customers", "customer", 1, ar_id, "admin");
+    const customer_id = ledger_create_subledger_account(handle, book_id, "C001", "Customer ABC", "customer", customer_group_id, "admin");
+    try std.testing.expect(customer_group_id > 0 and customer_id > 0);
+
+    const trial_balance_classification_id = ledger_create_classification(handle, book_id, "Trial Balance", "trial_balance", "admin");
+    const tb_assets = ledger_add_group_node(handle, trial_balance_classification_id, "Assets", 0, 1, "admin");
+    const tb_equity = ledger_add_group_node(handle, trial_balance_classification_id, "Equity", 0, 2, "admin");
+    const tb_revenue = ledger_add_group_node(handle, trial_balance_classification_id, "Revenue", 0, 3, "admin");
+    _ = ledger_add_account_node(handle, trial_balance_classification_id, cash_id, tb_assets, 1, "admin");
+    _ = ledger_add_account_node(handle, trial_balance_classification_id, ar_id, tb_assets, 2, "admin");
+    _ = ledger_add_account_node(handle, trial_balance_classification_id, capital_id, tb_equity, 1, "admin");
+    _ = ledger_add_account_node(handle, trial_balance_classification_id, retained_earnings_id, tb_equity, 2, "admin");
+    _ = ledger_add_account_node(handle, trial_balance_classification_id, revenue_id, tb_revenue, 1, "admin");
+
+    const cash_flow_classification_id = ledger_create_classification(handle, book_id, "Cash Flow", "cash_flow", "admin");
+    const cf_operating = ledger_add_group_node(handle, cash_flow_classification_id, "Operating Activities", 0, 1, "admin");
+    _ = ledger_add_account_node(handle, cash_flow_classification_id, cash_id, cf_operating, 1, "admin");
+
+    const dimension_id = ledger_create_dimension(handle, book_id, "VAT", "tax_code", "admin");
+    const dimension_value_id = ledger_create_dimension_value(handle, dimension_id, "VAT12", "VAT 12%", "admin");
+    try std.testing.expect(dimension_id > 0 and dimension_value_id > 0);
+
+    const opening_entry_id = ledger_create_draft(handle, book_id, "OB-2025-001", "2025-12-01", "2025-12-01", "Opening balance", dec_2025_id, null, "admin");
+    _ = ledger_add_line(handle, opening_entry_id, 1, 10_000_000_000_00, 0, "PHP", 10_000_000_000, cash_id, 0, null, "admin");
+    _ = ledger_add_line(handle, opening_entry_id, 2, 0, 10_000_000_000_00, "PHP", 10_000_000_000, capital_id, 0, null, "admin");
+    try std.testing.expect(ledger_post_entry(handle, opening_entry_id, "admin"));
+
+    const invoice_entry_id = ledger_create_draft(handle, book_id, "INV-2026-001", "2026-01-10", "2026-01-10", "Invoice", jan_2026_id, null, "admin");
+    const invoice_line_id = ledger_add_line(handle, invoice_entry_id, 1, 5_000_000_000_00, 0, "PHP", 10_000_000_000, ar_id, customer_id, "Receivable", "admin");
+    _ = ledger_add_line(handle, invoice_entry_id, 2, 0, 5_000_000_000_00, "PHP", 10_000_000_000, revenue_id, 0, "Revenue", "admin");
+    try std.testing.expect(invoice_line_id > 0);
+    try std.testing.expect(ledger_post_entry(handle, invoice_entry_id, "admin"));
+    try std.testing.expect(ledger_assign_line_dimension(handle, invoice_line_id, dimension_value_id, "admin"));
+
+    const payment_entry_id = ledger_create_draft(handle, book_id, "RCPT-2026-001", "2026-01-20", "2026-01-20", "Payment", jan_2026_id, null, "admin");
+    _ = ledger_add_line(handle, payment_entry_id, 1, 2_000_000_000_00, 0, "PHP", 10_000_000_000, cash_id, 0, "Cash receipt", "admin");
+    _ = ledger_add_line(handle, payment_entry_id, 2, 0, 2_000_000_000_00, "PHP", 10_000_000_000, ar_id, customer_id, "AR settlement", "admin");
+    try std.testing.expect(ledger_post_entry(handle, payment_entry_id, "admin"));
+
+    return .{
+        .book_id = book_id,
+        .dec_2025_id = dec_2025_id,
+        .jan_2026_id = jan_2026_id,
+        .feb_2026_id = feb_2026_id,
+        .cash_id = cash_id,
+        .ar_id = ar_id,
+        .capital_id = capital_id,
+        .retained_earnings_id = retained_earnings_id,
+        .income_summary_id = income_summary_id,
+        .opening_balance_id = opening_balance_id,
+        .revenue_id = revenue_id,
+        .customer_group_id = customer_group_id,
+        .customer_id = customer_id,
+        .cash_flow_classification_id = cash_flow_classification_id,
+        .trial_balance_classification_id = trial_balance_classification_id,
+        .dimension_id = dimension_id,
+        .dimension_value_id = dimension_value_id,
+        .invoice_entry_id = invoice_entry_id,
+        .invoice_line_id = invoice_line_id,
+    };
+}
+
 test "ledger_version returns 0.0.1" {
     const v = std.mem.span(ledger_version());
     try std.testing.expectEqualStrings(VERSION, v);
@@ -539,6 +646,15 @@ test "C ABI: void entry through C boundary" {
         _ = ledger_post_entry(h, entry_id, "admin");
 
         try std.testing.expect(ledger_void_entry(h, entry_id, "Error", "admin"));
+
+        var stmt = try h.sqlite.prepare(
+            \\SELECT COUNT(*) FROM ledger_audit_log
+            \\WHERE entity_type = 'entry' AND entity_id = ? AND action = 'void';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, entry_id);
+        _ = try stmt.step();
+        try std.testing.expect(stmt.columnInt(0) >= 1);
     }
 }
 
@@ -562,6 +678,16 @@ test "C ABI: reverse entry through C boundary" {
 
         const reversal_id = ledger_reverse_entry(h, entry_id, "Accrual reversal", "2026-01-31", 0, "admin");
         try std.testing.expect(reversal_id > 0);
+
+        var stmt = try h.sqlite.prepare(
+            \\SELECT COUNT(*) FROM ledger_audit_log
+            \\WHERE entity_type = 'entry' AND entity_id IN (?, ?) AND action IN ('reverse', 'create', 'post');
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, entry_id);
+        try stmt.bindInt(2, reversal_id);
+        _ = try stmt.step();
+        try std.testing.expect(stmt.columnInt(0) >= 3);
     }
 }
 
@@ -1663,6 +1789,95 @@ test "C ABI: export audit trail via C boundary" {
     try std.testing.expect(len > 0);
     const json = buf[0..@intCast(len)];
     try std.testing.expect(std.mem.indexOf(u8, json, "create") != null);
+}
+
+test "C ABI: round 2 feature coverage happy paths" {
+    defer cleanupTestFile("test-cabi-feature-coverage.ledger");
+    const handle = ledger_open("test-cabi-feature-coverage.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const s = try setupAbiFeatureScenario(handle);
+
+    const open_item_id = ledger_create_open_item(handle, s.invoice_line_id, s.customer_id, 5_000_000_000_00, "2026-02-15", s.book_id, "admin");
+    try std.testing.expect(open_item_id > 0);
+    try std.testing.expect(ledger_allocate_payment(handle, open_item_id, 2_000_000_000_00, "admin"));
+
+    var buf: [16384]u8 = undefined;
+
+    const open_items_len = ledger_list_open_items(handle, s.customer_id, false, &buf, 16384, 1);
+    try std.testing.expect(open_items_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(open_items_len)], "\"remaining_amount\":300000000000") != null);
+
+    const cf_indirect = ledger_cash_flow_indirect(handle, s.book_id, "2026-01-01", "2026-01-31", s.cash_flow_classification_id);
+    try std.testing.expect(cf_indirect != null);
+    if (cf_indirect) |result| {
+        defer ledger_free_cash_flow_indirect(result);
+        try std.testing.expect(result.adjustments.len > 0);
+    }
+
+    const classified_tb = ledger_classified_trial_balance(handle, s.trial_balance_classification_id, "2026-01-31");
+    try std.testing.expect(classified_tb != null);
+    if (classified_tb) |result| {
+        defer ledger_free_classified_result(result);
+        try std.testing.expect(result.rows.len > 0);
+    }
+
+    const dim_rollup_len = ledger_dimension_summary_rollup(handle, s.book_id, s.dimension_id, "2026-01-01", "2026-01-31", &buf, 16384, 1);
+    try std.testing.expect(dim_rollup_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(dim_rollup_len)], "VAT12") != null);
+
+    const counterparty_ledger_len = ledger_counterparty_ledger(handle, s.book_id, s.customer_id, 0, "2026-01-01", "2026-01-31", 0, 100, 0, &buf, 16384, 1);
+    try std.testing.expect(counterparty_ledger_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparty_ledger_len)], "INV-2026-001") != null);
+
+    const transactions_len = ledger_list_transactions(handle, s.book_id, 0, s.customer_id, "2026-01-01", "2026-01-31", 0, 100, 0, &buf, 16384, 1);
+    try std.testing.expect(transactions_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(transactions_len)], "RCPT-2026-001") != null);
+
+    const subledger_recon_len = ledger_subledger_reconciliation(handle, s.book_id, s.customer_group_id, "2026-01-31", &buf, 16384, 1);
+    try std.testing.expect(subledger_recon_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(subledger_recon_len)], "\"difference\":0") != null);
+
+    const aged_len = ledger_aged_subledger(handle, s.book_id, s.customer_group_id, "2026-01-31", 0, 100, 0, &buf, 16384, 1);
+    try std.testing.expect(aged_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(aged_len)], "Customer ABC") != null);
+
+    const export_journal_len = ledger_export_journal_entries(handle, s.book_id, "2025-12-01", "2026-12-31", &buf, 16384, 1);
+    try std.testing.expect(export_journal_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(export_journal_len)], "INV-2026-001") != null);
+
+    const export_periods_len = ledger_export_periods(handle, s.book_id, &buf, 16384, 1);
+    try std.testing.expect(export_periods_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(export_periods_len)], "Jan 2026") != null);
+
+    const export_subledger_len = ledger_export_subledger(handle, s.book_id, &buf, 16384, 1);
+    try std.testing.expect(export_subledger_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(export_subledger_len)], "Customer ABC") != null);
+
+    const export_metadata_len = ledger_export_book_metadata(handle, s.book_id, &buf, 16384, 1);
+    try std.testing.expect(export_metadata_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(export_metadata_len)], "Feature Test") != null);
+
+    const is_comp = ledger_income_statement_comparative(handle, s.book_id, "2026-01-01", "2026-01-31", "2025-12-01", "2025-12-31");
+    try std.testing.expect(is_comp != null);
+    if (is_comp) |result| {
+        defer ledger_free_comparative_result(result);
+        try std.testing.expect(result.rows.len > 0);
+    }
+
+    const bs_comp = ledger_balance_sheet_comparative(handle, s.book_id, "2026-01-31", "2025-12-31", "2026-01-01");
+    try std.testing.expect(bs_comp != null);
+    if (bs_comp) |result| {
+        defer ledger_free_comparative_result(result);
+        try std.testing.expect(result.rows.len > 0);
+    }
+
+    const tbm_comp = ledger_trial_balance_movement_comparative(handle, s.book_id, "2026-01-01", "2026-01-31", "2025-12-01", "2025-12-31");
+    try std.testing.expect(tbm_comp != null);
+    if (tbm_comp) |result| {
+        defer ledger_free_comparative_result(result);
+        try std.testing.expect(result.rows.len > 0);
+    }
 }
 
 test "C ABI: ledger_transition_budget via C boundary" {

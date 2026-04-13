@@ -195,7 +195,7 @@ pub fn balanceSheetAutoWithProjectedRE(database: db.Database, book_id: i64, as_o
         if (!has_row) return error.NotFound;
         fy_month = stmt.columnInt(0);
     }
-    const fy_start = book_mod.Book.getFyStartDate(as_of_date, fy_month);
+    const fy_start = try book_mod.Book.getFyStartDate(as_of_date, fy_month);
     return balanceSheetWithProjectedRE(database, book_id, as_of_date, &fy_start);
 }
 

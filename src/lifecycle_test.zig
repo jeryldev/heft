@@ -35,6 +35,85 @@ fn findEquityRow(rows: []const report_mod.EquityRow, account_id: i64) ?report_mo
     return null;
 }
 
+test "LIFECYCLE: close reopen re-close regenerates opening entry" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Lifecycle", "PHP", 2, "controller");
+    const cash = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "controller");
+    const capital = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "controller");
+    const retained_earnings = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "controller");
+    const income_summary = try account_mod.Account.create(database, book_id, "3200", "Income Summary", .equity, false, "controller");
+    const opening_balance = try account_mod.Account.create(database, book_id, "3300", "Opening Balance Equity", .equity, false, "controller");
+    const revenue = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "controller");
+
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, retained_earnings, "controller");
+    try book_mod.Book.setIncomeSummaryAccount(database, book_id, income_summary, "controller");
+    try book_mod.Book.setOpeningBalanceAccount(database, book_id, opening_balance, "controller");
+
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "controller");
+    const feb_id = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "controller");
+
+    const ob_entry = try entry_mod.Entry.createDraft(database, book_id, "OB-001", "2026-01-01", "2026-01-01", null, jan_id, null, "controller");
+    _ = try entry_mod.Entry.addLine(database, ob_entry, 1, 10_000_000_000_00, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "controller");
+    _ = try entry_mod.Entry.addLine(database, ob_entry, 2, 0, 10_000_000_000_00, "PHP", money.FX_RATE_SCALE, capital, null, null, "controller");
+    try entry_mod.Entry.post(database, ob_entry, "controller");
+
+    const sales_entry = try entry_mod.Entry.createDraft(database, book_id, "REV-001", "2026-01-15", "2026-01-15", null, jan_id, null, "controller");
+    _ = try entry_mod.Entry.addLine(database, sales_entry, 1, 2_500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "controller");
+    _ = try entry_mod.Entry.addLine(database, sales_entry, 2, 0, 2_500_000_000_00, "PHP", money.FX_RATE_SCALE, revenue, null, null, "controller");
+    try entry_mod.Entry.post(database, sales_entry, "controller");
+
+    try close_mod.closePeriod(database, book_id, jan_id, "controller");
+
+    var first_opening_id: i64 = 0;
+    {
+        var stmt = try database.prepare(
+            \\SELECT id FROM ledger_entries
+            \\WHERE book_id = ? AND period_id = ? AND entry_type = 'opening' AND status = 'posted';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, feb_id);
+        _ = try stmt.step();
+        first_opening_id = stmt.columnInt64(0);
+        try std.testing.expect(first_opening_id > 0);
+    }
+
+    try period_mod.Period.transitionWithReason(database, jan_id, .open, "Reopen Jan after adjustment", "controller");
+
+    {
+        var stmt = try database.prepare("SELECT status FROM ledger_entries WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, first_opening_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("void", stmt.columnText(0).?);
+    }
+
+    const adj_entry = try entry_mod.Entry.createDraft(database, book_id, "ADJ-001", "2026-01-31", "2026-01-31", null, jan_id, null, "controller");
+    _ = try entry_mod.Entry.addLine(database, adj_entry, 1, 500_000_000_00, 0, "PHP", money.FX_RATE_SCALE, cash, null, null, "controller");
+    _ = try entry_mod.Entry.addLine(database, adj_entry, 2, 0, 500_000_000_00, "PHP", money.FX_RATE_SCALE, revenue, null, null, "controller");
+    try entry_mod.Entry.post(database, adj_entry, "controller");
+
+    try close_mod.closePeriod(database, book_id, jan_id, "controller");
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT COUNT(*), COUNT(CASE WHEN status = 'posted' THEN 1 END), COUNT(CASE WHEN status = 'void' THEN 1 END)
+            \\FROM ledger_entries
+            \\WHERE book_id = ? AND period_id = ? AND entry_type = 'opening';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, feb_id);
+        _ = try stmt.step();
+        try std.testing.expectEqual(@as(i32, 2), stmt.columnInt(0));
+        try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(1));
+        try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(2));
+    }
+}
+
 test "LIFECYCLE: Complete fiscal year — setup through year-end close" {
     const database = try db.Database.open(":memory:");
     defer database.close();

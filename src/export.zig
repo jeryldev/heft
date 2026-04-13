@@ -7,8 +7,8 @@ const money = @import("money.zig");
 
 pub const ExportFormat = enum { csv, json };
 
-fn fmtAmount(dest: []u8, amount: i64, dp: u8) usize {
-    const result = money.formatDecimal(dest, amount, dp) catch return 0;
+fn fmtAmount(dest: []u8, amount: i64, dp: u8) !usize {
+    const result = try money.formatDecimal(dest, amount, dp);
     return result.len;
 }
 
@@ -143,11 +143,11 @@ pub fn reportToCsv(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.debit_balance, result.decimal_places);
+        pos += try fmtAmount(buf[pos..], row.debit_balance, result.decimal_places);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.credit_balance, result.decimal_places);
+        pos += try fmtAmount(buf[pos..], row.credit_balance, result.decimal_places);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = '\n';
         pos += 1;
@@ -169,12 +169,12 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
     if (pos >= buf.len) return error.BufferTooSmall;
     buf[pos] = '"';
     pos += 1;
-    pos += fmtAmount(buf[pos..], result.total_debits, dp);
+    pos += try fmtAmount(buf[pos..], result.total_debits, dp);
     const mid = "\",\"total_credits\":\"";
     if (pos + mid.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + mid.len], mid);
     pos += mid.len;
-    pos += fmtAmount(buf[pos..], result.total_credits, dp);
+    pos += try fmtAmount(buf[pos..], result.total_credits, dp);
     if (pos >= buf.len) return error.BufferTooSmall;
     buf[pos] = '"';
     pos += 1;
@@ -213,12 +213,12 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         if (pos + p4.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p4.len], p4);
         pos += p4.len;
-        pos += fmtAmount(buf[pos..], row.debit_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.debit_balance, dp);
         const p5 = "\",\"credit\":\"";
         if (pos + p5.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p5.len], p5);
         pos += p5.len;
-        pos += fmtAmount(buf[pos..], row.credit_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.credit_balance, dp);
         const p6 = "\"}";
         if (pos + p6.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p6.len], p6);
@@ -265,15 +265,15 @@ pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.debit_amount, dp);
+        pos += try fmtAmount(buf[pos..], row.debit_amount, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.credit_amount, dp);
+        pos += try fmtAmount(buf[pos..], row.credit_amount, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.running_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.running_balance, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
@@ -281,15 +281,15 @@ pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.transaction_debit, dp);
+        pos += try fmtAmount(buf[pos..], row.transaction_debit, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.transaction_credit, dp);
+        pos += try fmtAmount(buf[pos..], row.transaction_credit, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.fx_rate, dp);
+        pos += try fmtAmount(buf[pos..], row.fx_rate, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = '\n';
         pos += 1;
@@ -374,11 +374,11 @@ pub fn classifiedResultToCsv(result: *classification_mod.ClassifiedResult, buf: 
         const dp = result.decimal_places;
         const aid = std.fmt.bufPrint(buf[pos..], ",{d},", .{row.account_id}) catch return error.BufferTooSmall;
         pos += aid.len;
-        pos += fmtAmount(buf[pos..], row.debit_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.debit_balance, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = ',';
         pos += 1;
-        pos += fmtAmount(buf[pos..], row.credit_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.credit_balance, dp);
         if (pos >= buf.len) return error.BufferTooSmall;
         buf[pos] = '\n';
         pos += 1;
@@ -395,22 +395,22 @@ pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf:
     if (pos + hdr.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr.len], hdr);
     pos += hdr.len;
-    pos += fmtAmount(buf[pos..], result.total_debits, dp);
+    pos += try fmtAmount(buf[pos..], result.total_debits, dp);
     const hdr2 = "\",\"total_credits\":\"";
     if (pos + hdr2.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr2.len], hdr2);
     pos += hdr2.len;
-    pos += fmtAmount(buf[pos..], result.total_credits, dp);
+    pos += try fmtAmount(buf[pos..], result.total_credits, dp);
     const hdr3 = "\",\"unclassified_debits\":\"";
     if (pos + hdr3.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr3.len], hdr3);
     pos += hdr3.len;
-    pos += fmtAmount(buf[pos..], result.unclassified_debits, dp);
+    pos += try fmtAmount(buf[pos..], result.unclassified_debits, dp);
     const hdr4 = "\",\"unclassified_credits\":\"";
     if (pos + hdr4.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr4.len], hdr4);
     pos += hdr4.len;
-    pos += fmtAmount(buf[pos..], result.unclassified_credits, dp);
+    pos += try fmtAmount(buf[pos..], result.unclassified_credits, dp);
     const hdr5 = "\",\"rows\":[";
     if (pos + hdr5.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr5.len], hdr5);
@@ -432,12 +432,12 @@ pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf:
         pos += try jsonString(buf[pos..], row.label[0..row.label_len]);
         const acct_part = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":\"", .{row.account_id}) catch return error.BufferTooSmall;
         pos += acct_part.len;
-        pos += fmtAmount(buf[pos..], row.debit_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.debit_balance, dp);
         const cr_part = "\",\"credit\":\"";
         if (pos + cr_part.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + cr_part.len], cr_part);
         pos += cr_part.len;
-        pos += fmtAmount(buf[pos..], row.credit_balance, dp);
+        pos += try fmtAmount(buf[pos..], row.credit_balance, dp);
         const close_row = "\"}";
         if (pos + close_row.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + close_row.len], close_row);
