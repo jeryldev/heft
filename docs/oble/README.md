@@ -5,6 +5,11 @@ OBLE stands for Open Bookkeeping Ledger Exchange.
 This folder contains the early working drafts for extracting an open ledger
 standard from the accounting semantics that Heft already implements.
 
+Entry points:
+
+- [Introducing OBLE](</Users/jeryldev/code/zig_projects/heft/docs/oble/introduction.md>)
+- [Glossary](</Users/jeryldev/code/zig_projects/heft/docs/oble/glossary.md>)
+
 Current draft set:
 
 1. [OBLE-0000 Vision](</Users/jeryldev/code/zig_projects/heft/docs/oble/0000-vision.md>)
