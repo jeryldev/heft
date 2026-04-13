@@ -72,6 +72,48 @@ fn appendAmount(buf: []u8, pos: *usize, amount: i64, decimal_places: u8) !void {
     try appendJsonString(buf, pos, rendered);
 }
 
+fn appendBookId(buf: []u8, pos: *usize, book_id: i64) !void {
+    var book_buf: [32]u8 = undefined;
+    const book_text = std.fmt.bufPrint(&book_buf, "book-{d}", .{book_id}) catch unreachable;
+    try appendJsonString(buf, pos, book_text);
+}
+
+fn appendPeriodId(buf: []u8, pos: *usize, period_id: i64) !void {
+    var period_buf: [48]u8 = undefined;
+    const period_text = std.fmt.bufPrint(&period_buf, "period-{d}", .{period_id}) catch unreachable;
+    try appendJsonString(buf, pos, period_text);
+}
+
+fn appendEntryId(buf: []u8, pos: *usize, entry_id: i64) !void {
+    var entry_buf: [32]u8 = undefined;
+    const entry_text = std.fmt.bufPrint(&entry_buf, "entry-{d}", .{entry_id}) catch unreachable;
+    try appendJsonString(buf, pos, entry_text);
+}
+
+fn appendCounterpartyId(buf: []u8, pos: *usize, counterparty_id: i64) !void {
+    var cp_buf: [32]u8 = undefined;
+    const cp_text = std.fmt.bufPrint(&cp_buf, "cp-{d}", .{counterparty_id}) catch unreachable;
+    try appendJsonString(buf, pos, cp_text);
+}
+
+fn appendLineId(buf: []u8, pos: *usize, line_id: i64) !void {
+    var id_buf: [32]u8 = undefined;
+    const id_text = std.fmt.bufPrint(&id_buf, "line-{d}", .{line_id}) catch unreachable;
+    try appendJsonString(buf, pos, id_text);
+}
+
+fn appendAccountId(buf: []u8, pos: *usize, account_id: i64) !void {
+    var acct_buf: [32]u8 = undefined;
+    const acct_text = std.fmt.bufPrint(&acct_buf, "acct-{d}", .{account_id}) catch unreachable;
+    try appendJsonString(buf, pos, acct_text);
+}
+
+fn appendOpenItemId(buf: []u8, pos: *usize, open_item_id: i64) !void {
+    var oi_buf: [32]u8 = undefined;
+    const oi_text = std.fmt.bufPrint(&oi_buf, "oi-{d}", .{open_item_id}) catch unreachable;
+    try appendJsonString(buf, pos, oi_text);
+}
+
 fn appendLineObject(
     buf: []u8,
     pos: *usize,
@@ -88,15 +130,11 @@ fn appendLineObject(
     decimal_places: u8,
 ) !void {
     try appendLiteral(buf, pos, "{\"id\":");
-    var id_buf: [32]u8 = undefined;
-    const id_text = std.fmt.bufPrint(&id_buf, "line-{d}", .{line_id}) catch unreachable;
-    try appendJsonString(buf, pos, id_text);
+    try appendLineId(buf, pos, line_id);
     try appendLiteral(buf, pos, ",\"line_number\":");
     try appendInt(buf, pos, line_number);
     try appendLiteral(buf, pos, ",\"account_id\":");
-    var acct_buf: [32]u8 = undefined;
-    const acct_text = std.fmt.bufPrint(&acct_buf, "acct-{d}", .{account_id}) catch unreachable;
-    try appendJsonString(buf, pos, acct_text);
+    try appendAccountId(buf, pos, account_id);
     try appendLiteral(buf, pos, ",\"debit_amount\":");
     try appendAmount(buf, pos, debit_amount, decimal_places);
     try appendLiteral(buf, pos, ",\"credit_amount\":");
@@ -111,9 +149,7 @@ fn appendLineObject(
     try appendAmount(buf, pos, base_credit_amount, decimal_places);
     if (counterparty_id) |cp_id| {
         try appendLiteral(buf, pos, ",\"counterparty_id\":");
-        var cp_buf: [32]u8 = undefined;
-        const cp_text = std.fmt.bufPrint(&cp_buf, "cp-{d}", .{cp_id}) catch unreachable;
-        try appendJsonString(buf, pos, cp_text);
+        try appendCounterpartyId(buf, pos, cp_id);
     }
     try appendLiteral(buf, pos, "}");
 }
@@ -129,9 +165,7 @@ pub fn exportBookJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
 
     var pos: usize = 0;
     try appendLiteral(buf, &pos, "{\"id\":");
-    var id_buf: [32]u8 = undefined;
-    const id_text = std.fmt.bufPrint(&id_buf, "book-{d}", .{stmt.columnInt64(0)}) catch unreachable;
-    try appendJsonString(buf, &pos, id_text);
+    try appendBookId(buf, &pos, stmt.columnInt64(0));
     try appendLiteral(buf, &pos, ",\"name\":");
     try appendJsonString(buf, &pos, stmt.columnText(1) orelse "");
     try appendLiteral(buf, &pos, ",\"base_currency\":");
@@ -162,13 +196,9 @@ pub fn exportAccountsJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 
         first = false;
 
         try appendLiteral(buf, &pos, "{\"id\":");
-        var id_buf: [32]u8 = undefined;
-        const id_text = std.fmt.bufPrint(&id_buf, "acct-{d}", .{stmt.columnInt64(0)}) catch unreachable;
-        try appendJsonString(buf, &pos, id_text);
+        try appendAccountId(buf, &pos, stmt.columnInt64(0));
         try appendLiteral(buf, &pos, ",\"book_id\":");
-        var book_buf: [32]u8 = undefined;
-        const book_text = std.fmt.bufPrint(&book_buf, "book-{d}", .{book_id}) catch unreachable;
-        try appendJsonString(buf, &pos, book_text);
+        try appendBookId(buf, &pos, book_id);
         try appendLiteral(buf, &pos, ",\"number\":");
         try appendJsonString(buf, &pos, stmt.columnText(1) orelse "");
         try appendLiteral(buf, &pos, ",\"name\":");
@@ -207,9 +237,7 @@ pub fn exportPeriodsJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
         const id_text = std.fmt.bufPrint(&id_buf, "period-{d}-{d}", .{ stmt.columnInt(6), stmt.columnInt(5) }) catch unreachable;
         try appendJsonString(buf, &pos, id_text);
         try appendLiteral(buf, &pos, ",\"book_id\":");
-        var book_buf: [32]u8 = undefined;
-        const book_text = std.fmt.bufPrint(&book_buf, "book-{d}", .{book_id}) catch unreachable;
-        try appendJsonString(buf, &pos, book_text);
+        try appendBookId(buf, &pos, book_id);
         try appendLiteral(buf, &pos, ",\"name\":");
         try appendJsonString(buf, &pos, stmt.columnText(1) orelse "");
         try appendLiteral(buf, &pos, ",\"start_date\":");
@@ -231,7 +259,7 @@ pub fn exportPeriodsJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
 pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     var header_stmt = try database.prepare(
         \\SELECT e.id, e.book_id, e.period_id, e.status, e.transaction_date, e.posting_date,
-        \\  e.document_number, e.description, b.decimal_places
+        \\  e.document_number, e.description, b.decimal_places, e.entry_type, e.reverses_entry_id
         \\FROM ledger_entries e
         \\JOIN ledger_books b ON b.id = e.book_id
         \\WHERE e.id = ?;
@@ -246,17 +274,11 @@ pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
 
     var pos: usize = 0;
     try appendLiteral(buf, &pos, "{\"id\":");
-    var entry_buf: [32]u8 = undefined;
-    const entry_text = std.fmt.bufPrint(&entry_buf, "entry-{d}", .{header_stmt.columnInt64(0)}) catch unreachable;
-    try appendJsonString(buf, &pos, entry_text);
+    try appendEntryId(buf, &pos, header_stmt.columnInt64(0));
     try appendLiteral(buf, &pos, ",\"book_id\":");
-    var book_buf: [32]u8 = undefined;
-    const book_text = std.fmt.bufPrint(&book_buf, "book-{d}", .{book_id}) catch unreachable;
-    try appendJsonString(buf, &pos, book_text);
+    try appendBookId(buf, &pos, book_id);
     try appendLiteral(buf, &pos, ",\"period_id\":");
-    var period_buf: [48]u8 = undefined;
-    const period_text = std.fmt.bufPrint(&period_buf, "period-{d}", .{period_id}) catch unreachable;
-    try appendJsonString(buf, &pos, period_text);
+    try appendPeriodId(buf, &pos, period_id);
     try appendLiteral(buf, &pos, ",\"status\":");
     try appendJsonString(buf, &pos, header_stmt.columnText(3) orelse "");
     try appendLiteral(buf, &pos, ",\"transaction_date\":");
@@ -268,6 +290,12 @@ pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     if (header_stmt.columnText(7)) |desc| {
         try appendLiteral(buf, &pos, ",\"description\":");
         try appendJsonString(buf, &pos, desc);
+    }
+    try appendLiteral(buf, &pos, ",\"entry_type\":");
+    try appendJsonString(buf, &pos, header_stmt.columnText(9) orelse "");
+    if (header_stmt.columnText(10) != null) {
+        try appendLiteral(buf, &pos, ",\"reverses_entry_id\":");
+        try appendEntryId(buf, &pos, header_stmt.columnInt64(10));
     }
     try appendLiteral(buf, &pos, ",\"lines\":[");
 
@@ -305,6 +333,103 @@ pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     return buf[0..pos];
 }
 
+pub fn exportReversalPairJson(database: db.Database, original_entry_id: i64, buf: []u8) ![]u8 {
+    var stmt = try database.prepare(
+        \\SELECT id
+        \\FROM ledger_entries
+        \\WHERE reverses_entry_id = ?
+        \\ORDER BY id ASC
+        \\LIMIT 1;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, original_entry_id);
+    if (!try stmt.step()) return error.NotFound;
+    const reversal_entry_id = stmt.columnInt64(0);
+
+    var original_buf: [8192]u8 = undefined;
+    const original_json = try exportEntryJson(database, original_entry_id, &original_buf);
+    var reversal_buf: [8192]u8 = undefined;
+    const reversal_json = try exportEntryJson(database, reversal_entry_id, &reversal_buf);
+
+    var pos: usize = 0;
+    try appendLiteral(buf, &pos, "{\"original_entry\":");
+    try appendLiteral(buf, &pos, original_json);
+    try appendLiteral(buf, &pos, ",\"reversal_entry\":");
+    try appendLiteral(buf, &pos, reversal_json);
+    try appendLiteral(buf, &pos, "}");
+    return buf[0..pos];
+}
+
+pub fn exportCounterpartyOpenItemJson(database: db.Database, open_item_id: i64, buf: []u8) ![]u8 {
+    var stmt = try database.prepare(
+        \\SELECT oi.id, oi.book_id, oi.entry_line_id, oi.counterparty_id, oi.original_amount, oi.remaining_amount,
+        \\  oi.due_date, oi.status,
+        \\  sa.number, sa.name, sa.type, sa.status,
+        \\  el.line_number, el.account_id, el.debit_amount, el.credit_amount,
+        \\  b.decimal_places
+        \\FROM ledger_open_items oi
+        \\JOIN ledger_subledger_accounts sa ON sa.id = oi.counterparty_id
+        \\JOIN ledger_entry_lines el ON el.id = oi.entry_line_id
+        \\JOIN ledger_books b ON b.id = oi.book_id
+        \\WHERE oi.id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, open_item_id);
+    if (!try stmt.step()) return error.NotFound;
+
+    const book_id = stmt.columnInt64(1);
+    const entry_line_id = stmt.columnInt64(2);
+    const counterparty_id = stmt.columnInt64(3);
+    const decimal_places: u8 = @intCast(stmt.columnInt(16));
+    var pos: usize = 0;
+    try appendLiteral(buf, &pos, "{\"counterparty\":{\"id\":");
+    try appendCounterpartyId(buf, &pos, counterparty_id);
+    try appendLiteral(buf, &pos, ",\"book_id\":");
+    try appendBookId(buf, &pos, book_id);
+    try appendLiteral(buf, &pos, ",\"number\":");
+    try appendJsonString(buf, &pos, stmt.columnText(8) orelse "");
+    try appendLiteral(buf, &pos, ",\"name\":");
+    try appendJsonString(buf, &pos, stmt.columnText(9) orelse "");
+    try appendLiteral(buf, &pos, ",\"role\":");
+    try appendJsonString(buf, &pos, stmt.columnText(10) orelse "");
+    try appendLiteral(buf, &pos, ",\"status\":");
+    try appendJsonString(buf, &pos, stmt.columnText(11) orelse "");
+
+    try appendLiteral(buf, &pos, "},\"line\":{\"id\":");
+    try appendLineId(buf, &pos, entry_line_id);
+    try appendLiteral(buf, &pos, ",\"line_number\":");
+    try appendInt(buf, &pos, stmt.columnInt(12));
+    try appendLiteral(buf, &pos, ",\"account_id\":");
+    try appendAccountId(buf, &pos, stmt.columnInt64(13));
+    try appendLiteral(buf, &pos, ",\"debit_amount\":");
+    try appendAmount(buf, &pos, stmt.columnInt64(14), decimal_places);
+    try appendLiteral(buf, &pos, ",\"credit_amount\":");
+    try appendAmount(buf, &pos, stmt.columnInt64(15), decimal_places);
+    try appendLiteral(buf, &pos, ",\"counterparty_id\":");
+    try appendCounterpartyId(buf, &pos, counterparty_id);
+
+    try appendLiteral(buf, &pos, "},\"open_item\":{\"id\":");
+    try appendOpenItemId(buf, &pos, stmt.columnInt64(0));
+    try appendLiteral(buf, &pos, ",\"book_id\":");
+    try appendBookId(buf, &pos, book_id);
+    try appendLiteral(buf, &pos, ",\"entry_line_id\":");
+    try appendLineId(buf, &pos, entry_line_id);
+    try appendLiteral(buf, &pos, ",\"counterparty_id\":");
+    try appendCounterpartyId(buf, &pos, counterparty_id);
+    try appendLiteral(buf, &pos, ",\"original_amount\":");
+    try appendAmount(buf, &pos, stmt.columnInt64(4), decimal_places);
+    try appendLiteral(buf, &pos, ",\"remaining_amount\":");
+    try appendAmount(buf, &pos, stmt.columnInt64(5), decimal_places);
+    try appendLiteral(buf, &pos, ",\"status\":");
+    try appendJsonString(buf, &pos, stmt.columnText(7) orelse "");
+    if (stmt.columnText(6)) |due_date| {
+        try appendLiteral(buf, &pos, ",\"due_date\":");
+        try appendJsonString(buf, &pos, due_date);
+    }
+    try appendLiteral(buf, &pos, "}}");
+    return buf[0..pos];
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 const schema = @import("schema.zig");
@@ -312,6 +437,8 @@ const book_mod = @import("book.zig");
 const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
+const subledger_mod = @import("subledger.zig");
+const open_item_mod = @import("open_item.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -348,4 +475,60 @@ test "OBLE export: book accounts periods and entry" {
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"document_number\":\"JE-001\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"debit_amount\":\"1000.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"fx_rate\":\"1.0000000000\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, entry_json, "\"entry_type\":\"standard\"") != null);
+}
+
+test "OBLE export: reversal pair" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try book_mod.Book.create(database, "Example Entity", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(database, book_id, "4000", "Accrual", .liability, false, "admin");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, "ACC-001", "2026-01-15", "2026-01-15", "Accrual", period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, 0, 250_00_000_000, "PHP", money.FX_RATE_SCALE, 2, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 250_00_000_000, 0, "PHP", money.FX_RATE_SCALE, 1, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+    const reversal_id = try entry_mod.Entry.reverse(database, entry_id, "Accrual reversal", "2026-01-31", null, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try exportReversalPairJson(database, entry_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"original_entry\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"reversal_entry\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"reversed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"reverses_entry_id\":\"entry-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"id\":\"entry-2\"") != null or std.mem.indexOf(u8, json, "\"id\":\"entry-3\"") != null);
+    try std.testing.expect(reversal_id > entry_id);
+}
+
+test "OBLE export: counterparty open item" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const book_id = try book_mod.Book.create(database, "Example Entity", "PHP", 2, "admin");
+    const ar_account_id = try account_mod.Account.create(database, book_id, "1100", "Accounts Receivable", .asset, false, "admin");
+    const revenue_account_id = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const group_id = try subledger_mod.SubledgerGroup.create(database, book_id, "Customers", "customer", 1, ar_account_id, null, null, "admin");
+    const customer_id = try subledger_mod.SubledgerAccount.create(database, book_id, "C001", "Customer ABC", "customer", group_id, "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, "INV-001", "2026-01-15", "2026-01-15", "Invoice", period_id, null, "admin");
+    const receivable_line_id = try entry_mod.Entry.addLine(database, entry_id, 1, 500_00_000_000, 0, "PHP", money.FX_RATE_SCALE, ar_account_id, customer_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 500_00_000_000, "PHP", money.FX_RATE_SCALE, revenue_account_id, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    const open_item_id = try open_item_mod.createOpenItem(database, receivable_line_id, customer_id, 500_00_000_000, "2026-02-15", book_id, "admin");
+    try open_item_mod.allocatePayment(database, open_item_id, 200_00_000_000, "admin");
+
+    var buf: [16384]u8 = undefined;
+    const json = try exportCounterpartyOpenItemJson(database, open_item_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"counterparty\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"customer\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"counterparty_id\":\"cp-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"original_amount\":\"500.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"remaining_amount\":\"300.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"partial\"") != null);
 }
