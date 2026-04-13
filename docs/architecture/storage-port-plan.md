@@ -159,4 +159,5 @@ implemented.
 1. Finish the Heft-to-OBLE conformance matrix
 2. Add canonical OBLE export/import boundaries
 3. Annotate existing modules as domain-heavy vs storage-heavy
+   See: [module-boundary-inventory.md](module-boundary-inventory.md)
 4. Only then design the first narrow storage ports
