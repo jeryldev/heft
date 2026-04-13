@@ -67,5 +67,11 @@ Based on the current engine design, Heft appears to target at least:
 
 That is an implementation assessment, not yet a formal certification result.
 
-Formal conformance should eventually be based on published fixtures and test
-cases, not just a checklist declaration.
+Formal conformance should be based on published fixtures and test cases, not
+just a checklist declaration.
+
+Heft now uses this checklist alongside:
+
+- packet round-trip tests
+- bundle round-trip tests
+- a dedicated OBLE conformance test suite for the implemented profiles

@@ -51,7 +51,7 @@ standard boundary or testable conformance surface.
 | Close and Reopen Profile | Confirmed | Heft implements close-generated state, opening carry-forward, reopen cascades, and stale derived-state invalidation. |
 | Designations and Policy Profiles | Confirmed | Heft already uses designation-driven book policy heavily. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
-| Fixture-driven OBLE conformance | Partial | Heft now has executable round-trip tests for the implemented OBLE packets, but profile-wide fixture coverage is not complete yet. |
+| Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
 | Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, book snapshot, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully, but importer support remains Zig-first and not every lifecycle-derived packet is imported directly. |
 
@@ -115,6 +115,7 @@ Heft now implements the first real OBLE serialization boundary in code:
 
 - canonical JSON export from live Heft objects
 - canonical JSON import for the implemented packet set
+- a dedicated OBLE conformance test suite for the implemented profiles
 - round-trip tests for core and extension packets
 - schema/example validation guidance and machine-readable example mapping
 - bundle-level exchange via `book_snapshot`
@@ -179,7 +180,7 @@ The most important gaps are now about completeness, not first principles.
 1. broader packet coverage for close/reopen bundles, richer multi-currency examples, and remaining profile extensions
 2. automated schema validation of exported payloads
 3. public-surface exposure beyond the current Zig bridge
-4. explicit profile claim validation at a fuller feature matrix level
+4. fuller live-export validation against a bundled draft-2020-12 schema validator once one is adopted
 
 ## Current practical claim
 

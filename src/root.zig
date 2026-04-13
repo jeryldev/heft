@@ -54,4 +54,5 @@ comptime {
     _ = LedgerError;
     _ = @import("lifecycle_test.zig");
     _ = @import("characterization_test.zig");
+    _ = @import("oble_conformance_test.zig");
 }
