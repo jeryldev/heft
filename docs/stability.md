@@ -1,6 +1,6 @@
 # Stability Statement
 
-Heft `0.1.0` is the first public release candidate for the embedded accounting
+Heft `0.1.1` is the current public prerelease line for the embedded accounting
 engine.
 
 ## What is stable enough to use now

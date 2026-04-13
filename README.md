@@ -121,14 +121,14 @@ The C ABI entry implementation lives in [src/main.zig](/Users/jeryldev/code/zig_
 - [Benchmark Guide](/Users/jeryldev/code/zig_projects/heft/docs/benchmarks.md)
 - [Performance Matrix](/Users/jeryldev/code/zig_projects/heft/docs/performance-matrix.md)
 - [Stability Statement](/Users/jeryldev/code/zig_projects/heft/docs/stability.md)
-- [v0.1.0 Release Notes](/Users/jeryldev/code/zig_projects/heft/docs/releases/v0.1.0.md)
+- [v0.1.1 Release Notes](/Users/jeryldev/code/zig_projects/heft/docs/releases/v0.1.1.md)
 - [Release Checklist](/Users/jeryldev/code/zig_projects/heft/RELEASE.md)
 
 ## Release posture
 
-The repo is currently positioned for `v0.1.0`.
+The repo is currently positioned for `v0.1.1`.
 
-- Version: `0.1.0`
+- Version: `0.1.1`
 - Stability: pre-`1.0`, with strong core behavior but still-evolving API packaging
 - Local release gate: `bash scripts/quality-gate.sh`
 

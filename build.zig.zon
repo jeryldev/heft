@@ -1,6 +1,6 @@
 .{
     .name = .heft,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0xf505703f183ca0ac,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{},
