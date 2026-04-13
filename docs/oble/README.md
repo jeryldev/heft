@@ -13,8 +13,9 @@ Current draft set:
 4. [OBLE-0003 Counterparties and Subledgers](</Users/jeryldev/code/zig_projects/heft/docs/oble/0003-counterparties-subledgers.md>)
 5. [OBLE-0004 Serialization and Conformance](</Users/jeryldev/code/zig_projects/heft/docs/oble/0004-serialization-conformance.md>)
 6. [OBLE-0005 Heft Mapping](</Users/jeryldev/code/zig_projects/heft/docs/oble/0005-heft-mapping.md>)
-7. [Conformance Checklist](</Users/jeryldev/code/zig_projects/heft/docs/oble/conformance-checklist.md>)
-8. [Examples](</Users/jeryldev/code/zig_projects/heft/docs/oble/examples/README.md>)
+7. [OBLE-0006 Multi-Currency Semantics](</Users/jeryldev/code/zig_projects/heft/docs/oble/0006-multi-currency-semantics.md>)
+8. [Conformance Checklist](</Users/jeryldev/code/zig_projects/heft/docs/oble/conformance-checklist.md>)
+9. [Examples](</Users/jeryldev/code/zig_projects/heft/docs/oble/examples/README.md>)
 
 Intended reading order:
 
@@ -24,6 +25,7 @@ Intended reading order:
 - `0003` adds counterparties, subledgers, and open items as the first extension.
 - `0004` defines the first serialization and conformance story.
 - `0005` explains how Heft maps to the drafts without making Heft the spec.
+- `0006` defines the minimum multi-currency semantics needed for real exchange.
 - `conformance-checklist` gives a practical first-pass claim matrix.
 - `examples/` provides concrete JSON payloads for review and future fixtures.
 
