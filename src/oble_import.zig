@@ -137,6 +137,30 @@ const CounterpartyOpenItemPayload = struct {
     open_item: OpenItemPayload,
 };
 
+const PolicyDesignationPayload = struct {
+    rounding_account: ?[]const u8 = null,
+    fx_gain_loss_account: ?[]const u8 = null,
+    retained_earnings_account: ?[]const u8 = null,
+    income_summary_account: ?[]const u8 = null,
+    opening_balance_account: ?[]const u8 = null,
+    suspense_account: ?[]const u8 = null,
+    dividends_drawings_account: ?[]const u8 = null,
+    current_year_earnings_account: ?[]const u8 = null,
+};
+
+const PolicyProfileNamePayload = struct {
+    name: []const u8,
+};
+
+const PolicyProfilePayload = struct {
+    book_id: []const u8,
+    entity_type: []const u8,
+    fy_start_month: i32,
+    require_approval: bool,
+    designations: PolicyDesignationPayload,
+    policy_profiles: []const PolicyProfileNamePayload = &.{},
+};
+
 fn putUnique(map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
     const gop = try map.getOrPut(key);
     if (gop.found_existing) return error.DuplicateNumber;
@@ -161,6 +185,10 @@ fn parsePeriodStatus(text: []const u8) !period_mod.PeriodStatus {
 
 fn parseCounterpartyStatus(text: []const u8) !subledger_mod.SubledgerAccountStatus {
     return subledger_mod.SubledgerAccountStatus.fromString(text) orelse error.InvalidInput;
+}
+
+fn parseEntityType(text: []const u8) !book_mod.EntityType {
+    return book_mod.EntityType.fromString(text) orelse error.InvalidInput;
 }
 
 fn applyAccountStatus(database: db.Database, account_id: i64, status: []const u8, performed_by: []const u8) !void {
@@ -457,6 +485,37 @@ pub fn importCounterpartyOpenItemJson(database: db.Database, ctx: *ImportContext
     };
 }
 
+pub fn importPolicyProfileJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    var parsed = try std.json.parseFromSlice(PolicyProfilePayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const payload = parsed.value;
+    const book_id = try resolveId(&ctx.book_ids, payload.book_id);
+
+    try book_mod.Book.setEntityType(database, book_id, try parseEntityType(payload.entity_type), performed_by);
+    try book_mod.Book.setFyStartMonth(database, book_id, payload.fy_start_month, performed_by);
+    try book_mod.Book.setRequireApproval(database, book_id, payload.require_approval, performed_by);
+
+    if (payload.designations.rounding_account) |id|
+        try book_mod.Book.setRoundingAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.fx_gain_loss_account) |id|
+        try book_mod.Book.setFxGainLossAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.retained_earnings_account) |id|
+        try book_mod.Book.setRetainedEarningsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.income_summary_account) |id|
+        try book_mod.Book.setIncomeSummaryAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.opening_balance_account) |id|
+        try book_mod.Book.setOpeningBalanceAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.suspense_account) |id|
+        try book_mod.Book.setSuspenseAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.dividends_drawings_account) |id|
+        try book_mod.Book.setDividendsDrawingsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+    if (payload.designations.current_year_earnings_account) |id|
+        try book_mod.Book.setCurrentYearEarningsAccount(database, book_id, try resolveId(&ctx.account_ids, id), performed_by);
+
+    return book_id;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 test "OBLE import: core example packet" {
@@ -733,4 +792,87 @@ test "OBLE round-trip: export import export counterparty open item" {
 
     try std.testing.expect(imported_book_id > 0);
     try std.testing.expectEqualStrings(open_item_json, round_open_item_json);
+}
+
+test "OBLE round-trip: export import export policy profile" {
+    const allocator = std.testing.allocator;
+
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Policy Entity", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const re_id = try account_mod.Account.create(source_db, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    const is_id = try account_mod.Account.create(source_db, book_id, "3200", "Income Summary", .equity, false, "admin");
+    const ob_id = try account_mod.Account.create(source_db, book_id, "3300", "Opening Balance", .equity, false, "admin");
+    const suspense_id = try account_mod.Account.create(source_db, book_id, "9999", "Suspense", .asset, false, "admin");
+    const fx_id = try account_mod.Account.create(source_db, book_id, "7999", "FX Gain Loss", .revenue, false, "admin");
+    const rounding_id = try account_mod.Account.create(source_db, book_id, "6999", "Rounding", .expense, false, "admin");
+    const draws_id = try account_mod.Account.create(source_db, book_id, "3400", "Drawings", .equity, true, "admin");
+    const cye_id = try account_mod.Account.create(source_db, book_id, "3210", "Current Year Earnings", .equity, false, "admin");
+
+    try book_mod.Book.setRetainedEarningsAccount(source_db, book_id, re_id, "admin");
+    try book_mod.Book.setIncomeSummaryAccount(source_db, book_id, is_id, "admin");
+    try book_mod.Book.setOpeningBalanceAccount(source_db, book_id, ob_id, "admin");
+    try book_mod.Book.setSuspenseAccount(source_db, book_id, suspense_id, "admin");
+    try book_mod.Book.setFxGainLossAccount(source_db, book_id, fx_id, "admin");
+    try book_mod.Book.setRoundingAccount(source_db, book_id, rounding_id, "admin");
+    try book_mod.Book.setDividendsDrawingsAccount(source_db, book_id, draws_id, "admin");
+    try book_mod.Book.setCurrentYearEarningsAccount(source_db, book_id, cye_id, "admin");
+    try book_mod.Book.setRequireApproval(source_db, book_id, true, "admin");
+    try book_mod.Book.setEntityType(source_db, book_id, .corporation, "admin");
+    try book_mod.Book.setFyStartMonth(source_db, book_id, 4, "admin");
+
+    var book_buf: [4096]u8 = undefined;
+    var accounts_buf: [8192]u8 = undefined;
+    var policy_buf: [8192]u8 = undefined;
+
+    const book_json = try oble_export.exportBookJson(source_db, book_id, &book_buf);
+    const accounts_json = try oble_export.exportAccountsJson(source_db, book_id, &accounts_buf);
+    const policy_json = try oble_export.exportPolicyProfileJson(source_db, book_id, &policy_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var ctx = ImportContext.init(allocator);
+    defer ctx.deinit();
+
+    const imported_book_id = try importBookJson(target_db, &ctx, book_json, "admin");
+    try importAccountsJson(target_db, &ctx, accounts_json, "admin");
+    _ = try importPolicyProfileJson(target_db, &ctx, policy_json, "admin");
+
+    try std.testing.expect(imported_book_id > 0);
+    {
+        var stmt = try target_db.prepare(
+            \\SELECT entity_type, fy_start_month, require_approval,
+            \\  rounding_account_id, fx_gain_loss_account_id,
+            \\  retained_earnings_account_id, income_summary_account_id,
+            \\  opening_balance_account_id, suspense_account_id,
+            \\  dividends_drawings_account_id, current_year_earnings_account_id
+            \\FROM ledger_books
+            \\WHERE id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, imported_book_id);
+        _ = try stmt.step();
+        try std.testing.expectEqualStrings("corporation", stmt.columnText(0).?);
+        try std.testing.expectEqual(@as(i32, 4), stmt.columnInt(1));
+        try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(2));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-7").?, stmt.columnInt64(3));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-6").?, stmt.columnInt64(4));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-2").?, stmt.columnInt64(5));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-3").?, stmt.columnInt64(6));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-4").?, stmt.columnInt64(7));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-5").?, stmt.columnInt64(8));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-8").?, stmt.columnInt64(9));
+        try std.testing.expectEqual(ctx.account_ids.get("acct-9").?, stmt.columnInt64(10));
+    }
+
+    var round_policy_buf: [8192]u8 = undefined;
+    const round_policy_json = try oble_export.exportPolicyProfileJson(target_db, imported_book_id, &round_policy_buf);
+    try std.testing.expect(std.mem.indexOf(u8, round_policy_json, "\"fy_start_month\":4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_policy_json, "\"name\":\"income_summary_close\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, round_policy_json, "\"name\":\"approval_required\"") != null);
 }
