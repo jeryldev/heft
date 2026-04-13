@@ -128,6 +128,14 @@ const ledger_export_audit_trail = abi.ledger_export_audit_trail;
 const ledger_export_periods = abi.ledger_export_periods;
 const ledger_export_subledger = abi.ledger_export_subledger;
 const ledger_export_book_metadata = abi.ledger_export_book_metadata;
+const ledger_oble_export_book = abi.ledger_oble_export_book;
+const ledger_oble_export_accounts = abi.ledger_oble_export_accounts;
+const ledger_oble_export_periods = abi.ledger_oble_export_periods;
+const ledger_oble_export_counterparties = abi.ledger_oble_export_counterparties;
+const ledger_oble_export_policy_profile = abi.ledger_oble_export_policy_profile;
+const ledger_oble_export_entry = abi.ledger_oble_export_entry;
+const ledger_oble_export_reversal_pair = abi.ledger_oble_export_reversal_pair;
+const ledger_oble_export_counterparty_open_item = abi.ledger_oble_export_counterparty_open_item;
 const ledger_transition_budget = abi.ledger_transition_budget;
 const ledger_create_open_item = abi.ledger_create_open_item;
 const ledger_allocate_payment = abi.ledger_allocate_payment;
@@ -1878,6 +1886,59 @@ test "C ABI: round 2 feature coverage happy paths" {
         defer ledger_free_comparative_result(result);
         try std.testing.expect(result.rows.len > 0);
     }
+}
+
+test "C ABI: OBLE export happy paths" {
+    defer cleanupTestFile("test-cabi-oble-export.ledger");
+    const handle = ledger_open("test-cabi-oble-export.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const s = try setupAbiFeatureScenario(handle);
+    const open_item_id = ledger_create_open_item(handle, s.invoice_line_id, s.customer_id, 5_000_000_000_00, "2026-02-15", s.book_id, "admin");
+    try std.testing.expect(open_item_id > 0);
+    try std.testing.expect(ledger_allocate_payment(handle, open_item_id, 2_000_000_000_00, "admin"));
+
+    const adj_entry_id = ledger_create_draft(handle, s.book_id, "ADJ-2026-001", "2026-02-05", "2026-02-05", "Adjustment", s.feb_2026_id, null, "admin");
+    try std.testing.expect(adj_entry_id > 0);
+    _ = ledger_add_line(handle, adj_entry_id, 1, 1_000_000_000_00, 0, "PHP", 10_000_000_000, s.cash_id, 0, null, "admin");
+    _ = ledger_add_line(handle, adj_entry_id, 2, 0, 1_000_000_000_00, "PHP", 10_000_000_000, s.revenue_id, 0, null, "admin");
+    try std.testing.expect(ledger_post_entry(handle, adj_entry_id, "admin"));
+    const reversal_id = ledger_reverse_entry(handle, adj_entry_id, "OBLE reversal", "2026-02-06", s.feb_2026_id, "admin");
+    try std.testing.expect(reversal_id > 0);
+
+    var buf: [32768]u8 = undefined;
+
+    const book_len = ledger_oble_export_book(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(book_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(book_len)], "\"id\":\"book-") != null);
+
+    const accounts_len = ledger_oble_export_accounts(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(accounts_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(accounts_len)], "\"account_type\":\"asset\"") != null);
+
+    const periods_len = ledger_oble_export_periods(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(periods_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(periods_len)], "\"period_number\":1") != null);
+
+    const entry_len = ledger_oble_export_entry(handle, s.invoice_entry_id, &buf, buf.len);
+    try std.testing.expect(entry_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(entry_len)], "\"counterparty_id\":\"cp-") != null);
+
+    const counterparties_len = ledger_oble_export_counterparties(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(counterparties_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparties_len)], "\"role\":\"customer\"") != null);
+
+    const policy_len = ledger_oble_export_policy_profile(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(policy_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_len)], "\"policy_profiles\"") != null);
+
+    const reversal_pair_len = ledger_oble_export_reversal_pair(handle, adj_entry_id, &buf, buf.len);
+    try std.testing.expect(reversal_pair_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(reversal_pair_len)], "\"reversal_entry\"") != null);
+
+    const open_item_len = ledger_oble_export_counterparty_open_item(handle, open_item_id, &buf, buf.len);
+    try std.testing.expect(open_item_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(open_item_len)], "\"remaining_amount\":\"3000.00\"") != null);
 }
 
 test "C ABI: ledger_transition_budget via C boundary" {

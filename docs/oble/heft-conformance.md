@@ -45,15 +45,15 @@ standard boundary or testable conformance surface.
 | OBLE Core | Confirmed | Heft has `Book`, `Account`, `Period`, `Entry`, and `Line` with exact balancing and book/period boundaries. |
 | Lifecycle and Invariants | Confirmed | Draft/post/void/reverse states, period state enforcement, and audit-backed lifecycle semantics are present. |
 | Counterparties and Subledgers | Confirmed | Heft supports subledger groups/accounts, line-level counterparty linkage, open items, allocation, aging, and reconciliation. |
-| Serialization and Conformance | Partial | Draft schemas and examples exist, but Heft does not yet export canonical OBLE payloads directly. |
+| Serialization and Conformance | Confirmed | Heft now exports canonical OBLE JSON for the implemented core and extension packets, imports those packets back into live ledgers, and validates its draft examples against the published schemas. |
 | Heft Mapping | Confirmed | The mapping is documented explicitly in the OBLE docs. |
 | Multi-Currency Semantics | Confirmed | Heft stores transaction amounts, base amounts, and FX rates with exact integer arithmetic and revaluation flows. |
 | Close and Reopen Profile | Confirmed | Heft implements close-generated state, opening carry-forward, reopen cascades, and stale derived-state invalidation. |
 | Designations and Policy Profiles | Confirmed | Heft already uses designation-driven book policy heavily. |
-| Example payload validation | Partial | The OBLE schemas validate draft payloads, but they are not yet produced directly from live Heft objects. |
-| Fixture-driven OBLE conformance | Not yet implemented | There is no dedicated `Heft -> OBLE` fixture suite yet. |
-| Canonical `Heft -> OBLE` export | Not yet implemented | This is the biggest missing standards boundary. |
-| Canonical `OBLE -> Heft` import | Not yet implemented | Import is planned but not yet present. |
+| Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
+| Fixture-driven OBLE conformance | Partial | Heft now has executable round-trip tests for the implemented OBLE packets, but profile-wide fixture coverage is not complete yet. |
+| Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `Counterparty[]`, `ReversalPair`, and `CounterpartyOpenItem`. |
+| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented OBLE packets and round-trips them successfully, but the importer is not yet surfaced through every public integration boundary. |
 
 ## Detail by draft area
 
@@ -109,19 +109,19 @@ underlying semantics are clearly present.
 
 ## OBLE-0004 Serialization and Conformance
 
-Status: `Partial`
+Status: `Confirmed`
 
-Heft is not yet fully conformant here because the current OBLE serialization
-layer mostly exists as:
+Heft now implements the first real OBLE serialization boundary in code:
 
-- draft schemas
-- draft examples
-- validation docs
+- canonical JSON export from live Heft objects
+- canonical JSON import for the implemented packet set
+- round-trip tests for core and extension packets
+- schema/example validation guidance and machine-readable example mapping
 
-What is still missing:
+What is still missing is breadth, not the existence of the boundary:
 
-- a canonical exporter from live Heft objects into OBLE payloads
-- a standards-facing validation workflow over those exported payloads
+- wider profile coverage beyond the currently implemented packets
+- automation that validates all exports against schemas in CI
 
 ## OBLE-0006 Multi-Currency
 
@@ -164,20 +164,18 @@ Examples already present in Heft include:
 
 ## Biggest remaining gaps
 
-The most important gaps are not in ledger semantics.
+The most important gaps are now about completeness, not first principles.
 
-They are in the standards boundary:
-
-1. canonical OBLE export from Heft
-2. canonical OBLE import into Heft
-3. fixture-driven conformance tests
-4. explicit profile claim validation
+1. broader packet coverage for policy profiles, close/reopen bundles, and richer multi-currency examples
+2. automated schema validation of exported payloads
+3. public-surface exposure beyond the current Zig bridge
+4. explicit profile claim validation at a fuller feature matrix level
 
 ## Current practical claim
 
 The strongest honest claim today is:
 
-Heft appears to satisfy:
+Heft currently satisfies:
 
 - `OBLE Core`
 - `Period-Aware`
@@ -187,12 +185,13 @@ Heft appears to satisfy:
 - `Close/Reopen Profile`
 - `Designations and Policy Profiles`
 
-But those claims are not yet formally certified through OBLE-native export and
-fixture-driven conformance tests.
+For the implemented packets, those claims are now backed by OBLE-native export,
+import, and round-trip tests. What remains is broadening that proof to more of
+the draft set and more integration boundaries.
 
 ## Immediate next steps
 
-1. define the first canonical `Heft -> OBLE` export targets
-2. export real Heft objects into OBLE JSON
-3. validate those exports against the OBLE draft schemas
-4. turn these prose claims into executable conformance checks
+1. expose the implemented OBLE packet exports through more public APIs, including the C ABI
+2. broaden the exporter/importer packet set to more OBLE profiles
+3. automate schema validation for canonical exports
+4. turn profile claims into fuller executable conformance checks

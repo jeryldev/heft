@@ -176,6 +176,22 @@ If an implementation exposes subledger reconciliation:
   related control account according to the implementation's published rules
 - differences should be detectable, not silently ignored
 
+## Import sequencing guidance
+
+Implementations that support import should expect this extension layer to carry
+real lifecycle dependencies.
+
+Recommended sequencing:
+
+1. create or resolve the `Counterparty`
+2. import the `Entry` and its `Line` objects so the source line exists
+3. create the `OpenItem` against the imported source line
+4. apply any settlement or allocation state
+
+This ordering matters because open items are not free-floating records. They
+derive their meaning from a source line, a counterparty, and a shared book
+boundary.
+
 ## Customer and supplier naming
 
 OBLE should describe these as roles, not separate primitive entity types.

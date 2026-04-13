@@ -661,6 +661,38 @@ pub export fn ledger_export_book_metadata(handle: ?*LedgerDB, book_id: i64, buf:
     return abi_buffers.ledger_export_book_metadata(handle, book_id, buf, buf_len, format);
 }
 
+pub export fn ledger_oble_export_book(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_book(handle, book_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_accounts(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_accounts(handle, book_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_periods(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_periods(handle, book_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_counterparties(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_counterparties(handle, book_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_policy_profile(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_policy_profile(handle, book_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_entry(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_entry(handle, entry_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_reversal_pair(handle: ?*LedgerDB, original_entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_reversal_pair(handle, original_entry_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_counterparty_open_item(handle: ?*LedgerDB, open_item_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_counterparty_open_item(handle, open_item_id, buf, buf_len);
+}
+
 pub export fn ledger_transition_budget(handle: ?*LedgerDB, budget_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     return abi_core.ledger_transition_budget(handle, budget_id, target_status, performed_by);
 }

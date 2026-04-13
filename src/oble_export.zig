@@ -289,6 +289,85 @@ pub fn exportCounterpartiesJson(database: db.Database, book_id: i64, buf: []u8) 
     return buf[0..pos];
 }
 
+pub fn exportPolicyProfileJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
+    var stmt = try database.prepare(
+        \\SELECT entity_type, fy_start_month, require_approval,
+        \\  rounding_account_id, fx_gain_loss_account_id,
+        \\  retained_earnings_account_id, income_summary_account_id,
+        \\  opening_balance_account_id, suspense_account_id,
+        \\  dividends_drawings_account_id, current_year_earnings_account_id
+        \\FROM ledger_books
+        \\WHERE id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    if (!try stmt.step()) return error.NotFound;
+
+    var pos: usize = 0;
+    try appendLiteral(buf, &pos, "{\"book_id\":");
+    try appendBookId(buf, &pos, book_id);
+    try appendLiteral(buf, &pos, ",\"entity_type\":");
+    try appendJsonString(buf, &pos, stmt.columnText(0) orelse "");
+    try appendLiteral(buf, &pos, ",\"fy_start_month\":");
+    try appendInt(buf, &pos, stmt.columnInt(1));
+    try appendLiteral(buf, &pos, ",\"require_approval\":");
+    try appendLiteral(buf, &pos, if (stmt.columnInt(2) != 0) "true" else "false");
+    try appendLiteral(buf, &pos, ",\"designations\":{");
+
+    const designation_names = [_][]const u8{
+        "rounding_account",
+        "fx_gain_loss_account",
+        "retained_earnings_account",
+        "income_summary_account",
+        "opening_balance_account",
+        "suspense_account",
+        "dividends_drawings_account",
+        "current_year_earnings_account",
+    };
+
+    for (designation_names, 0..) |name, i| {
+        if (i != 0) try appendLiteral(buf, &pos, ",");
+        try appendJsonString(buf, &pos, name);
+        try appendLiteral(buf, &pos, ":");
+        const account_id = stmt.columnInt64(@intCast(3 + i));
+        if (account_id == 0) {
+            try appendLiteral(buf, &pos, "null");
+        } else {
+            try appendAccountId(buf, &pos, account_id);
+        }
+    }
+
+    try appendLiteral(buf, &pos, "},\"policy_profiles\":[");
+
+    const PolicyProfile = struct {
+        enabled: bool,
+        name: []const u8,
+    };
+
+    const profiles = [_]PolicyProfile{
+        .{ .enabled = stmt.columnInt64(5) != 0, .name = "equity_close_target" },
+        .{ .enabled = stmt.columnInt64(5) != 0 and stmt.columnInt64(6) != 0, .name = "income_summary_close" },
+        .{ .enabled = stmt.columnInt64(4) != 0, .name = "multi_currency_revaluation" },
+        .{ .enabled = stmt.columnInt64(7) != 0, .name = "opening_balance_workflow" },
+        .{ .enabled = stmt.columnInt64(8) != 0, .name = "suspense_enforced" },
+        .{ .enabled = stmt.columnInt64(9) != 0, .name = "dividends_drawings_tracking" },
+        .{ .enabled = stmt.columnInt(2) != 0, .name = "approval_required" },
+    };
+
+    var first = true;
+    for (profiles) |profile| {
+        if (!profile.enabled) continue;
+        if (!first) try appendLiteral(buf, &pos, ",");
+        first = false;
+        try appendLiteral(buf, &pos, "{\"name\":");
+        try appendJsonString(buf, &pos, profile.name);
+        try appendLiteral(buf, &pos, "}");
+    }
+
+    try appendLiteral(buf, &pos, "]}");
+    return buf[0..pos];
+}
+
 pub fn exportEntryJson(database: db.Database, entry_id: i64, buf: []u8) ![]u8 {
     var header_stmt = try database.prepare(
         \\SELECT e.id, e.book_id, e.period_id, e.status, e.transaction_date, e.posting_date,
@@ -531,6 +610,36 @@ test "OBLE export: counterparties collection" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"customer\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"number\":\"S001\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"supplier\"") != null);
+}
+
+test "OBLE export: policy profile" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Policy Book", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const re_id = try account_mod.Account.create(database, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    const is_id = try account_mod.Account.create(database, book_id, "3200", "Income Summary", .equity, false, "admin");
+    const ob_id = try account_mod.Account.create(database, book_id, "3300", "Opening Balance", .equity, false, "admin");
+    const suspense_id = try account_mod.Account.create(database, book_id, "9999", "Suspense", .asset, false, "admin");
+    const fx_id = try account_mod.Account.create(database, book_id, "7999", "FX Gain Loss", .revenue, false, "admin");
+    const rounding_id = try account_mod.Account.create(database, book_id, "6999", "Rounding", .expense, false, "admin");
+
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, re_id, "admin");
+    try book_mod.Book.setIncomeSummaryAccount(database, book_id, is_id, "admin");
+    try book_mod.Book.setOpeningBalanceAccount(database, book_id, ob_id, "admin");
+    try book_mod.Book.setSuspenseAccount(database, book_id, suspense_id, "admin");
+    try book_mod.Book.setFxGainLossAccount(database, book_id, fx_id, "admin");
+    try book_mod.Book.setRoundingAccount(database, book_id, rounding_id, "admin");
+    try book_mod.Book.setRequireApproval(database, book_id, true, "admin");
+    try book_mod.Book.setEntityType(database, book_id, .corporation, "admin");
+
+    var buf: [4096]u8 = undefined;
+    const json = try exportPolicyProfileJson(database, book_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"retained_earnings_account\":\"acct-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"income_summary_close\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"approval_required\"") != null);
 }
 
 test "OBLE export: reversal pair" {

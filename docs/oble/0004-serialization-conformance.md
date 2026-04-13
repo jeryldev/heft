@@ -234,10 +234,12 @@ and feature-rich engines.
 
 ## Validation expectations
 
-The OBLE project should eventually publish:
+The OBLE project should publish:
 
 - JSON schemas or equivalent validators
 - reference fixtures
+- schema-to-example mappings
+- round-trip expectations where import/export boundaries exist
 - conformance tests
 
 The first draft does not need a full test suite yet, but the serialization
