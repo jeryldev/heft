@@ -39,6 +39,7 @@ Intended reading order:
 - `conformance-checklist` gives a practical first-pass claim matrix.
 - `examples/` provides concrete JSON payloads for review and future fixtures.
 - `schema/` begins the machine-checkable layer for the example payloads.
+  It now covers both the core packet and the first extension-level examples.
 
 These drafts are intentionally small, implementation-neutral, and incomplete.
 

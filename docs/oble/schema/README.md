@@ -19,7 +19,18 @@ Current scope:
 - `period.schema.json`
 - `periods.schema.json`
 - `entry.schema.json`
+- `reversal-pair.schema.json`
+- `counterparty-open-item.schema.json`
 
 These schemas intentionally validate the current draft examples and core field
 shapes. They should be treated as early draft artifacts, not final normative
 contracts yet.
+
+Suggested mapping to the example payloads:
+
+- `examples/core-book.json` -> `book.schema.json`
+- `examples/core-accounts.json` -> `accounts.schema.json`
+- `examples/core-periods.json` -> `periods.schema.json`
+- `examples/core-entry-posted.json` -> `entry.schema.json`
+- `examples/reversal-pair.json` -> `reversal-pair.schema.json`
+- `examples/counterparty-open-item.json` -> `counterparty-open-item.schema.json`

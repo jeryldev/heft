@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/reversal-pair.schema.json",
+  "title": "OBLE Reversal Pair",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "original_entry",
+    "reversal_entry"
+  ],
+  "properties": {
+    "original_entry": {
+      "$ref": "entry.schema.json"
+    },
+    "reversal_entry": {
+      "$ref": "entry.schema.json"
+    }
+  }
+}

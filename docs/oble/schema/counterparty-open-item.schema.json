@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/counterparty-open-item.schema.json",
+  "title": "OBLE Counterparty Open Item Example",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "counterparty",
+    "line",
+    "open_item"
+  ],
+  "properties": {
+    "counterparty": {
+      "$ref": "#/$defs/counterparty"
+    },
+    "line": {
+      "$ref": "entry.schema.json#/$defs/line"
+    },
+    "open_item": {
+      "$ref": "#/$defs/openItem"
+    }
+  },
+  "$defs": {
+    "amountString": {
+      "type": "string",
+      "pattern": "^-?\\d+(\\.\\d+)?$"
+    },
+    "counterparty": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "book_id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "book_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "number": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "openItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "book_id",
+        "entry_line_id",
+        "counterparty_id",
+        "original_amount",
+        "remaining_amount",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "book_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entry_line_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "counterparty_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_amount": {
+          "$ref": "#/$defs/amountString"
+        },
+        "remaining_amount": {
+          "$ref": "#/$defs/amountString"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "partial",
+            "closed"
+          ]
+        },
+        "due_date": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
