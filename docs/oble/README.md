@@ -23,6 +23,7 @@ Current draft set:
 9. [OBLE-0008 Designations and Policy Profiles](0008-designations-and-policy-profiles.md)
 10. [Conformance Checklist](conformance-checklist.md)
 11. [Examples](examples/README.md)
+12. [JSON Schemas](schema/README.md)
 
 Intended reading order:
 
@@ -37,6 +38,7 @@ Intended reading order:
 - `0008` defines how book-level designations and policy profiles fit around the core.
 - `conformance-checklist` gives a practical first-pass claim matrix.
 - `examples/` provides concrete JSON payloads for review and future fixtures.
+- `schema/` begins the machine-checkable layer for the example payloads.
 
 These drafts are intentionally small, implementation-neutral, and incomplete.
 

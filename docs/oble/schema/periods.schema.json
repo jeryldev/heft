@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/periods.schema.json",
+  "title": "OBLE Period List",
+  "type": "array",
+  "items": {
+    "$ref": "period.schema.json"
+  }
+}
