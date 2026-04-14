@@ -540,7 +540,7 @@ pub fn ledger_oble_export_core_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*
 
 pub fn ledger_oble_export_book_snapshot(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportBookSnapshotJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_counterparty.exportBookSnapshotJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -567,7 +567,7 @@ pub fn ledger_oble_export_periods(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8,
 
 pub fn ledger_oble_export_counterparties(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportCounterpartiesJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_counterparty.exportCounterpartiesJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -576,7 +576,7 @@ pub fn ledger_oble_export_counterparties(handle: ?*LedgerDB, book_id: i64, buf: 
 
 pub fn ledger_oble_export_policy_profile(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportPolicyProfileJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_policy.exportPolicyProfileJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -585,7 +585,7 @@ pub fn ledger_oble_export_policy_profile(handle: ?*LedgerDB, book_id: i64, buf: 
 
 pub fn ledger_oble_export_close_profile(handle: ?*LedgerDB, book_id: i64, period_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportCloseReopenProfileJson(h.sqlite, book_id, period_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_policy.exportCloseReopenProfileJson(h.sqlite, book_id, period_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -612,7 +612,7 @@ pub fn ledger_oble_export_reversal_pair(handle: ?*LedgerDB, original_entry_id: i
 
 pub fn ledger_oble_export_counterparty_open_item(handle: ?*LedgerDB, open_item_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportCounterpartyOpenItemJson(h.sqlite, open_item_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_counterparty.exportCounterpartyOpenItemJson(h.sqlite, open_item_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -621,7 +621,26 @@ pub fn ledger_oble_export_counterparty_open_item(handle: ?*LedgerDB, open_item_i
 
 pub fn ledger_oble_export_revaluation_packet(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportRevaluationPacketJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_policy.exportRevaluationPacketJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_counterparty_profile_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_counterparty.exportCounterpartyProfileBundleJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_policy_lifecycle_bundle(handle: ?*LedgerDB, book_id: i64, period_id: i64, revaluation_entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const maybe_revaluation_entry_id = if (revaluation_entry_id > 0) revaluation_entry_id else null;
+    const result = heft.oble_profile_policy.exportPolicyLifecycleBundleJson(h.sqlite, book_id, period_id, maybe_revaluation_entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };

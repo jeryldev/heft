@@ -134,8 +134,10 @@ const ledger_oble_export_book_snapshot = abi.ledger_oble_export_book_snapshot;
 const ledger_oble_export_accounts = abi.ledger_oble_export_accounts;
 const ledger_oble_export_periods = abi.ledger_oble_export_periods;
 const ledger_oble_export_counterparties = abi.ledger_oble_export_counterparties;
+const ledger_oble_export_counterparty_profile_bundle = abi.ledger_oble_export_counterparty_profile_bundle;
 const ledger_oble_export_policy_profile = abi.ledger_oble_export_policy_profile;
 const ledger_oble_export_close_profile = abi.ledger_oble_export_close_profile;
+const ledger_oble_export_policy_lifecycle_bundle = abi.ledger_oble_export_policy_lifecycle_bundle;
 const ledger_oble_export_entry = abi.ledger_oble_export_entry;
 const ledger_oble_export_reversal_pair = abi.ledger_oble_export_reversal_pair;
 const ledger_oble_export_counterparty_open_item = abi.ledger_oble_export_counterparty_open_item;
@@ -1945,6 +1947,11 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(counterparties_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparties_len)], "\"role\":\"customer\"") != null);
 
+    const counterparty_bundle_len = ledger_oble_export_counterparty_profile_bundle(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(counterparty_bundle_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparty_bundle_len)], "\"counterparties\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparty_bundle_len)], "\"open_items\"") != null);
+
     const policy_len = ledger_oble_export_policy_profile(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(policy_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_len)], "\"policy_profiles\"") != null);
@@ -1985,6 +1992,12 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(close_profile_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(close_profile_len)], "\"closing_entries\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(close_profile_len)], "\"next_opening_entry\"") != null);
+
+    const policy_lifecycle_len = ledger_oble_export_policy_lifecycle_bundle(handle, s.book_id, s.jan_2026_id, fx_reval_id, &buf, buf.len);
+    try std.testing.expect(policy_lifecycle_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"policy_profile\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"close_reopen_profile\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"revaluation_packet\"") != null);
 }
 
 test "C ABI: ledger_transition_budget via C boundary" {
