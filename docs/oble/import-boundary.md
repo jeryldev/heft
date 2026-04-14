@@ -127,6 +127,9 @@ without guessing row IDs after import.
 
 The current Zig session boundary assumes deterministic sequencing.
 
+The current C ABI import session follows the same sequencing rules for the
+stable packet set. It is not a separate semantics layer.
+
 ### Safe order
 
 The stable order today is:
@@ -144,6 +147,11 @@ The session intentionally fails fast when packet order is wrong:
 - unresolved logical references return `error.NotFound`
 - duplicate logical IDs in the same session return `error.DuplicateNumber`
 - invalid lifecycle or malformed payload state returns `error.InvalidInput`
+
+At the C boundary these surface through the usual ABI contract:
+
+- `-1`, `false`, or `NULL` return values
+- followed by `ledger_last_error()`
 
 This is preferable to silently guessing or auto-repairing packet order.
 

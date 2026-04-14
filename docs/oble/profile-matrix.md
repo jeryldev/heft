@@ -56,6 +56,26 @@ Implementation details that are outside OBLE itself:
 | `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
 
+## Public-boundary posture
+
+The current public-boundary posture in Heft is intentionally asymmetric:
+
+- Zig API: richest import and export surface
+- C ABI: strong export surface, conservative import surface
+
+That means:
+
+- `OBLE Core` has public export in Zig and C, and import in Zig and C
+- `Counterparty / Open Item` has public export in Zig and C, and stable
+  session-based import in Zig and C
+- `Policy / Designations` has public export in Zig and C, and safe
+  user-authored import in Zig and C
+- `Multi-Currency` and `Close / Reopen` remain export-first at the public
+  boundary
+
+This is deliberate. The goal is to freeze the safer user-authored packet
+imports first and keep lifecycle-derived import replay conservative.
+
 ## Profile definitions
 
 ## 1. OBLE Core

@@ -125,6 +125,7 @@ What is still missing is breadth, not the existence of the boundary:
 - wider profile coverage beyond the currently implemented packets
 - full draft-2020-12 schema validation of live exports in CI
 - broader import coverage for lifecycle-derived profile packets where replaying the packet directly is safe and semantically honest
+- fuller ABI-level failure-path coverage as more import packets are exposed
 
 ## OBLE-0006 Multi-Currency
 

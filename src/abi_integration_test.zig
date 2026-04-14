@@ -2064,6 +2064,79 @@ test "C ABI: OBLE import session happy path" {
     try std.testing.expect(ledger_oble_import_resolve_id(session, 7, "oi-1") > 0);
 }
 
+test "C ABI: OBLE import session enforces packet order and duplicate rules" {
+    defer cleanupTestFile("test-cabi-oble-import-rules-source.ledger");
+    defer cleanupTestFile("test-cabi-oble-import-rules-order.ledger");
+    defer cleanupTestFile("test-cabi-oble-import-rules-success.ledger");
+
+    const source = ledger_open("test-cabi-oble-import-rules-source.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(source);
+    const s = try setupAbiFeatureScenario(source);
+
+    var core_buf: [131072]u8 = undefined;
+    var counterparties_buf: [65536]u8 = undefined;
+    var entry_buf: [65536]u8 = undefined;
+
+    const core_len = ledger_oble_export_core_bundle(source, s.book_id, &core_buf, core_buf.len);
+    try std.testing.expect(core_len > 0);
+    core_buf[@intCast(core_len)] = 0;
+
+    const counterparties_len = ledger_oble_export_counterparties(source, s.book_id, &counterparties_buf, counterparties_buf.len);
+    try std.testing.expect(counterparties_len > 0);
+    counterparties_buf[@intCast(counterparties_len)] = 0;
+
+    const entry_len = ledger_oble_export_entry(source, s.invoice_entry_id, &entry_buf, entry_buf.len);
+    try std.testing.expect(entry_len > 0);
+    entry_buf[@intCast(entry_len)] = 0;
+
+    {
+        const target = ledger_open("test-cabi-oble-import-rules-order.ledger") orelse return error.TestUnexpectedResult;
+        defer ledger_close(target);
+
+        const session = ledger_oble_import_session_open(target, "admin") orelse return error.TestUnexpectedResult;
+        defer ledger_oble_import_session_close(session);
+
+        const imported_book_id = ledger_oble_import_core_bundle(session, @ptrCast(&core_buf));
+        try std.testing.expect(imported_book_id > 0);
+
+        try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_core_bundle(session, @ptrCast(&core_buf)));
+        try std.testing.expectEqual(@as(i32, 7), ledger_last_error());
+
+        try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_entry(session, @ptrCast(&entry_buf)));
+        try std.testing.expectEqual(@as(i32, 1), ledger_last_error());
+    }
+
+    {
+        const target = ledger_open("test-cabi-oble-import-rules-success.ledger") orelse return error.TestUnexpectedResult;
+        defer ledger_close(target);
+
+        const session = ledger_oble_import_session_open(target, "admin") orelse return error.TestUnexpectedResult;
+        defer ledger_oble_import_session_close(session);
+
+        const imported_book_id = ledger_oble_import_core_bundle(session, @ptrCast(&core_buf));
+        try std.testing.expect(imported_book_id > 0);
+        try std.testing.expect(ledger_oble_import_counterparties(session, @ptrCast(&counterparties_buf)));
+        try std.testing.expect(ledger_oble_import_entry(session, @ptrCast(&entry_buf)) > 0);
+
+        try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_resolve_id(session, 6, "cp-missing"));
+        try std.testing.expectEqual(@as(i32, 1), ledger_last_error());
+    }
+}
+
+test "C ABI: OBLE import session null handle protection" {
+    try std.testing.expect(ledger_oble_import_session_open(null, "admin") == null);
+    try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
+
+    try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_core_bundle(null, "{}"));
+    try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
+
+    try std.testing.expect(!ledger_oble_import_counterparties(null, "[]"));
+    try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
+
+    try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_resolve_id(null, 1, "book-1"));
+    try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
+}
+
 test "C ABI: ledger_transition_budget via C boundary" {
     defer cleanupTestFile("test-cabi-budget-trans.ledger");
     const handle = ledger_open("test-cabi-budget-trans.ledger") orelse return error.TestUnexpectedResult;
