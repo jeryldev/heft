@@ -86,6 +86,43 @@ That session model makes sequencing honest instead of hiding it:
 - import dependent profile packets
 - reuse one logical-ID mapping context across the whole import flow
 
+It also now exposes the imported logical-ID map back to Zig callers, so a
+consumer can resolve:
+
+- imported books
+- accounts
+- periods
+- entries
+- lines
+- counterparties
+- open items
+
+without guessing row IDs after import.
+
+## Import-session rules
+
+The current Zig session boundary assumes deterministic sequencing.
+
+### Safe order
+
+The stable order today is:
+
+1. import core bundle
+2. import prerequisite profile collections such as counterparties
+3. import dependent entries
+4. import profile bundles that depend on those entries and counterparties
+5. import safe user-authored policy packets
+
+### Current failure modes
+
+The session intentionally fails fast when packet order is wrong:
+
+- unresolved logical references return `error.NotFound`
+- duplicate logical IDs in the same session return `error.DuplicateNumber`
+- invalid lifecycle or malformed payload state returns `error.InvalidInput`
+
+This is preferable to silently guessing or auto-repairing packet order.
+
 This keeps the standards boundary real without freezing an immature C import
 surface too early.
 

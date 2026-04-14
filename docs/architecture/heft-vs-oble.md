@@ -202,6 +202,8 @@ If you are embedding Heft:
 - use OBLE exports/imports when you need portability
 - for OBLE import sequencing, prefer the Zig import-session boundary rather than
   ad-hoc one-shot packet calls
+- use the import session's logical-ID resolution instead of assuming imported
+  row IDs
 
 If you are integrating multiple systems:
 
