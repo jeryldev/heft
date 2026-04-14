@@ -11,6 +11,7 @@ const heft = @import("heft");
 const abi_common = @import("abi_common.zig");
 const abi_buffers = @import("abi_buffers.zig");
 const abi_core = @import("abi_core.zig");
+const abi_import = @import("abi_import.zig");
 const abi_reports = @import("abi_reports.zig");
 const VERSION = abi_common.VERSION;
 
@@ -19,6 +20,7 @@ const VERSION = abi_common.VERSION;
 // it crosses the C ABI as a pointer.
 
 pub const LedgerDB = abi_common.LedgerDB;
+pub const LedgerOBLEImportSession = abi_import.LedgerOBLEImportSession;
 
 // ── Internal (Zig idioms) ───────────────────────────────────────
 
@@ -74,6 +76,46 @@ pub export fn ledger_close(handle: ?*LedgerDB) void {
 
 pub export fn ledger_version() [*:0]const u8 {
     return VERSION;
+}
+
+pub export fn ledger_oble_import_session_open(handle: ?*LedgerDB, performed_by: ?[*:0]const u8) ?*LedgerOBLEImportSession {
+    return abi_import.ledger_oble_import_session_open(handle, performed_by);
+}
+
+pub export fn ledger_oble_import_session_close(session: ?*LedgerOBLEImportSession) void {
+    abi_import.ledger_oble_import_session_close(session);
+}
+
+pub export fn ledger_oble_import_core_bundle(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) i64 {
+    return abi_import.ledger_oble_import_core_bundle(session, json);
+}
+
+pub export fn ledger_oble_import_entry(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) i64 {
+    return abi_import.ledger_oble_import_entry(session, json);
+}
+
+pub export fn ledger_oble_import_reversal_pair(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) bool {
+    return abi_import.ledger_oble_import_reversal_pair(session, json);
+}
+
+pub export fn ledger_oble_import_counterparties(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) bool {
+    return abi_import.ledger_oble_import_counterparties(session, json);
+}
+
+pub export fn ledger_oble_import_counterparty_profile_bundle(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) bool {
+    return abi_import.ledger_oble_import_counterparty_profile_bundle(session, json);
+}
+
+pub export fn ledger_oble_import_policy_profile(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) i64 {
+    return abi_import.ledger_oble_import_policy_profile(session, json);
+}
+
+pub export fn ledger_oble_import_book_snapshot(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) i64 {
+    return abi_import.ledger_oble_import_book_snapshot(session, json);
+}
+
+pub export fn ledger_oble_import_resolve_id(session: ?*LedgerOBLEImportSession, entity_kind: i32, logical_id: ?[*:0]const u8) i64 {
+    return abi_import.ledger_oble_import_resolve_id(session, entity_kind, logical_id);
 }
 
 // ── Sprint 2: Entity C ABI Exports ─────────────────────────────

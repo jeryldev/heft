@@ -143,6 +143,13 @@ const ledger_oble_export_reversal_pair = abi.ledger_oble_export_reversal_pair;
 const ledger_oble_export_counterparty_open_item = abi.ledger_oble_export_counterparty_open_item;
 const ledger_oble_export_revaluation_packet = abi.ledger_oble_export_revaluation_packet;
 const ledger_oble_export_fx_profile_bundle = abi.ledger_oble_export_fx_profile_bundle;
+const ledger_oble_import_session_open = abi.ledger_oble_import_session_open;
+const ledger_oble_import_session_close = abi.ledger_oble_import_session_close;
+const ledger_oble_import_core_bundle = abi.ledger_oble_import_core_bundle;
+const ledger_oble_import_entry = abi.ledger_oble_import_entry;
+const ledger_oble_import_counterparties = abi.ledger_oble_import_counterparties;
+const ledger_oble_import_counterparty_profile_bundle = abi.ledger_oble_import_counterparty_profile_bundle;
+const ledger_oble_import_resolve_id = abi.ledger_oble_import_resolve_id;
 const ledger_transition_budget = abi.ledger_transition_budget;
 const ledger_create_open_item = abi.ledger_create_open_item;
 const ledger_allocate_payment = abi.ledger_allocate_payment;
@@ -2004,6 +2011,57 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"policy_profile\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"close_reopen_profile\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"revaluation_packet\"") != null);
+}
+
+test "C ABI: OBLE import session happy path" {
+    defer cleanupTestFile("test-cabi-oble-import-source.ledger");
+    defer cleanupTestFile("test-cabi-oble-import-target.ledger");
+
+    const source = ledger_open("test-cabi-oble-import-source.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(source);
+    const s = try setupAbiFeatureScenario(source);
+    const open_item_id = ledger_create_open_item(source, s.invoice_line_id, s.customer_id, 5_000_000_000_00, "2026-02-15", s.book_id, "admin");
+    try std.testing.expect(open_item_id > 0);
+    try std.testing.expect(ledger_allocate_payment(source, open_item_id, 2_000_000_000_00, "admin"));
+
+    var core_buf: [131072]u8 = undefined;
+    var counterparties_buf: [65536]u8 = undefined;
+    var entry_buf: [65536]u8 = undefined;
+    var profile_buf: [131072]u8 = undefined;
+
+    const core_len = ledger_oble_export_core_bundle(source, s.book_id, &core_buf, core_buf.len);
+    try std.testing.expect(core_len > 0);
+    core_buf[@intCast(core_len)] = 0;
+
+    const counterparties_len = ledger_oble_export_counterparties(source, s.book_id, &counterparties_buf, counterparties_buf.len);
+    try std.testing.expect(counterparties_len > 0);
+    counterparties_buf[@intCast(counterparties_len)] = 0;
+
+    const entry_len = ledger_oble_export_entry(source, s.invoice_entry_id, &entry_buf, entry_buf.len);
+    try std.testing.expect(entry_len > 0);
+    entry_buf[@intCast(entry_len)] = 0;
+
+    const profile_len = ledger_oble_export_counterparty_profile_bundle(source, s.book_id, &profile_buf, profile_buf.len);
+    try std.testing.expect(profile_len > 0);
+    profile_buf[@intCast(profile_len)] = 0;
+
+    const target = ledger_open("test-cabi-oble-import-target.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(target);
+
+    const session = ledger_oble_import_session_open(target, "admin") orelse return error.TestUnexpectedResult;
+    defer ledger_oble_import_session_close(session);
+
+    const imported_book_id = ledger_oble_import_core_bundle(session, @ptrCast(&core_buf));
+    try std.testing.expect(imported_book_id > 0);
+    try std.testing.expect(ledger_oble_import_counterparties(session, @ptrCast(&counterparties_buf)));
+
+    const imported_entry_id = ledger_oble_import_entry(session, @ptrCast(&entry_buf));
+    try std.testing.expect(imported_entry_id > 0);
+    try std.testing.expect(ledger_oble_import_counterparty_profile_bundle(session, @ptrCast(&profile_buf)));
+
+    try std.testing.expectEqual(imported_book_id, ledger_oble_import_resolve_id(session, 1, "book-1"));
+    try std.testing.expect(ledger_oble_import_resolve_id(session, 6, "cp-1") > 0);
+    try std.testing.expect(ledger_oble_import_resolve_id(session, 7, "oi-1") > 0);
 }
 
 test "C ABI: ledger_transition_budget via C boundary" {

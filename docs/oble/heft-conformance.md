@@ -53,7 +53,7 @@ standard boundary or testable conformance surface.
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
-| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, book snapshot, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully. Importer support remains Zig-first, but Heft now has a real import-session boundary with explicit logical-ID mapping and packet-order semantics. Not every lifecycle-derived packet is imported directly. |
+| Canonical `OBLE -> Heft` import | Partial | Heft imports the implemented core, book snapshot, reversal, counterparty/open-item, and policy-profile packets and round-trips the safe user-authored layers successfully. Importer support is strongest in Zig, and Heft now also exposes a minimal C ABI import-session boundary for the stable packet set with explicit logical-ID mapping and packet-order semantics. Not every lifecycle-derived packet is imported directly. |
 
 ## Detail by draft area
 
@@ -179,7 +179,7 @@ The most important gaps are now about completeness, not first principles.
 
 1. broader packet coverage for close/reopen bundles, richer multi-currency examples, and remaining profile extensions
 2. automated schema validation of exported payloads
-3. public-surface exposure beyond the current Zig bridge
+3. broader public-surface exposure beyond the current Zig bridge and minimal C import session
 4. fuller live-export validation against a bundled draft-2020-12 schema validator once one is adopted
 
 ## Current practical claim
@@ -202,7 +202,7 @@ the draft set and more integration boundaries.
 
 ## Immediate next steps
 
-1. expose the implemented OBLE packet exports through more public APIs, including the C ABI
-2. broaden the exporter/importer packet set to more OBLE profiles
-3. automate schema validation for canonical exports
-4. turn profile claims into fuller executable conformance checks
+1. broaden the exporter/importer packet set to more OBLE profiles
+2. automate schema validation for canonical exports
+3. turn profile claims into fuller executable conformance checks
+4. decide how much more of the import surface should be frozen in the C ABI

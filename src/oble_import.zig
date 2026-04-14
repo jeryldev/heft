@@ -51,6 +51,11 @@ pub const ImportContext = struct {
     }
 };
 
+pub const ReversalPairImportIds = struct {
+    original_entry_id: i64,
+    reversal_entry_id: i64,
+};
+
 const BookPayload = struct {
     id: []const u8,
     name: []const u8,
@@ -433,7 +438,7 @@ fn importEntryPayload(
     return entry_id;
 }
 
-pub fn importReversalPairJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !struct { original_entry_id: i64, reversal_entry_id: i64 } {
+pub fn importReversalPairJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !ReversalPairImportIds {
     var parsed = try std.json.parseFromSlice(ReversalPairPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 

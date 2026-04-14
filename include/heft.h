@@ -51,6 +51,8 @@ extern "C" {
 
 /* Opaque handle — one per .ledger file */
 typedef struct LedgerDB LedgerDB;
+/* Opaque OBLE import session — requires parent LedgerDB to remain open. */
+typedef struct LedgerOBLEImportSession LedgerOBLEImportSession;
 
 /* Opaque result types — caller must free via corresponding ledger_free_* */
 typedef struct ReportResult ReportResult;
@@ -110,6 +112,16 @@ enum {
     HEFT_UNKNOWN                        = 99,
 };
 
+enum {
+    HEFT_OBLE_ENTITY_BOOK = 1,
+    HEFT_OBLE_ENTITY_ACCOUNT = 2,
+    HEFT_OBLE_ENTITY_PERIOD = 3,
+    HEFT_OBLE_ENTITY_ENTRY = 4,
+    HEFT_OBLE_ENTITY_LINE = 5,
+    HEFT_OBLE_ENTITY_COUNTERPARTY = 6,
+    HEFT_OBLE_ENTITY_OPEN_ITEM = 7,
+};
+
 /* ── Lifecycle ─────────────────────────────────────────────── */
 
 /* Returns a non-NULL static version string. */
@@ -117,6 +129,20 @@ const char* ledger_version(void);
 LedgerDB*   ledger_open(const char* path);
 void        ledger_close(LedgerDB* handle);
 int32_t     ledger_last_error(void);
+
+/* ── OBLE Import Session ───────────────────────────────────── */
+
+/* Import sessions require the parent LedgerDB handle to remain open. */
+LedgerOBLEImportSession* ledger_oble_import_session_open(LedgerDB* h, const char* performed_by);
+void     ledger_oble_import_session_close(LedgerOBLEImportSession* session);
+int64_t  ledger_oble_import_core_bundle(LedgerOBLEImportSession* session, const char* json);
+int64_t  ledger_oble_import_entry(LedgerOBLEImportSession* session, const char* json);
+bool     ledger_oble_import_reversal_pair(LedgerOBLEImportSession* session, const char* json);
+bool     ledger_oble_import_counterparties(LedgerOBLEImportSession* session, const char* json);
+bool     ledger_oble_import_counterparty_profile_bundle(LedgerOBLEImportSession* session, const char* json);
+int64_t  ledger_oble_import_policy_profile(LedgerOBLEImportSession* session, const char* json);
+int64_t  ledger_oble_import_book_snapshot(LedgerOBLEImportSession* session, const char* json);
+int64_t  ledger_oble_import_resolve_id(LedgerOBLEImportSession* session, int32_t entity_kind, const char* logical_id);
 
 /* ── Books ─────────────────────────────────────────────────── */
 

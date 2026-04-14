@@ -90,6 +90,8 @@ Examples:
 - `ledger_oble_export_book(...)`
 - `ledger_oble_export_entry(...)`
 - `ledger_oble_export_counterparty_open_item(...)`
+- `ledger_oble_import_session_open(...)`
+- `ledger_oble_import_core_bundle(...)`
 
 So the practical split is:
 
@@ -200,8 +202,10 @@ If you are embedding Heft:
 
 - use Heft APIs for application behavior
 - use OBLE exports/imports when you need portability
-- for OBLE import sequencing, prefer the Zig import-session boundary rather than
-  ad-hoc one-shot packet calls
+- for the richest OBLE import sequencing, prefer the Zig import-session boundary
+  rather than ad-hoc one-shot packet calls
+- if you are embedding from C, use the C ABI import-session handle for the
+  stable packet set rather than inventing your own row-ID mapping
 - use the import session's logical-ID resolution instead of assuming imported
   row IDs
 

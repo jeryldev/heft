@@ -14,6 +14,7 @@ const open_item_mod = @import("open_item.zig");
 const money = @import("money.zig");
 
 pub const ImportContext = oble_import.ImportContext;
+pub const ReversalPairImportIds = oble_import.ReversalPairImportIds;
 pub const EntityKind = enum {
     book,
     account,
@@ -61,7 +62,7 @@ pub const Session = struct {
         return oble_core.importEntryJson(self.database, &self.ctx, json, self.performed_by);
     }
 
-    pub fn importReversalPairJson(self: *Session, json: []const u8) !struct { original_entry_id: i64, reversal_entry_id: i64 } {
+    pub fn importReversalPairJson(self: *Session, json: []const u8) !ReversalPairImportIds {
         return oble_import.importReversalPairJson(self.database, &self.ctx, json, self.performed_by);
     }
 
