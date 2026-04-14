@@ -4,7 +4,7 @@ const abi = @import("main.zig");
 
 const VERSION = heft.version.VERSION;
 const SCHEMA_VERSION = heft.schema.SCHEMA_VERSION;
-const ledger_open = abi.ledger_open;
+const ledger_open_raw = abi.ledger_open;
 const ledger_close = abi.ledger_close;
 const ledger_version = abi.ledger_version;
 const ledger_create_book = abi.ledger_create_book;
@@ -159,9 +159,22 @@ const ledger_free_cash_flow_indirect = abi.ledger_free_cash_flow_indirect;
 const ledger_classified_trial_balance = abi.ledger_classified_trial_balance;
 const ledger_dimension_summary_rollup = abi.ledger_dimension_summary_rollup;
 
+fn resolveTestPath(path: [*:0]const u8, buf: *[512:0]u8) [*:0]const u8 {
+    const path_slice = std.mem.span(path);
+    if (path_slice.len > 0 and path_slice[0] == '/') return path;
+    return std.fmt.bufPrintZ(buf, "/tmp/{s}", .{path_slice}) catch path;
+}
+
+fn ledger_open(path: ?[*:0]const u8) ?*abi.LedgerDB {
+    const p = path orelse return ledger_open_raw(null);
+    var buf: [512:0]u8 = undefined;
+    return ledger_open_raw(resolveTestPath(p, &buf));
+}
+
 fn cleanupTestFile(name: [*:0]const u8) void {
     const cwd = std.fs.cwd();
-    const base = std.mem.span(name);
+    var path_buf: [512:0]u8 = undefined;
+    const base = std.mem.span(resolveTestPath(name, &path_buf));
     cwd.deleteFile(base) catch {};
     // WAL mode creates -wal and -shm sidecar files
     var wal_buf: [256]u8 = undefined;
@@ -170,6 +183,11 @@ fn cleanupTestFile(name: [*:0]const u8) void {
     const shm_name = std.fmt.bufPrint(&shm_buf, "{s}-shm", .{base}) catch return;
     cwd.deleteFile(wal_name) catch {};
     cwd.deleteFile(shm_name) catch {};
+}
+
+fn openRawTestDatabase(path: [*:0]const u8) !heft.db.Database {
+    var buf: [512:0]u8 = undefined;
+    return heft.db.Database.open(resolveTestPath(path, &buf));
 }
 
 const AbiFeatureScenario = struct {
@@ -413,7 +431,7 @@ test "ledger_open rejects future schema version" {
     try std.testing.expect(h1 != null);
     if (h1) |h| ledger_close(h);
 
-    const raw_db = try heft.db.Database.open("test-future-version.ledger");
+    const raw_db = try openRawTestDatabase("test-future-version.ledger");
     try raw_db.exec("PRAGMA user_version = 999;");
     raw_db.close();
 
