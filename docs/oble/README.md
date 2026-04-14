@@ -58,3 +58,15 @@ These drafts are intentionally small, implementation-neutral, and incomplete.
 
 They should be treated as working documents for extracting stable semantics,
 not as frozen standards yet.
+
+Repo strategy:
+
+- for now, OBLE lives here so it can evolve next to the reference
+  implementation
+- the expected long-term direction is a dedicated `oble` repo for the standard
+  itself
+- `Heft` should remain the engine/reference implementation and validate
+  against OBLE artifacts after that split
+
+The current migration recommendation is documented in
+[../architecture/oble-repo-split-plan.md](../architecture/oble-repo-split-plan.md).

@@ -116,6 +116,7 @@ The C ABI entry implementation lives in [src/main.zig](src/main.zig).
 
 - [Architecture](docs/architecture.md)
 - [Heft vs OBLE](docs/architecture/heft-vs-oble.md)
+- [OBLE Repo Split Plan](docs/architecture/oble-repo-split-plan.md)
 - [Heft to OBLE Module Map](docs/architecture/heft-oble-module-map.md)
 - [Core, Policy, and Runtime](docs/architecture/core-policy-runtime.md)
 - [Book Designations](docs/designations.md)

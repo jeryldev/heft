@@ -238,6 +238,26 @@ The repo is already moving in this direction:
 The next work is to keep expanding that boundary carefully without forcing the
 entire engine to become spec-shaped internally all at once.
 
+## Repository strategy
+
+The likely long-term shape is:
+
+- `Heft` remains the engine and reference implementation
+- `OBLE` moves into its own standards repo
+
+That split should happen once the current draft packet, schemas, examples, and
+profile matrix are stable enough to stand on their own.
+
+When that happens:
+
+- the `oble` repo should become the source of truth for the standard
+- the `Heft` repo should keep the implementation code and conformance tests
+- `Heft` should consume OBLE artifacts for validation, not treat OBLE as a
+  runtime dependency
+
+For the detailed split plan, see
+[OBLE Repo Split Plan](oble-repo-split-plan.md).
+
 Related docs:
 
 - [Heft to OBLE Module Map](heft-oble-module-map.md)
