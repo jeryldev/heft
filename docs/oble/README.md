@@ -42,6 +42,9 @@ Intended reading order:
 - `conformance-checklist` gives a practical first-pass claim matrix.
 - `profile-matrix` groups the current draft set into core and profile-level
   interoperability targets.
+- the current Heft code now mirrors that split with `oble_core.zig` for the
+  canonical core packet set and `oble_profile_counterparty.zig` for the first
+  named profile boundary.
 - `examples/` provides concrete JSON payloads for review and future fixtures.
 - `schema/` begins the machine-checkable layer for the example payloads.
   It now covers core packets, the book snapshot bundle, and the first

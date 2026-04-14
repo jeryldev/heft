@@ -104,7 +104,7 @@ pub fn importCoreBundleJson(database: db.Database, ctx: *ImportContext, json: []
         parsed.value.book.decimal_places,
         performed_by,
     );
-    try putUnique(&ctx.book_ids, parsed.value.book.id, book_id);
+    try putUnique(ctx, &ctx.book_ids, parsed.value.book.id, book_id);
     if (parsed.value.book.status) |status| {
         if (!std.mem.eql(u8, status, "active")) return error.InvalidInput;
     }
@@ -113,7 +113,7 @@ pub fn importCoreBundleJson(database: db.Database, ctx: *ImportContext, json: []
         const mapped_book_id = try resolveId(&ctx.book_ids, payload.book_id);
         const account_type = account_mod.AccountType.fromString(payload.account_type) orelse return error.InvalidInput;
         const account_id = try account_mod.Account.create(database, mapped_book_id, payload.number, payload.name, account_type, false, performed_by);
-        try putUnique(&ctx.account_ids, payload.id, account_id);
+        try putUnique(ctx, &ctx.account_ids, payload.id, account_id);
         if (payload.status) |status| {
             const parsed_status = account_mod.AccountStatus.fromString(status) orelse return error.InvalidInput;
             if (parsed_status != .active) try account_mod.Account.updateStatus(database, account_id, parsed_status, performed_by);
@@ -133,7 +133,7 @@ pub fn importCoreBundleJson(database: db.Database, ctx: *ImportContext, json: []
             "regular",
             performed_by,
         );
-        try putUnique(&ctx.period_ids, payload.id, period_id);
+        try putUnique(ctx, &ctx.period_ids, payload.id, period_id);
         if (payload.status) |status| {
             const parsed_status = period_mod.PeriodStatus.fromString(status) orelse return error.InvalidInput;
             switch (parsed_status) {
@@ -185,8 +185,10 @@ test "OBLE core: export and import core bundle round-trips" {
     try std.testing.expectEqualStrings(exported, round_trip);
 }
 
-fn putUnique(map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
-    const gop = try map.getOrPut(key);
+fn putUnique(ctx: *ImportContext, map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
+    const owned_key = try ctx.stableAllocator().dupe(u8, key);
+    errdefer ctx.stableAllocator().free(owned_key);
+    const gop = try map.getOrPut(owned_key);
     if (gop.found_existing) return error.DuplicateNumber;
     gop.value_ptr.* = value;
 }

@@ -12,6 +12,7 @@ const oble_export = @import("oble_export.zig");
 
 pub const ImportContext = struct {
     allocator: std.mem.Allocator,
+    id_arena: std.heap.ArenaAllocator,
     book_ids: std.StringHashMap(i64),
     account_ids: std.StringHashMap(i64),
     period_ids: std.StringHashMap(i64),
@@ -23,6 +24,7 @@ pub const ImportContext = struct {
     pub fn init(allocator: std.mem.Allocator) ImportContext {
         return .{
             .allocator = allocator,
+            .id_arena = std.heap.ArenaAllocator.init(allocator),
             .book_ids = std.StringHashMap(i64).init(allocator),
             .account_ids = std.StringHashMap(i64).init(allocator),
             .period_ids = std.StringHashMap(i64).init(allocator),
@@ -41,6 +43,11 @@ pub const ImportContext = struct {
         self.line_ids.deinit();
         self.counterparty_ids.deinit();
         self.open_item_ids.deinit();
+        self.id_arena.deinit();
+    }
+
+    pub fn stableAllocator(self: *ImportContext) std.mem.Allocator {
+        return self.id_arena.allocator();
     }
 };
 
@@ -170,8 +177,10 @@ const BookSnapshotPayload = struct {
     policy_profile: ?PolicyProfilePayload = null,
 };
 
-fn putUnique(map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
-    const gop = try map.getOrPut(key);
+fn putUnique(ctx: *ImportContext, map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
+    const owned_key = try ctx.stableAllocator().dupe(u8, key);
+    errdefer ctx.stableAllocator().free(owned_key);
+    const gop = try map.getOrPut(owned_key);
     if (gop.found_existing) return error.DuplicateNumber;
     gop.value_ptr.* = value;
 }
@@ -283,7 +292,7 @@ fn ensureCounterpartyImported(
         group_id,
         performed_by,
     );
-    try putUnique(&ctx.counterparty_ids, payload.id, counterparty_id);
+    try putUnique(ctx, &ctx.counterparty_ids, payload.id, counterparty_id);
     if (payload.status) |status| {
         const parsed = try parseCounterpartyStatus(status);
         if (parsed != .active) try subledger_mod.SubledgerAccount.updateStatus(database, counterparty_id, parsed, performed_by);
@@ -297,7 +306,7 @@ pub fn importBookJson(database: db.Database, ctx: *ImportContext, json: []const 
 
     const payload = parsed.value;
     const book_id = try book_mod.Book.create(database, payload.name, payload.base_currency, payload.decimal_places, performed_by);
-    try putUnique(&ctx.book_ids, payload.id, book_id);
+    try putUnique(ctx, &ctx.book_ids, payload.id, book_id);
 
     if (payload.status) |status| {
         if (!std.mem.eql(u8, status, "active")) return error.InvalidInput;
@@ -313,7 +322,7 @@ pub fn importAccountsJson(database: db.Database, ctx: *ImportContext, json: []co
         const book_id = try resolveId(&ctx.book_ids, payload.book_id);
         const account_type = try parseAccountType(payload.account_type);
         const account_id = try account_mod.Account.create(database, book_id, payload.number, payload.name, account_type, false, performed_by);
-        try putUnique(&ctx.account_ids, payload.id, account_id);
+        try putUnique(ctx, &ctx.account_ids, payload.id, account_id);
         if (payload.status) |status| try applyAccountStatus(database, account_id, status, performed_by);
     }
 }
@@ -335,7 +344,7 @@ pub fn importPeriodsJson(database: db.Database, ctx: *ImportContext, json: []con
             "regular",
             performed_by,
         );
-        try putUnique(&ctx.period_ids, payload.id, period_id);
+        try putUnique(ctx, &ctx.period_ids, payload.id, period_id);
         if (payload.status) |status| try applyPeriodStatus(database, period_id, status, performed_by);
     }
 }
@@ -383,7 +392,7 @@ fn importEntryPayload(
         performed_by,
     );
     errdefer _ = ctx.entry_ids.remove(payload.id);
-    try putUnique(&ctx.entry_ids, payload.id, entry_id);
+    try putUnique(ctx, &ctx.entry_ids, payload.id, entry_id);
 
     var base_currency_buf: [8]u8 = undefined;
     const base_currency = try getBookBaseCurrency(database, book_id, &base_currency_buf);
@@ -411,7 +420,7 @@ fn importEntryPayload(
             null,
             performed_by,
         );
-        try putUnique(&ctx.line_ids, line.id, line_id);
+        try putUnique(ctx, &ctx.line_ids, line.id, line_id);
     }
 
     const target_status = forced_status orelse payload.status;
@@ -448,7 +457,7 @@ pub fn importReversalPairJson(database: db.Database, ctx: *ImportContext, json: 
         reversal_period_id,
         performed_by,
     );
-    try putUnique(&ctx.entry_ids, payload.reversal_entry.id, reversal_entry_id);
+    try putUnique(ctx, &ctx.entry_ids, payload.reversal_entry.id, reversal_entry_id);
 
     if (payload.reversal_entry.document_number) |expected_doc| {
         var stmt = try database.prepare("SELECT document_number FROM ledger_entries WHERE id = ?;");
@@ -494,7 +503,7 @@ pub fn importCounterpartyOpenItemJson(database: db.Database, ctx: *ImportContext
         book_id,
         performed_by,
     );
-    try putUnique(&ctx.open_item_ids, payload.open_item.id, open_item_id);
+    try putUnique(ctx, &ctx.open_item_ids, payload.open_item.id, open_item_id);
 
     const allocated_amount = original_amount - remaining_amount;
     if (allocated_amount > 0) {
@@ -544,7 +553,7 @@ pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: 
 
     const payload = parsed.value;
     const book_id = try book_mod.Book.create(database, payload.book.name, payload.book.base_currency, payload.book.decimal_places, performed_by);
-    try putUnique(&ctx.book_ids, payload.book.id, book_id);
+    try putUnique(ctx, &ctx.book_ids, payload.book.id, book_id);
 
     if (payload.book.status) |status| {
         if (!std.mem.eql(u8, status, "active")) return error.InvalidInput;
@@ -553,7 +562,7 @@ pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: 
     for (payload.accounts) |account| {
         const account_type = try parseAccountType(account.account_type);
         const account_id = try account_mod.Account.create(database, book_id, account.number, account.name, account_type, false, performed_by);
-        try putUnique(&ctx.account_ids, account.id, account_id);
+        try putUnique(ctx, &ctx.account_ids, account.id, account_id);
         if (account.status) |status| try applyAccountStatus(database, account_id, status, performed_by);
     }
 
@@ -569,7 +578,7 @@ pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: 
             "regular",
             performed_by,
         );
-        try putUnique(&ctx.period_ids, period.id, period_id);
+        try putUnique(ctx, &ctx.period_ids, period.id, period_id);
         if (period.status) |status| try applyPeriodStatus(database, period_id, status, performed_by);
     }
 
