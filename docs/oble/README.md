@@ -9,6 +9,7 @@ This folder is a vendored local snapshot of the canonical OBLE repository.
 Canonical home:
 
 - [github.com/jeryldev/oble](https://github.com/jeryldev/oble)
+- canonical license: Apache-2.0
 
 What this folder is for:
 
