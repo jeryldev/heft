@@ -522,7 +522,16 @@ pub fn ledger_export_book_metadata(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8
 
 pub fn ledger_oble_export_book(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportBookJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_core.exportBookJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_core_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_core.exportCoreBundleJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -540,7 +549,7 @@ pub fn ledger_oble_export_book_snapshot(handle: ?*LedgerDB, book_id: i64, buf: ?
 
 pub fn ledger_oble_export_accounts(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportAccountsJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_core.exportAccountsJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -549,7 +558,7 @@ pub fn ledger_oble_export_accounts(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8
 
 pub fn ledger_oble_export_periods(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportPeriodsJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_core.exportPeriodsJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };
@@ -585,7 +594,7 @@ pub fn ledger_oble_export_close_profile(handle: ?*LedgerDB, book_id: i64, period
 
 pub fn ledger_oble_export_entry(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_export.exportEntryJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_core.exportEntryJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };

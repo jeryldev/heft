@@ -314,6 +314,7 @@ int32_t ledger_export_book_metadata(LedgerDB* h, int64_t book_id, uint8_t* buf, 
 /* ── OBLE Export (canonical JSON into caller buffer) ───────── */
 
 int32_t ledger_oble_export_book(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_core_bundle(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_book_snapshot(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_accounts(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_periods(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);

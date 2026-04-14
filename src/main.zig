@@ -677,6 +677,10 @@ pub export fn ledger_oble_export_book(handle: ?*LedgerDB, book_id: i64, buf: ?[*
     return abi_buffers.ledger_oble_export_book(handle, book_id, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_core_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_core_bundle(handle, book_id, buf, buf_len);
+}
+
 pub export fn ledger_oble_export_book_snapshot(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     return abi_buffers.ledger_oble_export_book_snapshot(handle, book_id, buf, buf_len);
 }
