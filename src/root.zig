@@ -27,6 +27,8 @@ pub const oble_profile_policy = @import("oble_profile_policy.zig");
 pub const oble_export = @import("oble_export.zig");
 pub const oble_import = @import("oble_import.zig");
 pub const oble_import_session = @import("oble_import_session.zig");
+pub const oble_reconstruction = @import("oble_reconstruction.zig");
+pub const oble_semantic_verify = @import("oble_semantic_verify.zig");
 pub const version = @import("version.zig");
 pub const LedgerError = @import("error.zig").LedgerError;
 
@@ -60,6 +62,8 @@ comptime {
     _ = oble_export;
     _ = oble_import;
     _ = oble_import_session;
+    _ = oble_reconstruction;
+    _ = oble_semantic_verify;
     _ = version;
     _ = LedgerError;
     _ = @import("lifecycle_test.zig");

@@ -77,6 +77,9 @@ These are the places most likely to need future refactoring.
 - `src/oble_core.zig`
   Explicit OBLE-core packet boundary for the canonical `Book`, `Account[]`,
   `Period[]`, and `Entry` packet set.
+- `src/oble_semantic_verify.zig`
+  Semantic verification layer for comparing OBLE-aligned book meaning across
+  ledgers after import/export flows.
 
 These modules are the strongest candidates for explicit OBLE-core alignment in
 future refactors.
@@ -107,6 +110,9 @@ future refactors.
   Analytical tagging and rollup profile behavior.
 - `src/budget.zig`
   Budget workflow and budget-vs-actual profile behavior.
+- `src/oble_reconstruction.zig`
+  Explicit post-import reconstruction helper layer for lifecycle-derived
+  profile behavior such as close and revaluation.
 
 These are good candidates for future “OBLE profile” naming and conformance
 boundaries rather than forcing them into the smallest common core.
@@ -156,6 +162,9 @@ boundaries rather than forcing them into the smallest common core.
   live Heft runtime behavior.
 - `src/oble_conformance_test.zig`
   Standards-facing verification over runtime and semantic boundaries at once.
+- `src/oble_import_session.zig`
+  Public Zig session boundary that now mixes packet import, logical-ID mapping,
+  and reconstruction-oriented workflow semantics.
 
 ## What should become more explicitly OBLE-shaped?
 

@@ -50,6 +50,7 @@ The core should be:
 - implementation-neutral where reasonable
 - explicit about invariants
 - usable as the semantic center of exporters, importers, and conformance tests
+- verifiable across ledgers after interchange
 
 ## 2. Policy
 
@@ -67,6 +68,7 @@ Examples:
 - open-item settlement rules
 - approval requirements
 - dimensions and budgets
+- post-import reconstruction helpers for lifecycle-derived profile behavior
 
 These are real accounting behaviors, but they are not all universal enough to
 belong to the smallest common protocol core.
@@ -93,6 +95,7 @@ Examples:
 - test harnesses
 - benchmarks
 - performance-oriented internal utilities
+- ABI transport boundaries
 
 This layer matters enormously for production use, but it is not the same thing
 as ledger semantics.
@@ -170,6 +173,8 @@ The better framing is:
 - keep expanding OBLE export/import/conformance boundaries
 - make profile-oriented packet shapes clearer
 - document which behaviors are core versus policy
+- add semantic verification and reconstruction workflows so interchange can be
+  trusted end to end
 
 ### Mid-term
 

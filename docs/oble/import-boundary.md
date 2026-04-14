@@ -23,6 +23,10 @@ It can also import the safe user-authored parts of richer Zig-first bundles:
 - policy/lifecycle bundles import the policy profile and report whether close
   and revaluation packets were present
 
+Heft now also has explicit Zig-side reconstruction helpers for the cases where
+the imported bundle truthfully says: “derived lifecycle packets existed, but
+the engine should rebuild them here instead of blindly replaying them.”
+
 That import layer is still strongest in Zig.
 
 The export side is much easier to expose safely through the C ABI because it is
@@ -152,6 +156,13 @@ For richer Zig-only bundle imports, the rule is slightly more precise:
 - import the safe user-authored portion
 - surface whether derived lifecycle packets were present
 - let the engine reconstruct those derived lifecycle effects explicitly later
+
+The Zig import session now exposes reconstruction helpers for that follow-up
+step:
+
+- reconstruct close for an imported period by logical ID
+- reconstruct revaluation for an imported period by logical ID and explicit
+  rates
 
 ### Current failure modes
 
