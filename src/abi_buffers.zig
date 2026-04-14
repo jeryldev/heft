@@ -621,7 +621,17 @@ pub fn ledger_oble_export_counterparty_open_item(handle: ?*LedgerDB, open_item_i
 
 pub fn ledger_oble_export_revaluation_packet(handle: ?*LedgerDB, entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
-    const result = heft.oble_profile_policy.exportRevaluationPacketJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+    const result = heft.oble_profile_fx.exportRevaluationPacketJson(h.sqlite, entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_fx_profile_bundle(handle: ?*LedgerDB, entry_id: i64, revaluation_entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const maybe_revaluation_entry_id = if (revaluation_entry_id > 0) revaluation_entry_id else null;
+    const result = heft.oble_profile_fx.exportMultiCurrencyBundleJson(h.sqlite, entry_id, maybe_revaluation_entry_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
         common.setError(common.mapError(err));
         return -1;
     };

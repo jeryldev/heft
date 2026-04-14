@@ -142,6 +142,7 @@ const ledger_oble_export_entry = abi.ledger_oble_export_entry;
 const ledger_oble_export_reversal_pair = abi.ledger_oble_export_reversal_pair;
 const ledger_oble_export_counterparty_open_item = abi.ledger_oble_export_counterparty_open_item;
 const ledger_oble_export_revaluation_packet = abi.ledger_oble_export_revaluation_packet;
+const ledger_oble_export_fx_profile_bundle = abi.ledger_oble_export_fx_profile_bundle;
 const ledger_transition_budget = abi.ledger_transition_budget;
 const ledger_create_open_item = abi.ledger_create_open_item;
 const ledger_allocate_payment = abi.ledger_allocate_payment;
@@ -1986,6 +1987,11 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(reval_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(reval_len)], "\"revaluation_entry\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(reval_len)], "\"reversal_entry\"") != null);
+
+    const fx_bundle_len = ledger_oble_export_fx_profile_bundle(handle, fx_entry_id, fx_reval_id, &buf, buf.len);
+    try std.testing.expect(fx_bundle_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(fx_bundle_len)], "\"foreign_currency_entry\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(fx_bundle_len)], "\"revaluation_packet\"") != null);
 
     try std.testing.expect(ledger_close_period(handle, s.book_id, s.jan_2026_id, "admin"));
     const close_profile_len = ledger_oble_export_close_profile(handle, s.book_id, s.jan_2026_id, &buf, buf.len);

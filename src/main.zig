@@ -729,6 +729,10 @@ pub export fn ledger_oble_export_revaluation_packet(handle: ?*LedgerDB, entry_id
     return abi_buffers.ledger_oble_export_revaluation_packet(handle, entry_id, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_fx_profile_bundle(handle: ?*LedgerDB, entry_id: i64, revaluation_entry_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_fx_profile_bundle(handle, entry_id, revaluation_entry_id, buf, buf_len);
+}
+
 pub export fn ledger_transition_budget(handle: ?*LedgerDB, budget_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     return abi_core.ledger_transition_budget(handle, budget_id, target_status, performed_by);
 }
