@@ -175,6 +175,12 @@ Recommended sequence:
 6. keep `Heft` conformance docs focused on implementation status rather than
    holding the full standard text forever
 
+During the transition, a practical local workflow is:
+
+- sync a vendored snapshot into `Heft` with
+  `bash scripts/sync-oble.sh /path/to/oble-repo`
+- validate it with `bash scripts/validate-oble.sh`
+
 ## Non-goals
 
 The split should not:

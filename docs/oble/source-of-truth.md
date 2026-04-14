@@ -51,6 +51,11 @@ After the standalone `oble` repo is published:
 3. `Heft` validation should consume canonical OBLE artifacts from that repo or
    from a synced snapshot of it
 
+The intended local snapshot workflow is now:
+
+1. sync the snapshot with `bash scripts/sync-oble.sh /path/to/oble-repo`
+2. validate the synced snapshot with `bash scripts/validate-oble.sh`
+
 ## Practical interpretation
 
 Until the external repo is published:
@@ -58,3 +63,5 @@ Until the external repo is published:
 - use `docs/oble/` in `Heft` as a working local copy
 - treat the standalone `oble` package as the intended future source of truth
 - avoid making new readers guess which copy is meant to win
+- prefer refreshing the local copy with `scripts/sync-oble.sh` instead of
+  editing both repos independently

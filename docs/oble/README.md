@@ -73,6 +73,12 @@ Repo strategy:
   validation working until the standalone OBLE repo becomes the canonical
   source of truth
 
+Snapshot workflow:
+
+- refresh this vendored copy with
+  `bash scripts/sync-oble.sh /path/to/oble-repo`
+- then validate it with `bash scripts/validate-oble.sh`
+
 The current migration recommendation is documented in
 [../architecture/oble-repo-split-plan.md](../architecture/oble-repo-split-plan.md).
 
