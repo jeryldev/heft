@@ -1,0 +1,204 @@
+# OBLE Profile Matrix
+
+Status: Draft
+
+## Purpose
+
+This document groups the current OBLE drafts into practical interoperability
+profiles.
+
+The goal is to answer:
+
+- what a minimal OBLE implementation should support
+- which Heft behaviors belong to core versus profile layers
+- what packet sets are stable enough to talk about together
+
+## Profile levels
+
+### Core
+
+The smallest useful interoperable ledger surface:
+
+- books
+- accounts
+- periods
+- entries
+- lines
+- lifecycle states
+- balance invariants
+
+### Profiles
+
+Portable layers that build on the core for richer accounting behavior:
+
+- counterparties and open items
+- multi-currency
+- close/reopen lifecycle
+- policy/designations
+
+### Runtime
+
+Implementation details that are outside OBLE itself:
+
+- storage engine
+- caches
+- indexes
+- buffer plumbing
+- ABI layout details
+
+## Current profile set
+
+| Profile | Related drafts | Current packet examples | Heft status |
+| --- | --- | --- | --- |
+| `OBLE Core` | `0001`, `0002`, parts of `0004` | `core-book.json`, `core-accounts.json`, `core-periods.json`, `core-entry-posted.json`, `book-snapshot.json` | Strong |
+| `Counterparty / Open Item` | `0003`, parts of `0004` | `counterparties.json`, `counterparty-open-item.json`, `book-snapshot.json` | Strong |
+| `Multi-Currency` | `0006` | core entry export with foreign-currency lines, revaluation packet export | Emerging |
+| `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
+| `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
+
+## Profile definitions
+
+## 1. OBLE Core
+
+This profile includes:
+
+- `Book`
+- `Account`
+- `Period`
+- `Entry`
+- `Line`
+- lifecycle states
+- posted-entry balance invariants
+- canonical identifiers and dates
+
+This is the profile another engine would need first in order to claim real
+OBLE compatibility.
+
+### Minimum expectations
+
+- import/export core packet shapes
+- preserve book/account/period/entry identity
+- preserve debit/credit orientation
+- preserve line ordering
+- enforce or validate balance invariants
+
+## 2. Counterparty / Open Item
+
+This profile adds:
+
+- counterparties
+- subledger grouping concepts
+- line-level counterparty references
+- open items
+- settlement/allocation semantics
+
+### Minimum expectations
+
+- import/export counterparties
+- import/export open-item packet(s)
+- preserve counterparty linkage on entry lines
+- preserve remaining/open/partial/closed state
+
+## 3. Multi-Currency
+
+This profile adds:
+
+- transaction currency
+- FX rate
+- base debit/credit amounts
+- explicit exact arithmetic expectations
+- revaluation packet(s)
+
+### Minimum expectations
+
+- import/export line currency data
+- preserve base-amount semantics
+- preserve exact-scaled amount behavior
+- export revaluation behavior where implemented
+
+## 4. Close / Reopen
+
+This profile adds:
+
+- close-generated state
+- opening carry-forward behavior
+- reopen semantics
+- lifecycle-derived packet exports
+
+### Minimum expectations
+
+- export close/reopen profile state honestly
+- distinguish user-authored from lifecycle-derived packets
+- avoid importing derived packets naively where the engine should reconstruct
+  them instead
+
+## 5. Policy / Designations
+
+This profile adds:
+
+- designation bindings
+- fiscal-year start behavior
+- entity-type behavior
+- approval requirements
+
+### Minimum expectations
+
+- export book policy profile
+- import safe user-authored policy state
+- preserve designation identity without conflating it with core ledger state
+
+## Stable versus emerging areas
+
+### Strongest today
+
+- `OBLE Core`
+- `Counterparty / Open Item`
+- `Policy / Designations`
+
+These are the areas where Heft already has the most complete semantics plus
+real export/import coverage.
+
+### Still expanding
+
+- `Multi-Currency`
+- `Close / Reopen`
+
+These already have meaningful export coverage, but they still need broader
+packet breadth and stronger interoperability posture before they should be
+treated as fully mature profiles.
+
+## How Heft should use this matrix
+
+The intended interpretation is:
+
+- `Heft` remains the engine
+- `OBLE Core` and `OBLE Profiles` become clearer semantic boundaries inside it
+
+That means:
+
+- native Heft APIs can stay richer than the profile surface
+- profile-aligned export/import paths should keep growing
+- conformance claims should be made profile by profile, not all-or-nothing
+
+## Practical conformance language
+
+Good claims:
+
+- "Heft implements OBLE Core."
+- "Heft implements the OBLE Counterparty/Open Item profile."
+- "Heft implements the OBLE Policy/Designations profile."
+- "Heft has emerging support for the OBLE Multi-Currency and Close/Reopen profiles."
+
+Weaker claims that should be avoided for now:
+
+- "Heft fully implements all of OBLE."
+- "OBLE is finished."
+
+## Immediate next steps
+
+1. Use this matrix in [Heft to OBLE Conformance](heft-conformance.md)
+2. Use it when describing packet stability in docs and release notes
+3. Use it to decide which modules and APIs should be labeled next as:
+   - core
+   - profile
+   - runtime

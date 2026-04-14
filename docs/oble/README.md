@@ -25,6 +25,8 @@ Current draft set:
 11. [Examples](examples/README.md)
 12. [JSON Schemas](schema/README.md)
 13. [Import Boundary](import-boundary.md)
+14. [Profile Matrix](profile-matrix.md)
+15. [Heft Conformance](heft-conformance.md)
 
 Intended reading order:
 
@@ -38,6 +40,8 @@ Intended reading order:
 - `0007` defines a first profile for close and reopen lifecycle behavior.
 - `0008` defines how book-level designations and policy profiles fit around the core.
 - `conformance-checklist` gives a practical first-pass claim matrix.
+- `profile-matrix` groups the current draft set into core and profile-level
+  interoperability targets.
 - `examples/` provides concrete JSON payloads for review and future fixtures.
 - `schema/` begins the machine-checkable layer for the example payloads.
   It now covers core packets, the book snapshot bundle, and the first

@@ -222,3 +222,8 @@ The repo is already moving in this direction:
 
 The next work is to keep expanding that boundary carefully without forcing the
 entire engine to become spec-shaped internally all at once.
+
+Related docs:
+
+- [Heft to OBLE Module Map](heft-oble-module-map.md)
+- [Core, Policy, and Runtime](core-policy-runtime.md)
