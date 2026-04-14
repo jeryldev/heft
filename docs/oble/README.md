@@ -47,6 +47,8 @@ Intended reading order:
   named profile boundary.
 - `oble_profile_policy.zig` now gives policy/designation and lifecycle packet
   work a second named profile boundary inside Heft.
+- `oble_profile_fx.zig` now gives multi-currency and revaluation packet work a
+  dedicated export-first profile boundary.
 - `examples/` provides concrete JSON payloads for review and future fixtures.
 - `schema/` begins the machine-checkable layer for the example payloads.
   It now covers core packets, the book snapshot bundle, and the first

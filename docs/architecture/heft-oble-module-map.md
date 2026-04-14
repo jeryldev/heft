@@ -89,6 +89,9 @@ future refactors.
 - `src/oble_profile_policy.zig`
   Explicit profile boundary for policy/designation import-export plus the
   current close/reopen and revaluation lifecycle packet surface.
+- `src/oble_profile_fx.zig`
+  Explicit export-first profile boundary for multi-currency entry exchange and
+  revaluation packet bundling.
 - `src/subledger.zig`
   Counterparty-account semantics and control-account relationships.
 - `src/open_item.zig`
