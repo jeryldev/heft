@@ -218,6 +218,8 @@ The repo is already moving in this direction:
 - an explicit `oble_core.zig` boundary now exists for the core packet set
 - an explicit `oble_profile_counterparty.zig` boundary now exists for the
   first profile-level packet family
+- an explicit `oble_profile_policy.zig` boundary now exists for policy and
+  lifecycle-oriented profile packets
 - Heft-to-OBLE conformance is documented
 - canonical OBLE export exists for several packet families
 - canonical OBLE import exists for the implemented core and extension packets

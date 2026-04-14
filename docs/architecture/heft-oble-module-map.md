@@ -86,6 +86,9 @@ future refactors.
 - `src/oble_profile_counterparty.zig`
   Explicit profile boundary for counterparties, open items, and the current
   counterparty/open-item bundle surface.
+- `src/oble_profile_policy.zig`
+  Explicit profile boundary for policy/designation import-export plus the
+  current close/reopen and revaluation lifecycle packet surface.
 - `src/subledger.zig`
   Counterparty-account semantics and control-account relationships.
 - `src/open_item.zig`
