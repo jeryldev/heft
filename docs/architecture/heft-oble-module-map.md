@@ -74,6 +74,9 @@ These are the places most likely to need future refactoring.
   Draft/post/void/reverse mechanics, line semantics, and balance invariants.
 - `src/money.zig`
   Exact arithmetic and base-amount derivation behavior.
+- `src/oble_core.zig`
+  Explicit OBLE-core packet boundary for the canonical `Book`, `Account[]`,
+  `Period[]`, and `Entry` packet set.
 
 These modules are the strongest candidates for explicit OBLE-core alignment in
 future refactors.

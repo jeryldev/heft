@@ -20,6 +20,7 @@ pub const budget = @import("budget.zig");
 pub const batch = @import("batch.zig");
 pub const describe = @import("describe.zig");
 pub const open_item = @import("open_item.zig");
+pub const oble_core = @import("oble_core.zig");
 pub const oble_export = @import("oble_export.zig");
 pub const oble_import = @import("oble_import.zig");
 pub const version = @import("version.zig");
@@ -48,6 +49,7 @@ comptime {
     _ = batch;
     _ = describe;
     _ = open_item;
+    _ = oble_core;
     _ = oble_export;
     _ = oble_import;
     _ = version;
