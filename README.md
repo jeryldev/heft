@@ -112,6 +112,17 @@ Heft has two main entry points:
 
 The C ABI entry implementation lives in [src/main.zig](src/main.zig).
 
+## Quick example
+
+There is now a runnable minimal example at
+[examples/basic_heft.zig](examples/basic_heft.zig).
+
+Run it from the repo root with:
+
+```bash
+zig build example-basic
+```
+
 ## Docs
 
 - [Architecture](docs/architecture.md)
@@ -128,6 +139,10 @@ The C ABI entry implementation lives in [src/main.zig](src/main.zig).
 - [v0.1.1 Release Notes](docs/releases/v0.1.1.md)
 - [Release Checklist](RELEASE.md)
 - [OBLE Source of Truth](docs/oble/source-of-truth.md)
+
+Examples:
+
+- [Heft Examples](examples/README.md)
 
 Canonical OBLE repo:
 

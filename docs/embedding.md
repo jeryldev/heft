@@ -34,6 +34,7 @@ See:
 
 - [Heft vs OBLE](architecture/heft-vs-oble.md)
 - [OBLE Drafts](oble/README.md)
+- [Heft Examples](../examples/README.md)
 
 ## Basic embedding flow
 
@@ -166,6 +167,10 @@ For a first integration, start with:
 - post entry
 - run trial balance
 - run general ledger
+
+If you want a tiny working reference instead of prose first, start with:
+
+- [examples/basic_heft.zig](../examples/basic_heft.zig)
 
 Then add:
 
