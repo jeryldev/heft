@@ -76,6 +76,16 @@ For now:
 - use Zig APIs for OBLE import
 - use C ABI functions for OBLE export
 
+Heft now has an explicit Zig-facing import-session boundary:
+
+- `src/oble_import_session.zig`
+
+That session model makes sequencing honest instead of hiding it:
+
+- import core bundle
+- import dependent profile packets
+- reuse one logical-ID mapping context across the whole import flow
+
 This keeps the standards boundary real without freezing an immature C import
 surface too early.
 
@@ -95,6 +105,7 @@ Today, Heft can honestly claim:
 
 - OBLE export is available in Zig and C
 - OBLE import is available in Zig
+- a real import-session boundary now exists in Zig for the implemented packet set
 - the import surface is real, tested, and round-tripped for the implemented
   packets
 - the C import boundary is intentionally deferred, not forgotten

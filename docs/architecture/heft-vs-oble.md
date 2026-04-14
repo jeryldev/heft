@@ -200,6 +200,8 @@ If you are embedding Heft:
 
 - use Heft APIs for application behavior
 - use OBLE exports/imports when you need portability
+- for OBLE import sequencing, prefer the Zig import-session boundary rather than
+  ad-hoc one-shot packet calls
 
 If you are integrating multiple systems:
 
