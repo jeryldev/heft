@@ -128,6 +128,7 @@ The C ABI entry implementation lives in [src/main.zig](src/main.zig).
 - [v0.1.1 Release Notes](docs/releases/v0.1.1.md)
 - [Release Checklist](RELEASE.md)
 - [OBLE Drafts](docs/oble/README.md)
+- [OBLE Source of Truth](docs/oble/source-of-truth.md)
 - [OBLE Profile Matrix](docs/oble/profile-matrix.md)
 
 ## Release posture

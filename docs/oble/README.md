@@ -1,5 +1,7 @@
 # OBLE Drafts
 
+Status: Transitional vendored snapshot
+
 OBLE stands for Open Bookkeeping Ledger Exchange.
 
 This folder contains the early working drafts for extracting an open ledger
@@ -67,6 +69,12 @@ Repo strategy:
   itself
 - `Heft` should remain the engine/reference implementation and validate
   against OBLE artifacts after that split
+- this folder should now be treated as a local snapshot that keeps links and
+  validation working until the standalone OBLE repo becomes the canonical
+  source of truth
 
 The current migration recommendation is documented in
 [../architecture/oble-repo-split-plan.md](../architecture/oble-repo-split-plan.md).
+
+The source-of-truth transition is documented in
+[source-of-truth.md](source-of-truth.md).
