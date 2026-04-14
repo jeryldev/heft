@@ -61,6 +61,8 @@ Heft is intentionally opinionated in a few places.
 - Amounts and rates are integers, never floats.
 - Mutations write audit records in the same transaction.
 - Derived caches exist for speed, but verification exists to re-check them.
+- Journal history and audit history are append-only. Some configuration
+  entities can still be deleted, but those deletions are themselves audited.
 
 ## Book as policy boundary
 

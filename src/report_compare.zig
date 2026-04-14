@@ -91,6 +91,7 @@ fn mergeComparative(current: *ReportResult, prior: *ReportResult) !*ComparativeR
     result.current_total_credits = current.total_credits;
     result.prior_total_debits = prior.total_debits;
     result.prior_total_credits = prior.total_credits;
+    result.decimal_places = current.decimal_places;
     return result;
 }
 
@@ -244,6 +245,16 @@ pub fn equityChanges(database: db.Database, book_id: i64, start_date: []const u8
     result.net_income = net_income;
     result.total_opening = total_opening;
     result.total_closing = total_closing;
+    result.decimal_places = 2;
+    {
+        var dp_stmt = try database.prepare("SELECT decimal_places FROM ledger_books WHERE id = ?;");
+        defer dp_stmt.finalize();
+        try dp_stmt.bindInt(1, book_id);
+        if (try dp_stmt.step()) {
+            const dp = dp_stmt.columnInt(0);
+            result.decimal_places = if (dp >= 0 and dp <= 8) @intCast(dp) else 2;
+        }
+    }
     return result;
 }
 

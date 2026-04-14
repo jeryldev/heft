@@ -201,9 +201,12 @@ pub fn verify(database: db.Database, book_id: i64) !VerifyResult {
     {
         var stmt = try database.prepare(
             \\SELECT COUNT(*) FROM ledger_entry_lines el
-            \\WHERE el.entry_id NOT IN (SELECT id FROM ledger_entries);
+            \\JOIN ledger_accounts a ON a.id = el.account_id
+            \\LEFT JOIN ledger_entries e ON e.id = el.entry_id
+            \\WHERE a.book_id = ? AND e.id IS NULL;
         );
         defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
         _ = try stmt.step();
         if (stmt.columnInt(0) > 0) result.errors += 1;
     }

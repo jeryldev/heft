@@ -544,7 +544,7 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
         \\  AND posting_date BETWEEN ? AND ?
         \\  AND (? IS NULL OR subledger_group_id = ?)
         \\  AND (? IS NULL OR counterparty_name LIKE '%' || ? || '%')
-        \\GROUP BY counterparty_id
+        \\GROUP BY counterparty_id, counterparty_number, counterparty_name, subledger_group_name, account_number
         \\ORDER BY counterparty_number ASC LIMIT ? OFFSET ?;
     else
         \\SELECT counterparty_id, counterparty_number, counterparty_name,
@@ -555,7 +555,7 @@ pub fn subledgerReport(database: db_mod.Database, book_id: i64, group_id: ?i64, 
         \\  AND posting_date BETWEEN ? AND ?
         \\  AND (? IS NULL OR subledger_group_id = ?)
         \\  AND (? IS NULL OR counterparty_name LIKE '%' || ? || '%')
-        \\GROUP BY counterparty_id
+        \\GROUP BY counterparty_id, counterparty_number, counterparty_name, subledger_group_name, account_number
         \\ORDER BY counterparty_number DESC LIMIT ? OFFSET ?;
     ;
 
@@ -1086,11 +1086,12 @@ pub fn subledgerReconciliation(database: db_mod.Database, book_id: i64, group_id
             \\SELECT COALESCE(SUM(th.base_debit_amount), 0), COALESCE(SUM(th.base_credit_amount), 0)
             \\FROM ledger_transaction_history th
             \\JOIN ledger_subledger_groups sg ON sg.id = ?
-            \\WHERE th.account_id = sg.gl_account_id AND th.posting_date <= ?;
+            \\WHERE th.book_id = ? AND th.account_id = sg.gl_account_id AND th.posting_date <= ?;
         );
         defer stmt.finalize();
         try stmt.bindInt(1, group_id);
-        try stmt.bindText(2, as_of_date);
+        try stmt.bindInt(2, book_id);
+        try stmt.bindText(3, as_of_date);
         _ = try stmt.step();
         gl_debits = stmt.columnInt64(0);
         gl_credits = stmt.columnInt64(1);
@@ -1272,8 +1273,13 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
                 pos += 1;
                 pos += try export_mod.csvField(buf[pos..], stmt.columnText(2) orelse "");
                 const sign: i64 = if (is_credit_normal) -1 else 1;
+                const current_0_30 = std.math.mul(i64, stmt.columnInt64(3), sign) catch return error.AmountOverflow;
+                const past_due_31_60 = std.math.mul(i64, stmt.columnInt64(4), sign) catch return error.AmountOverflow;
+                const past_due_61_90 = std.math.mul(i64, stmt.columnInt64(5), sign) catch return error.AmountOverflow;
+                const past_due_90_plus = std.math.mul(i64, stmt.columnInt64(6), sign) catch return error.AmountOverflow;
+                const total_amount = std.math.mul(i64, stmt.columnInt64(7), sign) catch return error.AmountOverflow;
                 const nums = std.fmt.bufPrint(buf[pos..], ",{d},{d},{d},{d},{d}\n", .{
-                    stmt.columnInt64(3) * sign, stmt.columnInt64(4) * sign, stmt.columnInt64(5) * sign, stmt.columnInt64(6) * sign, stmt.columnInt64(7) * sign,
+                    current_0_30, past_due_31_60, past_due_61_90, past_due_90_plus, total_amount,
                 }) catch return error.BufferTooSmall;
                 pos += nums.len;
             }
@@ -1297,8 +1303,13 @@ pub fn agedSubledger(database: db_mod.Database, book_id: i64, group_id: ?i64, as
                 pos += j2.len;
                 pos += try export_mod.jsonString(buf[pos..], stmt.columnText(2) orelse "");
                 const sign: i64 = if (is_credit_normal) -1 else 1;
+                const current_0_30 = std.math.mul(i64, stmt.columnInt64(3), sign) catch return error.AmountOverflow;
+                const past_due_31_60 = std.math.mul(i64, stmt.columnInt64(4), sign) catch return error.AmountOverflow;
+                const past_due_61_90 = std.math.mul(i64, stmt.columnInt64(5), sign) catch return error.AmountOverflow;
+                const past_due_90_plus = std.math.mul(i64, stmt.columnInt64(6), sign) catch return error.AmountOverflow;
+                const total_amount = std.math.mul(i64, stmt.columnInt64(7), sign) catch return error.AmountOverflow;
                 const j3 = std.fmt.bufPrint(buf[pos..], "\",\"current_0_30\":{d},\"past_due_31_60\":{d},\"past_due_61_90\":{d},\"past_due_90_plus\":{d},\"total\":{d}}}", .{
-                    stmt.columnInt64(3) * sign, stmt.columnInt64(4) * sign, stmt.columnInt64(5) * sign, stmt.columnInt64(6) * sign, stmt.columnInt64(7) * sign,
+                    current_0_30, past_due_31_60, past_due_61_90, past_due_90_plus, total_amount,
                 }) catch return error.BufferTooSmall;
                 pos += j3.len;
             }

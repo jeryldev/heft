@@ -96,6 +96,11 @@ Direct matches:
 - base amounts
 - optional description
 
+Heft's ten account behaviors are represented in OBLE core as:
+
+- five base account types: `asset`, `liability`, `equity`, `revenue`, `expense`
+- plus `is_contra` to capture the contra variants without exploding the type taxonomy
+
 ## Lifecycle mapping
 
 Heft already implements the lifecycle assumed by current OBLE drafts:

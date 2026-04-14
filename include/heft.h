@@ -61,7 +61,7 @@ typedef struct ClassifiedResult ClassifiedResult;
 typedef struct CashFlowIndirectResult CashFlowIndirectResult;
 
 /* Error codes returned by ledger_last_error()
- * Source of truth: main.zig mapError() — keep in sync */
+ * Source of truth: abi_common.zig mapError() — keep in sync */
 enum {
     HEFT_OK                             = 0,
     HEFT_NOT_FOUND                      = 1,
@@ -82,6 +82,7 @@ enum {
     HEFT_TOO_FEW_LINES                  = 16,
     HEFT_SCHEMA_VERSION_MISMATCH        = 17,
     HEFT_OUT_OF_MEMORY                  = 18,
+    /* 19 intentionally reserved to preserve ABI numbering continuity. */
     HEFT_INVALID_AMOUNT                 = 20,
     HEFT_BOOK_ARCHIVED                  = 21,
     HEFT_CROSS_BOOK_VIOLATION           = 22,
@@ -100,6 +101,7 @@ enum {
     HEFT_EQUITY_ALLOCATION_REQUIRED     = 35,
     HEFT_EQUITY_ALLOCATION_TOTAL_INVALID = 36,
     HEFT_SUSPENSE_NOT_CLEAR             = 37,
+    HEFT_EQUITY_CLOSE_TARGET_REQUIRED   = 38,
     HEFT_SQLITE_OPEN_FAILED             = 90,
     HEFT_SQLITE_EXEC_FAILED             = 91,
     HEFT_SQLITE_PREPARE_FAILED          = 92,
@@ -110,6 +112,7 @@ enum {
 
 /* ── Lifecycle ─────────────────────────────────────────────── */
 
+/* Returns a non-NULL static version string. */
 const char* ledger_version(void);
 LedgerDB*   ledger_open(const char* path);
 void        ledger_close(LedgerDB* handle);
@@ -246,6 +249,9 @@ CashFlowIndirectResult*  ledger_cash_flow_indirect(LedgerDB* h, int64_t book_id,
 int32_t ledger_result_row_count(ReportResult* r);
 int64_t ledger_result_total_debits(ReportResult* r);
 int64_t ledger_result_total_credits(ReportResult* r);
+int32_t ledger_result_decimal_places(ReportResult* r);
+int32_t ledger_comparative_result_decimal_places(ComparativeReportResult* r);
+int32_t ledger_equity_result_decimal_places(EquityResult* r);
 
 /* ── Report Memory Management ─────────────────────────────── */
 

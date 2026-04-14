@@ -34,7 +34,8 @@ pub fn createOpenItem(database: db.Database, entry_line_id: i64, counterparty_id
     {
         var validate_stmt = try database.prepare(
             \\SELECT e.status, e.book_id, el.counterparty_id, el.base_debit_amount, el.base_credit_amount,
-            \\  cp.book_id
+            \\  cp.book_id,
+            \\  EXISTS(SELECT 1 FROM ledger_open_items oi WHERE oi.entry_line_id = el.id)
             \\FROM ledger_entry_lines el
             \\JOIN ledger_entries e ON e.id = el.entry_id
             \\JOIN ledger_subledger_accounts cp ON cp.id = ?
@@ -52,10 +53,12 @@ pub fn createOpenItem(database: db.Database, entry_line_id: i64, counterparty_id
         const base_debit_amount = validate_stmt.columnInt64(3);
         const base_credit_amount = validate_stmt.columnInt64(4);
         const counterparty_book_id = validate_stmt.columnInt64(5);
+        const already_has_open_item = validate_stmt.columnInt(6) == 1;
 
         if (!std.mem.eql(u8, entry_status, "posted")) return error.InvalidInput;
         if (entry_book_id != book_id or counterparty_book_id != book_id) return error.CrossBookViolation;
         if (line_counterparty_id == 0 or line_counterparty_id != counterparty_id) return error.InvalidCounterparty;
+        if (already_has_open_item) return error.DuplicateNumber;
 
         const line_amount = @max(base_debit_amount, base_credit_amount);
         if (original_amount > line_amount) return error.InvalidAmount;
@@ -72,7 +75,7 @@ pub fn createOpenItem(database: db.Database, entry_line_id: i64, counterparty_id
     try stmt.bindInt(4, original_amount);
     if (due_date) |d| try stmt.bindText(5, d) else try stmt.bindNull(5);
     try stmt.bindInt(6, book_id);
-    _ = stmt.step() catch return error.DuplicateNumber;
+    _ = try stmt.step();
 
     const id = database.lastInsertRowId();
     try audit.log(database, "open_item", id, "create", null, null, null, performed_by, book_id);

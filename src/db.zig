@@ -182,6 +182,7 @@ pub const Statement = struct {
         const ptr = c.sqlite3_column_text(self.handle, col);
         if (ptr == null) return null;
         const len = c.sqlite3_column_bytes(self.handle, col);
+        if (len < 0) return null;
         return ptr[0..@intCast(len)];
     }
 };

@@ -92,6 +92,10 @@
           "type": "string",
           "minLength": 1
         },
+        "entry_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "line_number": {
           "type": "integer",
           "minimum": 1

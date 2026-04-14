@@ -197,6 +197,21 @@ pub fn ledger_result_total_credits(result: ?*heft.report.ReportResult) i64 {
     return r.total_credits;
 }
 
+pub fn ledger_result_decimal_places(result: ?*heft.report.ReportResult) i32 {
+    const r = result orelse return 0;
+    return r.decimal_places;
+}
+
+pub fn ledger_comparative_result_decimal_places(result: ?*heft.report.ComparativeReportResult) i32 {
+    const r = result orelse return 0;
+    return r.decimal_places;
+}
+
+pub fn ledger_equity_result_decimal_places(result: ?*heft.report.EquityResult) i32 {
+    const r = result orelse return 0;
+    return r.decimal_places;
+}
+
 pub fn ledger_classified_report(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8) ?*heft.classification.ClassifiedResult {
     const h = handle orelse {
         common.setError(common.mapError(error.InvalidInput));

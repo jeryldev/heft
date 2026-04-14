@@ -52,6 +52,7 @@ pub fn mapError(err: anyerror) i32 {
         error.TooFewLines => 16,
         error.SchemaVersionMismatch => 17,
         error.OutOfMemory => 18,
+        // 19 intentionally reserved to preserve ABI numbering continuity.
         error.InvalidAmount => 20,
         error.BookArchived => 21,
         error.CrossBookViolation => 22,
@@ -59,7 +60,7 @@ pub fn mapError(err: anyerror) i32 {
         error.InvalidDecimalPlaces => 24,
         error.BufferTooSmall => 25,
         error.RetainedEarningsAccountRequired => 26,
-        error.EquityCloseTargetRequired => 26,
+        error.EquityCloseTargetRequired => 38,
         error.FxGainLossAccountRequired => 27,
         error.OpeningBalanceAccountRequired => 28,
         error.IncomeSummaryAccountRequired => 29,

@@ -93,6 +93,7 @@ pub const Entry = struct {
         credit_sum: i64 = 0,
         entry_count: i64 = 0,
     };
+    const MaxCacheDeltaAccounts: usize = 500;
 
     /// Verifies an account exists, is active (not inactive/archived), and belongs
     /// to the expected book. Returns NotFound if missing, AccountInactive if not
@@ -149,6 +150,7 @@ pub const Entry = struct {
     }
 
     fn accumulateCacheDelta(cache_deltas: *std.AutoHashMap(i64, CacheDelta), account_id: i64, debit_amount: i64, credit_amount: i64, entry_count_delta: i64) !void {
+        if (cache_deltas.getPtr(account_id) == null and cache_deltas.count() >= MaxCacheDeltaAccounts) return error.TooManyAccounts;
         const gop = try cache_deltas.getOrPut(account_id);
         if (!gop.found_existing) gop.value_ptr.* = .{};
         gop.value_ptr.debit_sum = std.math.add(i64, gop.value_ptr.debit_sum, debit_amount) catch return error.AmountOverflow;

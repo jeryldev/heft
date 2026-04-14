@@ -31,6 +31,7 @@ pub fn trialBalance(database: db.Database, book_id: i64, as_of_date: []const u8)
         \\WHERE ab.book_id = ? AND p.end_date <= ? AND ab.is_stale = 1;
     , .{ book_id, as_of_date });
     const result = try buildReportResult(database, tb_sql, .{ book_id, as_of_date });
+    errdefer result.deinit();
     result.decimal_places = try getDecimalPlaces(database, book_id);
     return result;
 }
@@ -132,6 +133,7 @@ pub fn trialBalanceMovement(database: db.Database, book_id: i64, start_date: []c
         \\WHERE ab.book_id = ? AND p.start_date >= ? AND p.end_date <= ? AND ab.is_stale = 1;
     , .{ book_id, start_date, end_date });
     const result = try buildReportResult(database, tbm_sql, .{ book_id, start_date, end_date });
+    errdefer result.deinit();
     result.decimal_places = try getDecimalPlaces(database, book_id);
     return result;
 }

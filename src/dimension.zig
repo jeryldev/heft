@@ -364,7 +364,7 @@ pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, 
                 const label = stmt.columnText(1) orelse "";
                 const debits = stmt.columnInt64(2);
                 const credits = stmt.columnInt64(3);
-                const net = debits - credits;
+                const net = std.math.sub(i64, debits, credits) catch return error.AmountOverflow;
 
                 pos += try export_mod.csvField(buf[pos..], code);
                 if (pos >= buf.len) return error.BufferTooSmall;
@@ -387,7 +387,7 @@ pub fn dimensionSummary(database: db.Database, book_id: i64, dimension_id: i64, 
                 const label = stmt.columnText(1) orelse "";
                 const debits = stmt.columnInt64(2);
                 const credits = stmt.columnInt64(3);
-                const net = debits - credits;
+                const net = std.math.sub(i64, debits, credits) catch return error.AmountOverflow;
 
                 if (!first) {
                     if (pos >= buf.len) return error.BufferTooSmall;

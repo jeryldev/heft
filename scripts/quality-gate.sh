@@ -8,7 +8,10 @@ GLOBAL_CACHE_DIR="${HEFT_GLOBAL_CACHE_DIR:-/tmp/heft-zig-global-cache}"
 cd "$ROOT"
 
 echo "[1/6] zig fmt"
-mapfile -t zig_files < <(find src -type f -name '*.zig' | sort)
+zig_files=()
+while IFS= read -r file; do
+  zig_files+=("$file")
+done < <(find src -type f -name '*.zig' | sort)
 zig fmt --check "${zig_files[@]}" build.zig
 
 echo "[2/6] zig build check"

@@ -117,6 +117,7 @@ pub const ComparativeReportResult = struct {
     current_total_credits: i64,
     prior_total_debits: i64,
     prior_total_credits: i64,
+    decimal_places: u8 = 2,
     truncated: bool = false,
 
     pub fn deinit(self: *ComparativeReportResult) void {
@@ -142,6 +143,7 @@ pub const EquityResult = struct {
     net_income: i64,
     total_opening: i64,
     total_closing: i64,
+    decimal_places: u8 = 2,
     truncated: bool = false,
 
     pub fn deinit(self: *EquityResult) void {

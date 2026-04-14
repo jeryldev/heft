@@ -710,7 +710,10 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
         var current_parent = info.parent_id;
         while (current_parent) |pid| {
             const existing = node_balances.get(pid).?;
-            try node_balances.put(allocator, pid, .{ existing[0] + debit_bal, existing[1] + credit_bal });
+            try node_balances.put(allocator, pid, .{
+                std.math.add(i64, existing[0], debit_bal) catch return error.AmountOverflow,
+                std.math.add(i64, existing[1], credit_bal) catch return error.AmountOverflow,
+            });
             current_parent = node_infos.get(pid).?.parent_id;
         }
     }
@@ -762,8 +765,8 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
         while (try stmt.step()) {
             const nid = stmt.columnInt64(0);
             if (node_balances.get(nid)) |bal| {
-                classified_total_debits += bal[0];
-                classified_total_credits += bal[1];
+                classified_total_debits = std.math.add(i64, classified_total_debits, bal[0]) catch return error.AmountOverflow;
+                classified_total_credits = std.math.add(i64, classified_total_credits, bal[1]) catch return error.AmountOverflow;
             }
         }
     }
@@ -772,16 +775,16 @@ pub fn classifiedReport(database: db.Database, classification_id: i64, as_of_dat
     {
         var it = balance_map.iterator();
         while (it.next()) |entry| {
-            all_total_debits += entry.value_ptr[0];
-            all_total_credits += entry.value_ptr[1];
+            all_total_debits = std.math.add(i64, all_total_debits, entry.value_ptr[0]) catch return error.AmountOverflow;
+            all_total_credits = std.math.add(i64, all_total_credits, entry.value_ptr[1]) catch return error.AmountOverflow;
         }
     }
 
     result.rows = try rows.toOwnedSlice(allocator);
     result.total_debits = classified_total_debits;
     result.total_credits = classified_total_credits;
-    result.unclassified_debits = all_total_debits - classified_total_debits;
-    result.unclassified_credits = all_total_credits - classified_total_credits;
+    result.unclassified_debits = std.math.sub(i64, all_total_debits, classified_total_debits) catch return error.AmountOverflow;
+    result.unclassified_credits = std.math.sub(i64, all_total_credits, classified_total_credits) catch return error.AmountOverflow;
     {
         var dp_stmt = try database.prepare("SELECT decimal_places FROM ledger_books WHERE id = ?;");
         defer dp_stmt.finalize();
@@ -898,7 +901,10 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
         var current_parent = info.parent_id;
         while (current_parent) |pid| {
             const existing = node_balances.get(pid).?;
-            try node_balances.put(allocator, pid, .{ existing[0] + debit_bal, existing[1] + credit_bal });
+            try node_balances.put(allocator, pid, .{
+                std.math.add(i64, existing[0], debit_bal) catch return error.AmountOverflow,
+                std.math.add(i64, existing[1], credit_bal) catch return error.AmountOverflow,
+            });
             current_parent = node_infos.get(pid).?.parent_id;
         }
     }
@@ -947,8 +953,8 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
         while (try stmt.step()) {
             const nid = stmt.columnInt64(0);
             if (node_balances.get(nid)) |bal| {
-                classified_total_debits += bal[0];
-                classified_total_credits += bal[1];
+                classified_total_debits = std.math.add(i64, classified_total_debits, bal[0]) catch return error.AmountOverflow;
+                classified_total_credits = std.math.add(i64, classified_total_credits, bal[1]) catch return error.AmountOverflow;
             }
         }
     }
@@ -956,16 +962,16 @@ pub fn cashFlowStatement(database: db.Database, classification_id: i64, start_da
     {
         var it = balance_map.iterator();
         while (it.next()) |entry| {
-            all_total_debits += entry.value_ptr[0];
-            all_total_credits += entry.value_ptr[1];
+            all_total_debits = std.math.add(i64, all_total_debits, entry.value_ptr[0]) catch return error.AmountOverflow;
+            all_total_credits = std.math.add(i64, all_total_credits, entry.value_ptr[1]) catch return error.AmountOverflow;
         }
     }
 
     result.rows = try rows.toOwnedSlice(allocator);
     result.total_debits = classified_total_debits;
     result.total_credits = classified_total_credits;
-    result.unclassified_debits = all_total_debits - classified_total_debits;
-    result.unclassified_credits = all_total_credits - classified_total_credits;
+    result.unclassified_debits = std.math.sub(i64, all_total_debits, classified_total_debits) catch return error.AmountOverflow;
+    result.unclassified_credits = std.math.sub(i64, all_total_credits, classified_total_credits) catch return error.AmountOverflow;
     {
         var dp_stmt = try database.prepare("SELECT decimal_places FROM ledger_books WHERE id = ?;");
         defer dp_stmt.finalize();

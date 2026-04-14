@@ -39,6 +39,7 @@ const al_sql: [*:0]const u8 =
 pub fn generalLedger(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
     try verifyBookExists(database, book_id);
     const result = try buildLedgerResult(database, gl_sql, .{ book_id, start_date, end_date }, .none);
+    errdefer result.deinit();
     result.decimal_places = try getDecimalPlaces(database, book_id);
     return result;
 }
@@ -88,6 +89,7 @@ pub fn accountLedger(database: db.Database, book_id: i64, account_id: i64, start
     }
 
     const result = try buildLedgerResult(database, al_sql, .{ book_id, account_id, start_date, end_date }, mode);
+    errdefer result.deinit();
 
     result.opening_balance = opening;
     if (opening != 0) {
@@ -117,6 +119,7 @@ const jr_sql: [*:0]const u8 =
 pub fn journalRegister(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8) !*LedgerResult {
     try verifyBookExists(database, book_id);
     const result = try buildLedgerResult(database, jr_sql, .{ book_id, start_date, end_date }, .none);
+    errdefer result.deinit();
     result.decimal_places = try getDecimalPlaces(database, book_id);
     return result;
 }

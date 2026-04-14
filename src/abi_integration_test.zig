@@ -268,7 +268,7 @@ fn setupAbiFeatureScenario(handle: *abi.LedgerDB) !AbiFeatureScenario {
     };
 }
 
-test "ledger_version returns 0.0.1" {
+test "ledger_version returns current VERSION" {
     const v = std.mem.span(ledger_version());
     try std.testing.expectEqualStrings(VERSION, v);
 }
@@ -310,7 +310,7 @@ test "ledger_open returns non-null, ledger_close cleans up" {
     if (handle) |h| ledger_close(h);
 }
 
-test "ledger_open creates all 16 schema tables" {
+test "ledger_open creates all 17 schema tables" {
     defer cleanupTestFile("test-schema-main.ledger");
     const handle = ledger_open("test-schema-main.ledger");
     try std.testing.expect(handle != null);
@@ -334,6 +334,7 @@ test "ledger_open creates all 16 schema tables" {
             "ledger_line_dimensions",
             "ledger_budgets",
             "ledger_budget_lines",
+            "ledger_open_items",
             "ledger_audit_log",
         };
 

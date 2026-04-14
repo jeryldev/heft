@@ -294,6 +294,18 @@ pub export fn ledger_result_total_credits(result: ?*heft.report.ReportResult) i6
     return abi_reports.ledger_result_total_credits(result);
 }
 
+pub export fn ledger_result_decimal_places(result: ?*heft.report.ReportResult) i32 {
+    return abi_reports.ledger_result_decimal_places(result);
+}
+
+pub export fn ledger_comparative_result_decimal_places(result: ?*heft.report.ComparativeReportResult) i32 {
+    return abi_reports.ledger_comparative_result_decimal_places(result);
+}
+
+pub export fn ledger_equity_result_decimal_places(result: ?*heft.report.EquityResult) i32 {
+    return abi_reports.ledger_equity_result_decimal_places(result);
+}
+
 pub export fn ledger_create_subledger_group(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, group_type: [*:0]const u8, group_number: i32, gl_account_id: i64, performed_by: [*:0]const u8) i64 {
     return abi_core.ledger_create_subledger_group(handle, book_id, name, group_type, group_number, gl_account_id, performed_by);
 }

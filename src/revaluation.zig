@@ -181,7 +181,7 @@ pub fn revalueForexBalances(database: db.Database, book_id: i64, period_id: i64,
             var rev_doc_buf: [40]u8 = undefined;
             const rev_doc = std.fmt.bufPrint(&rev_doc_buf, "REVAL-REV-P{d}-FY{d}", .{ period_number, period_year }) catch unreachable;
 
-            var rev_meta_buf: [80]u8 = undefined;
+            var rev_meta_buf: [128]u8 = undefined;
             const rev_meta = std.fmt.bufPrint(&rev_meta_buf, "{{\"revaluation_reversal\":true,\"reverses_revaluation\":{d}}}", .{entry_id}) catch unreachable;
 
             const rev_id = try entry_mod.Entry.createDraftAs(
