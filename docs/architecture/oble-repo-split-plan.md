@@ -1,6 +1,6 @@
 # OBLE Repo Split Plan
 
-Status: Draft
+Status: Implemented locally, published remotely
 
 ## Purpose
 
@@ -16,9 +16,17 @@ The goal is:
 
 ## Recommendation
 
-Create a separate `oble` repository soon, but not as a runtime package first.
+Create a separate `oble` repository, but not as a runtime package first.
 
-The split should happen when:
+That split has now happened locally and the standalone repository has been
+published at:
+
+- [github.com/jeryldev/oble](https://github.com/jeryldev/oble)
+
+The remaining work is no longer "create the split", but "finish reducing the
+Heft-side snapshot over time."
+
+The original decision rule for splitting was:
 
 - the current draft packet feels stable enough to publish as its own unit
 - the current profile matrix is good enough to explain what is core, profile,
@@ -170,15 +178,16 @@ Recommended sequence:
 1. freeze the current OBLE packet set enough to publish externally
 2. create the `oble` repo
 3. copy the current docs/examples/schema layer into it
-4. leave a short pointer in `Heft/docs/oble/README.md`
-5. update `Heft` validation scripts to consume canonical OBLE artifacts
-6. keep `Heft` conformance docs focused on implementation status rather than
+4. publish the standalone repo
+5. leave a short pointer in `Heft/docs/oble/README.md`
+6. update `Heft` validation scripts to consume canonical OBLE artifacts
+7. keep `Heft` conformance docs focused on implementation status rather than
    holding the full standard text forever
 
 During the transition, a practical local workflow is:
 
 - sync a vendored snapshot into `Heft` with
-  `bash scripts/sync-oble.sh /path/to/oble-repo`
+  `bash scripts/sync-oble.sh /Users/jeryldev/code/zig_projects/oble`
 - validate it with `bash scripts/validate-oble.sh`
 
 ## Non-goals

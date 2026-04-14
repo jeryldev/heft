@@ -1,6 +1,6 @@
 # OBLE Source of Truth
 
-Status: Transitional
+Status: Canonical repo published
 
 ## What "canonical split" means
 
@@ -20,15 +20,18 @@ In other words:
 
 ## Current status
 
-Right now, `Heft` still contains a local copy of the OBLE draft materials in
-`docs/oble/`.
+`Heft` still contains a local copy of the OBLE draft materials in `docs/oble/`.
 
 That copy should now be treated as a vendored snapshot, not the long-term
 canonical home of the standard.
 
-The standalone OBLE draft package already exists locally and is intended to
-become the canonical standards repo once it is published to its permanent
-remote.
+The canonical OBLE repository is now:
+
+- [github.com/jeryldev/oble](https://github.com/jeryldev/oble)
+
+The canonical local checkout used in this workspace is:
+
+- `/Users/jeryldev/code/zig_projects/oble`
 
 ## What stays in Heft after the split
 
@@ -53,22 +56,22 @@ After the standalone `oble` repo is published:
 
 The intended local snapshot workflow is now:
 
-1. sync the snapshot with `bash scripts/sync-oble.sh /path/to/oble-repo`
+1. sync the snapshot with
+   `bash scripts/sync-oble.sh /Users/jeryldev/code/zig_projects/oble`
 2. validate the synced snapshot with `bash scripts/validate-oble.sh`
 
 `Heft` can also validate an external OBLE source directly without first
 refreshing the local snapshot:
 
 ```bash
-OBLE_SOURCE=/path/to/oble-repo bash scripts/validate-oble.sh
+OBLE_SOURCE=/Users/jeryldev/code/zig_projects/oble bash scripts/validate-oble.sh
 ```
 
 ## Practical interpretation
 
-Until the external repo is published:
+Now that the external repo exists:
 
-- use `docs/oble/` in `Heft` as a working local copy
-- treat the standalone `oble` package as the intended future source of truth
-- avoid making new readers guess which copy is meant to win
+- use the standalone `oble` repo as the source of truth
+- treat `docs/oble/` in `Heft` as a synced local snapshot
 - prefer refreshing the local copy with `scripts/sync-oble.sh` instead of
   editing both repos independently

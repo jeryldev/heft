@@ -131,6 +131,10 @@ The C ABI entry implementation lives in [src/main.zig](src/main.zig).
 - [OBLE Source of Truth](docs/oble/source-of-truth.md)
 - [OBLE Profile Matrix](docs/oble/profile-matrix.md)
 
+Canonical OBLE repo:
+
+- [github.com/jeryldev/oble](https://github.com/jeryldev/oble)
+
 ## Release posture
 
 The repo is currently positioned for `v0.1.1`.

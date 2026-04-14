@@ -1,6 +1,6 @@
 # OBLE Drafts
 
-Status: Transitional vendored snapshot
+Status: Vendored snapshot
 
 OBLE stands for Open Bookkeeping Ledger Exchange.
 
@@ -61,22 +61,21 @@ These drafts are intentionally small, implementation-neutral, and incomplete.
 They should be treated as working documents for extracting stable semantics,
 not as frozen standards yet.
 
+Canonical home:
+
+- [github.com/jeryldev/oble](https://github.com/jeryldev/oble)
+
 Repo strategy:
 
-- for now, OBLE lives here so it can evolve next to the reference
-  implementation
-- the expected long-term direction is a dedicated `oble` repo for the standard
-  itself
-- `Heft` should remain the engine/reference implementation and validate
-  against OBLE artifacts after that split
-- this folder should now be treated as a local snapshot that keeps links and
-  validation working until the standalone OBLE repo becomes the canonical
-  source of truth
+- the standalone `oble` repo is now the canonical home of the standard
+- `Heft` remains the engine/reference implementation
+- this folder should be treated as a local vendored snapshot that keeps links
+  and validation working inside the `Heft` repo
 
 Snapshot workflow:
 
 - refresh this vendored copy with
-  `bash scripts/sync-oble.sh /path/to/oble-repo`
+  `bash scripts/sync-oble.sh /Users/jeryldev/code/zig_projects/oble`
 - then validate it with `bash scripts/validate-oble.sh`
 
 The current migration recommendation is documented in
