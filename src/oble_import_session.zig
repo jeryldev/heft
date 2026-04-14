@@ -3,6 +3,7 @@ const db = @import("db.zig");
 const oble_core = @import("oble_core.zig");
 const oble_import = @import("oble_import.zig");
 const oble_profile_counterparty = @import("oble_profile_counterparty.zig");
+const oble_profile_fx = @import("oble_profile_fx.zig");
 const oble_profile_policy = @import("oble_profile_policy.zig");
 const schema = @import("schema.zig");
 const book_mod = @import("book.zig");
@@ -15,6 +16,8 @@ const money = @import("money.zig");
 
 pub const ImportContext = oble_import.ImportContext;
 pub const ReversalPairImportIds = oble_import.ReversalPairImportIds;
+pub const MultiCurrencyImportResult = oble_profile_fx.MultiCurrencyImportResult;
+pub const PolicyLifecycleImportResult = oble_profile_policy.PolicyLifecycleImportResult;
 pub const EntityKind = enum {
     book,
     account,
@@ -76,6 +79,14 @@ pub const Session = struct {
 
     pub fn importPolicyProfileJson(self: *Session, json: []const u8) !i64 {
         return oble_profile_policy.importPolicyProfileJson(self.database, &self.ctx, json, self.performed_by);
+    }
+
+    pub fn importMultiCurrencyBundleJson(self: *Session, json: []const u8) !MultiCurrencyImportResult {
+        return oble_profile_fx.importMultiCurrencyBundleJson(self.database, &self.ctx, json, self.performed_by);
+    }
+
+    pub fn importPolicyLifecycleBundleJson(self: *Session, json: []const u8) !PolicyLifecycleImportResult {
+        return oble_profile_policy.importPolicyLifecycleBundleJson(self.database, &self.ctx, json, self.performed_by);
     }
 
     pub fn importBookSnapshotJson(self: *Session, json: []const u8) !i64 {
@@ -186,4 +197,102 @@ test "OBLE import session: duplicate core import in same session is rejected" {
 
     _ = try session.importCoreBundleJson(core_json);
     try std.testing.expectError(error.DuplicateNumber, session.importCoreBundleJson(core_json));
+}
+
+test "OBLE import session: FX bundle imports entry and reports derived revaluation presence" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "FX Session Source", "USD", 2, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1010", "Cash USD", .asset, false, "admin");
+    const payable_id = try account_mod.Account.create(source_db, book_id, "2010", "Payable EUR", .liability, false, "admin");
+    const fx_gain_loss_id = try account_mod.Account.create(source_db, book_id, "7990", "FX Gain Loss", .revenue, false, "admin");
+    try book_mod.Book.setFxGainLossAccount(source_db, book_id, fx_gain_loss_id, "admin");
+
+    const jan_id = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try period_mod.Period.create(source_db, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(source_db, book_id, "FX-001", "2026-01-15", "2026-01-15", "Foreign payable", jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, entry_id, 1, 110_00_000_000, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, entry_id, 2, 0, 100_00_000_000, "EUR", 1_100_000_0000, payable_id, null, null, "admin");
+    try entry_mod.Entry.post(source_db, entry_id, "admin");
+
+    const rates = [_](@import("revaluation.zig").CurrencyRate){
+        .{ .currency = "EUR", .new_rate = 1_200_000_0000 },
+    };
+    const revalue_result = try @import("revaluation.zig").revalueForexBalances(source_db, book_id, jan_id, &rates, "admin");
+
+    var core_buf: [128 * 1024]u8 = undefined;
+    var bundle_buf: [64 * 1024]u8 = undefined;
+    const core_json = try oble_core.exportCoreBundleJson(source_db, book_id, &core_buf);
+    const bundle_json = try oble_profile_fx.exportMultiCurrencyBundleJson(source_db, entry_id, revalue_result.entry_id, &bundle_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var session = Session.init(target_db, std.testing.allocator, "admin");
+    defer session.deinit();
+
+    _ = try session.importCoreBundleJson(core_json);
+    const import_result = try session.importMultiCurrencyBundleJson(bundle_json);
+    try std.testing.expect(import_result.foreign_currency_entry_id > 0);
+    try std.testing.expect(import_result.has_revaluation_packet);
+}
+
+test "OBLE import session: policy lifecycle bundle imports safe policy and reports derived packets" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Policy Session Source", "USD", 2, "admin");
+    try book_mod.Book.setEntityType(source_db, book_id, .corporation, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(source_db, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const re_id = try account_mod.Account.create(source_db, book_id, "3100", "Retained Earnings", .equity, false, "admin");
+    const payable_id = try account_mod.Account.create(source_db, book_id, "2010", "Payable EUR", .liability, false, "admin");
+    const fx_gain_loss_id = try account_mod.Account.create(source_db, book_id, "7990", "FX Gain Loss", .revenue, false, "admin");
+
+    try book_mod.Book.setRetainedEarningsAccount(source_db, book_id, re_id, "admin");
+    try book_mod.Book.setFxGainLossAccount(source_db, book_id, fx_gain_loss_id, "admin");
+    try book_mod.Book.setFyStartMonth(source_db, book_id, 4, "admin");
+
+    const jan_id = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = try period_mod.Period.create(source_db, book_id, "Feb 2026", 2, 2026, "2026-02-28", "2026-02-28", "regular", "admin");
+
+    const sale_entry_id = try entry_mod.Entry.createDraft(source_db, book_id, "SALE-001", "2026-01-10", "2026-01-10", null, jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, sale_entry_id, 1, 1_000_000_000_00, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, sale_entry_id, 2, 0, 1_000_000_000_00, "USD", money.FX_RATE_SCALE, revenue_id, null, null, "admin");
+    try entry_mod.Entry.post(source_db, sale_entry_id, "admin");
+
+    const fx_entry_id = try entry_mod.Entry.createDraft(source_db, book_id, "FX-001", "2026-01-15", "2026-01-15", "Foreign payable", jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, fx_entry_id, 1, 110_00_000_000, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, fx_entry_id, 2, 0, 100_00_000_000, "EUR", 1_100_000_0000, payable_id, null, null, "admin");
+    try entry_mod.Entry.post(source_db, fx_entry_id, "admin");
+
+    const rates = [_](@import("revaluation.zig").CurrencyRate){
+        .{ .currency = "EUR", .new_rate = 1_200_000_0000 },
+    };
+    const revalue_result = try @import("revaluation.zig").revalueForexBalances(source_db, book_id, jan_id, &rates, "admin");
+    try @import("close.zig").closePeriod(source_db, book_id, jan_id, "admin");
+    try book_mod.Book.setRequireApproval(source_db, book_id, true, "admin");
+
+    var core_buf: [128 * 1024]u8 = undefined;
+    var bundle_buf: [64 * 1024]u8 = undefined;
+    const core_json = try oble_core.exportCoreBundleJson(source_db, book_id, &core_buf);
+    const bundle_json = try oble_profile_policy.exportPolicyLifecycleBundleJson(source_db, book_id, jan_id, revalue_result.entry_id, &bundle_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var session = Session.init(target_db, std.testing.allocator, "admin");
+    defer session.deinit();
+
+    const imported_book_id = try session.importCoreBundleJson(core_json);
+    const import_result = try session.importPolicyLifecycleBundleJson(bundle_json);
+    try std.testing.expectEqual(imported_book_id, import_result.book_id);
+    try std.testing.expect(import_result.has_close_reopen_profile);
+    try std.testing.expect(import_result.has_revaluation_packet);
 }

@@ -16,6 +16,13 @@ Heft can import the implemented OBLE packet set:
 - counterparty/open-item packets
 - policy-profile packets
 
+It can also import the safe user-authored parts of richer Zig-first bundles:
+
+- FX bundles import the foreign-currency entry and report whether a
+  revaluation packet was present
+- policy/lifecycle bundles import the policy profile and report whether close
+  and revaluation packets were present
+
 That import layer is still strongest in Zig.
 
 The export side is much easier to expose safely through the C ABI because it is
@@ -140,6 +147,12 @@ The stable order today is:
 4. import profile bundles that depend on those entries and counterparties
 5. import safe user-authored policy packets
 
+For richer Zig-only bundle imports, the rule is slightly more precise:
+
+- import the safe user-authored portion
+- surface whether derived lifecycle packets were present
+- let the engine reconstruct those derived lifecycle effects explicitly later
+
 ### Current failure modes
 
 The session intentionally fails fast when packet order is wrong:
@@ -175,6 +188,9 @@ Today, Heft can honestly claim:
 - OBLE export is available in Zig and C
 - OBLE import is available in Zig and minimally available in C
 - a real import-session boundary now exists in Zig for the implemented packet set
+- the Zig session can now import the safe portion of lifecycle-rich bundles and
+  report the presence of derived packets that still require engine
+  reconstruction
 - a real import-session boundary now exists in C for the stable import packets
 - the import surface is real, tested, and round-tripped for the implemented
   packets

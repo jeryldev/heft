@@ -70,6 +70,12 @@ That means:
   session-based import in Zig and C
 - `Policy / Designations` has public export in Zig and C, and safe
   user-authored import in Zig and C
+- Zig import sessions can also consume richer `Policy / Designations` lifecycle
+  bundles by importing the safe policy layer and reporting the presence of
+  derived close/revaluation packets
+- Zig import sessions can consume `Multi-Currency` bundles by importing the
+  foreign-currency entry and reporting whether revaluation replay remains
+  pending
 - `Multi-Currency` and `Close / Reopen` remain export-first at the public
   boundary
 
