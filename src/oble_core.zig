@@ -76,13 +76,16 @@ pub fn importEntryJson(database: db.Database, ctx: *ImportContext, json: []const
 }
 
 pub fn exportCoreBundleJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
-    var book_buf: [1024]u8 = undefined;
-    var accounts_buf: [256 * 1024]u8 = undefined;
-    var periods_buf: [64 * 1024]u8 = undefined;
+    const book_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(book_buf);
+    const accounts_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(accounts_buf);
+    const periods_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(periods_buf);
 
-    const book_json = try oble_export.exportBookJson(database, book_id, &book_buf);
-    const accounts_json = try oble_export.exportAccountsJson(database, book_id, &accounts_buf);
-    const periods_json = try oble_export.exportPeriodsJson(database, book_id, &periods_buf);
+    const book_json = try oble_export.exportBookJson(database, book_id, book_buf);
+    const accounts_json = try oble_export.exportAccountsJson(database, book_id, accounts_buf);
+    const periods_json = try oble_export.exportPeriodsJson(database, book_id, periods_buf);
 
     return std.fmt.bufPrint(buf, "{{\"book\":{s},\"accounts\":{s},\"periods\":{s}}}", .{
         book_json,
@@ -96,6 +99,11 @@ pub fn importCoreBundleJson(database: db.Database, ctx: *ImportContext, json: []
         .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
+
+    if (ctx.book_ids.contains(parsed.value.book.id)) return error.DuplicateNumber;
+
+    const owns_txn = try database.beginTransactionIfNeeded();
+    errdefer if (owns_txn) database.rollback();
 
     const book_id = try book_mod.Book.create(
         database,
@@ -152,6 +160,7 @@ pub fn importCoreBundleJson(database: db.Database, ctx: *ImportContext, json: []
         }
     }
 
+    if (owns_txn) try database.commit();
     return book_id;
 }
 
@@ -183,6 +192,36 @@ test "OBLE core: export and import core bundle round-trips" {
     const round_trip = try exportCoreBundleJson(target_db, imported_book_id, &round_buf);
 
     try std.testing.expectEqualStrings(exported, round_trip);
+}
+
+test "OBLE core: duplicate core import leaves no partial side effects" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try source_db.exec("PRAGMA foreign_keys = ON;");
+    try schema.createAll(source_db);
+
+    const book_id = try @import("book.zig").Book.create(source_db, "Core Book", "USD", 2, "admin");
+    _ = try @import("account.zig").Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    _ = try @import("period.zig").Period.create(source_db, book_id, "FY2026-P01", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    var bundle_buf: [512 * 1024]u8 = undefined;
+    const exported = try exportCoreBundleJson(source_db, book_id, &bundle_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try target_db.exec("PRAGMA foreign_keys = ON;");
+    try schema.createAll(target_db);
+
+    var ctx = ImportContext.init(std.heap.c_allocator);
+    defer ctx.deinit();
+
+    _ = try importCoreBundleJson(target_db, &ctx, exported, "admin");
+    try std.testing.expectError(error.DuplicateNumber, importCoreBundleJson(target_db, &ctx, exported, "admin"));
+
+    var stmt = try target_db.prepare("SELECT COUNT(*) FROM ledger_books;");
+    defer stmt.finalize();
+    try std.testing.expect(try stmt.step());
+    try std.testing.expectEqual(@as(i32, 1), stmt.columnInt(0));
 }
 
 fn putUnique(ctx: *ImportContext, map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {

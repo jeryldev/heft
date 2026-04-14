@@ -41,25 +41,33 @@ fn exportTrialBalanceJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 
 }
 
 pub fn verifyBookSemantics(source_db: db.Database, source_book_id: i64, target_db: db.Database, target_book_id: i64) !VerificationReport {
-    var source_core_buf: [256 * 1024]u8 = undefined;
-    var target_core_buf: [256 * 1024]u8 = undefined;
-    const source_core = try oble_core.exportCoreBundleJson(source_db, source_book_id, &source_core_buf);
-    const target_core = try oble_core.exportCoreBundleJson(target_db, target_book_id, &target_core_buf);
+    const source_core_buf = try std.heap.c_allocator.alloc(u8, 512 * 1024);
+    defer std.heap.c_allocator.free(source_core_buf);
+    const target_core_buf = try std.heap.c_allocator.alloc(u8, 512 * 1024);
+    defer std.heap.c_allocator.free(target_core_buf);
+    const source_core = try oble_core.exportCoreBundleJson(source_db, source_book_id, source_core_buf);
+    const target_core = try oble_core.exportCoreBundleJson(target_db, target_book_id, target_core_buf);
 
-    var source_counterparty_buf: [256 * 1024]u8 = undefined;
-    var target_counterparty_buf: [256 * 1024]u8 = undefined;
-    const source_counterparty = try oble_profile_counterparty.exportCounterpartyProfileBundleJson(source_db, source_book_id, &source_counterparty_buf);
-    const target_counterparty = try oble_profile_counterparty.exportCounterpartyProfileBundleJson(target_db, target_book_id, &target_counterparty_buf);
+    const source_counterparty_buf = try std.heap.c_allocator.alloc(u8, 512 * 1024);
+    defer std.heap.c_allocator.free(source_counterparty_buf);
+    const target_counterparty_buf = try std.heap.c_allocator.alloc(u8, 512 * 1024);
+    defer std.heap.c_allocator.free(target_counterparty_buf);
+    const source_counterparty = try oble_profile_counterparty.exportCounterpartyProfileBundleJson(source_db, source_book_id, source_counterparty_buf);
+    const target_counterparty = try oble_profile_counterparty.exportCounterpartyProfileBundleJson(target_db, target_book_id, target_counterparty_buf);
 
-    var source_policy_buf: [64 * 1024]u8 = undefined;
-    var target_policy_buf: [64 * 1024]u8 = undefined;
-    const source_policy = try oble_profile_policy.exportPolicyProfileJson(source_db, source_book_id, &source_policy_buf);
-    const target_policy = try oble_profile_policy.exportPolicyProfileJson(target_db, target_book_id, &target_policy_buf);
+    const source_policy_buf = try std.heap.c_allocator.alloc(u8, 128 * 1024);
+    defer std.heap.c_allocator.free(source_policy_buf);
+    const target_policy_buf = try std.heap.c_allocator.alloc(u8, 128 * 1024);
+    defer std.heap.c_allocator.free(target_policy_buf);
+    const source_policy = try oble_profile_policy.exportPolicyProfileJson(source_db, source_book_id, source_policy_buf);
+    const target_policy = try oble_profile_policy.exportPolicyProfileJson(target_db, target_book_id, target_policy_buf);
 
-    var source_tb_buf: [128 * 1024]u8 = undefined;
-    var target_tb_buf: [128 * 1024]u8 = undefined;
-    const source_tb = try exportTrialBalanceJson(source_db, source_book_id, &source_tb_buf);
-    const target_tb = try exportTrialBalanceJson(target_db, target_book_id, &target_tb_buf);
+    const source_tb_buf = try std.heap.c_allocator.alloc(u8, 256 * 1024);
+    defer std.heap.c_allocator.free(source_tb_buf);
+    const target_tb_buf = try std.heap.c_allocator.alloc(u8, 256 * 1024);
+    defer std.heap.c_allocator.free(target_tb_buf);
+    const source_tb = try exportTrialBalanceJson(source_db, source_book_id, source_tb_buf);
+    const target_tb = try exportTrialBalanceJson(target_db, target_book_id, target_tb_buf);
 
     return .{
         .core_equal = std.mem.eql(u8, source_core, target_core),

@@ -43,11 +43,15 @@ pub fn exportRevaluationPacketJson(database: db.Database, entry_id: i64, buf: []
 }
 
 pub fn exportPolicyLifecycleBundleJson(database: db.Database, book_id: i64, period_id: i64, revaluation_entry_id: ?i64, buf: []u8) ![]u8 {
-    var policy_buf: [16 * 1024]u8 = undefined;
-    var close_buf: [32 * 1024]u8 = undefined;
+    const policy_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(policy_buf);
+    const close_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(close_buf);
+    const reval_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(reval_buf);
 
-    const policy_json = try exportPolicyProfileJson(database, book_id, &policy_buf);
-    const close_json = try exportCloseReopenProfileJson(database, book_id, period_id, &close_buf);
+    const policy_json = try exportPolicyProfileJson(database, book_id, policy_buf);
+    const close_json = try exportCloseReopenProfileJson(database, book_id, period_id, close_buf);
 
     var pos: usize = 0;
     try appendLiteral(buf, &pos, "{\"policy_profile\":");
@@ -56,8 +60,7 @@ pub fn exportPolicyLifecycleBundleJson(database: db.Database, book_id: i64, peri
     try appendLiteral(buf, &pos, close_json);
     try appendLiteral(buf, &pos, ",\"revaluation_packet\":");
     if (revaluation_entry_id) |entry_id| {
-        var reval_buf: [32 * 1024]u8 = undefined;
-        const reval_json = try exportRevaluationPacketJson(database, entry_id, &reval_buf);
+        const reval_json = try exportRevaluationPacketJson(database, entry_id, reval_buf);
         try appendLiteral(buf, &pos, reval_json);
     } else {
         try appendLiteral(buf, &pos, "null");

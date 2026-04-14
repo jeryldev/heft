@@ -81,8 +81,11 @@ pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: 
 }
 
 pub fn exportCounterpartyProfileBundleJson(database: db.Database, book_id: i64, buf: []u8) ![]u8 {
-    var counterparties_buf: [128 * 1024]u8 = undefined;
-    const counterparties_json = try exportCounterpartiesJson(database, book_id, &counterparties_buf);
+    const counterparties_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(counterparties_buf);
+    const open_item_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(open_item_buf);
+    const counterparties_json = try exportCounterpartiesJson(database, book_id, counterparties_buf);
 
     var stmt = try database.prepare(
         \\SELECT id
@@ -99,11 +102,10 @@ pub fn exportCounterpartyProfileBundleJson(database: db.Database, book_id: i64, 
     try appendLiteral(buf, &pos, ",\"open_items\":[");
 
     var first = true;
-    var open_item_buf: [32 * 1024]u8 = undefined;
     while (try stmt.step()) {
         if (!first) try appendLiteral(buf, &pos, ",");
         first = false;
-        const open_item_json = try exportCounterpartyOpenItemJson(database, stmt.columnInt64(0), &open_item_buf);
+        const open_item_json = try exportCounterpartyOpenItemJson(database, stmt.columnInt64(0), open_item_buf);
         try appendLiteral(buf, &pos, open_item_json);
     }
 

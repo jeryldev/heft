@@ -59,7 +59,6 @@ pub fn ledger_oble_import_session_open(handle: ?*LedgerDB, performed_by: ?[*:0]c
 pub fn ledger_oble_import_session_close(session: ?*LedgerOBLEImportSession) void {
     const s = session orelse return;
     s.session.deinit();
-    std.heap.c_allocator.free(s.performed_by_owned);
     std.heap.c_allocator.destroy(s);
 }
 

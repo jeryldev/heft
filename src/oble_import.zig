@@ -625,6 +625,26 @@ pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: 
 
 // ── Tests ───────────────────────────────────────────────────────
 
+fn readTestArtifact(allocator: std.mem.Allocator, relative_path: []const u8, max_bytes: usize) ![]u8 {
+    if (std.fs.cwd().readFileAlloc(allocator, relative_path, max_bytes)) |bytes| {
+        return bytes;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
+    const absolute_path = try std.fs.path.join(allocator, &.{ "/Users/jeryldev/code/zig_projects/heft", relative_path });
+    defer allocator.free(absolute_path);
+    if (std.fs.cwd().readFileAlloc(allocator, absolute_path, max_bytes)) |bytes| {
+        return bytes;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
+    return error.FileNotFound;
+}
+
 test "OBLE import: core example packet" {
     const allocator = std.testing.allocator;
     const database = try db.Database.open(":memory:");
@@ -634,13 +654,13 @@ test "OBLE import: core example packet" {
     var ctx = ImportContext.init(allocator);
     defer ctx.deinit();
 
-    const book_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-book.json", 4096);
+    const book_json = try readTestArtifact(allocator, "docs/oble/examples/core-book.json", 4096);
     defer allocator.free(book_json);
-    const accounts_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-accounts.json", 8192);
+    const accounts_json = try readTestArtifact(allocator, "docs/oble/examples/core-accounts.json", 8192);
     defer allocator.free(accounts_json);
-    const periods_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-periods.json", 8192);
+    const periods_json = try readTestArtifact(allocator, "docs/oble/examples/core-periods.json", 8192);
     defer allocator.free(periods_json);
-    const entry_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-entry-posted.json", 8192);
+    const entry_json = try readTestArtifact(allocator, "docs/oble/examples/core-entry-posted.json", 8192);
     defer allocator.free(entry_json);
 
     const book_id = try importBookJson(database, &ctx, book_json, "admin");
@@ -748,13 +768,13 @@ test "OBLE import: reversal pair example packet" {
     var ctx = ImportContext.init(allocator);
     defer ctx.deinit();
 
-    const book_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-book.json", 4096);
+    const book_json = try readTestArtifact(allocator, "docs/oble/examples/core-book.json", 4096);
     defer allocator.free(book_json);
-    const accounts_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-accounts.json", 8192);
+    const accounts_json = try readTestArtifact(allocator, "docs/oble/examples/core-accounts.json", 8192);
     defer allocator.free(accounts_json);
-    const periods_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/core-periods.json", 8192);
+    const periods_json = try readTestArtifact(allocator, "docs/oble/examples/core-periods.json", 8192);
     defer allocator.free(periods_json);
-    const reversal_json = try std.fs.cwd().readFileAlloc(allocator, "docs/oble/examples/reversal-pair.json", 16384);
+    const reversal_json = try readTestArtifact(allocator, "docs/oble/examples/reversal-pair.json", 16384);
     defer allocator.free(reversal_json);
 
     _ = try importBookJson(database, &ctx, book_json, "admin");

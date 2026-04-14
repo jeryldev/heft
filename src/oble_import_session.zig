@@ -31,19 +31,23 @@ pub const EntityKind = enum {
 
 pub const Session = struct {
     database: db.Database,
-    performed_by: []const u8,
+    allocator: std.mem.Allocator,
+    performed_by_owned: []u8,
     ctx: ImportContext,
 
     pub fn init(database: db.Database, allocator: std.mem.Allocator, performed_by: []const u8) Session {
+        const owned_actor = allocator.dupe(u8, performed_by) catch @panic("out of memory");
         return .{
             .database = database,
-            .performed_by = performed_by,
+            .allocator = allocator,
+            .performed_by_owned = owned_actor,
             .ctx = ImportContext.init(allocator),
         };
     }
 
     pub fn deinit(self: *Session) void {
         self.ctx.deinit();
+        self.allocator.free(self.performed_by_owned);
     }
 
     pub fn resolveImportedId(self: *const Session, kind: EntityKind, logical_id: []const u8) ?i64 {
@@ -59,49 +63,49 @@ pub const Session = struct {
     }
 
     pub fn importCoreBundleJson(self: *Session, json: []const u8) !i64 {
-        return oble_core.importCoreBundleJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_core.importCoreBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importEntryJson(self: *Session, json: []const u8) !i64 {
-        return oble_core.importEntryJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_core.importEntryJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importReversalPairJson(self: *Session, json: []const u8) !ReversalPairImportIds {
-        return oble_import.importReversalPairJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_import.importReversalPairJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importCounterpartiesJson(self: *Session, json: []const u8) !void {
-        return oble_profile_counterparty.importCounterpartiesJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_profile_counterparty.importCounterpartiesJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importCounterpartyProfileBundleJson(self: *Session, json: []const u8) !void {
-        return oble_profile_counterparty.importCounterpartyProfileBundleJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_profile_counterparty.importCounterpartyProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importPolicyProfileJson(self: *Session, json: []const u8) !i64 {
-        return oble_profile_policy.importPolicyProfileJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_profile_policy.importPolicyProfileJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importMultiCurrencyBundleJson(self: *Session, json: []const u8) !MultiCurrencyImportResult {
-        return oble_profile_fx.importMultiCurrencyBundleJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_profile_fx.importMultiCurrencyBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importPolicyLifecycleBundleJson(self: *Session, json: []const u8) !PolicyLifecycleImportResult {
-        return oble_profile_policy.importPolicyLifecycleBundleJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_profile_policy.importPolicyLifecycleBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importBookSnapshotJson(self: *Session, json: []const u8) !i64 {
-        return oble_profile_counterparty.importBookSnapshotJson(self.database, &self.ctx, json, self.performed_by);
+        return oble_profile_counterparty.importBookSnapshotJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn reconstructCloseForImportedPeriod(self: *Session, period_logical_id: []const u8) !void {
         const period_id = self.resolveImportedId(.period, period_logical_id) orelse return error.NotFound;
-        return oble_reconstruction.reconstructCloseForPeriod(self.database, period_id, self.performed_by);
+        return oble_reconstruction.reconstructCloseForPeriod(self.database, period_id, self.performed_by_owned);
     }
 
     pub fn reconstructRevaluationForImportedPeriod(self: *Session, period_logical_id: []const u8, rates: []const @import("revaluation.zig").CurrencyRate) !i64 {
         const period_id = self.resolveImportedId(.period, period_logical_id) orelse return error.NotFound;
-        return oble_reconstruction.reconstructRevaluationForPeriod(self.database, period_id, rates, self.performed_by);
+        return oble_reconstruction.reconstructRevaluationForPeriod(self.database, period_id, rates, self.performed_by_owned);
     }
 };
 

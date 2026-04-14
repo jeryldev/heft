@@ -32,16 +32,18 @@ pub fn exportRevaluationPacketJson(database: db.Database, entry_id: i64, buf: []
 }
 
 pub fn exportMultiCurrencyBundleJson(database: db.Database, entry_id: i64, revaluation_entry_id: ?i64, buf: []u8) ![]u8 {
-    var entry_buf: [32 * 1024]u8 = undefined;
-    const entry_json = try exportEntryJson(database, entry_id, &entry_buf);
+    const entry_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(entry_buf);
+    const reval_buf = try std.heap.c_allocator.alloc(u8, buf.len);
+    defer std.heap.c_allocator.free(reval_buf);
+    const entry_json = try exportEntryJson(database, entry_id, entry_buf);
 
     var pos: usize = 0;
     try appendLiteral(buf, &pos, "{\"foreign_currency_entry\":");
     try appendLiteral(buf, &pos, entry_json);
     try appendLiteral(buf, &pos, ",\"revaluation_packet\":");
     if (revaluation_entry_id) |reval_id| {
-        var reval_buf: [32 * 1024]u8 = undefined;
-        const reval_json = try exportRevaluationPacketJson(database, reval_id, &reval_buf);
+        const reval_json = try exportRevaluationPacketJson(database, reval_id, reval_buf);
         try appendLiteral(buf, &pos, reval_json);
     } else {
         try appendLiteral(buf, &pos, "null");
