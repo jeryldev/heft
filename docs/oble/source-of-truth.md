@@ -56,6 +56,13 @@ The intended local snapshot workflow is now:
 1. sync the snapshot with `bash scripts/sync-oble.sh /path/to/oble-repo`
 2. validate the synced snapshot with `bash scripts/validate-oble.sh`
 
+`Heft` can also validate an external OBLE source directly without first
+refreshing the local snapshot:
+
+```bash
+OBLE_SOURCE=/path/to/oble-repo bash scripts/validate-oble.sh
+```
+
 ## Practical interpretation
 
 Until the external repo is published:

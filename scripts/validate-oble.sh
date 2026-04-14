@@ -2,16 +2,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OBLE_ROOT_DEFAULT="$ROOT/docs/oble"
+OBLE_ROOT="${OBLE_SOURCE:-$OBLE_ROOT_DEFAULT}"
 
 cd "$ROOT"
 
 echo "[1/3] validate schema/example map"
-python3 - <<'PY'
+python3 - <<'PY' "$OBLE_ROOT"
 import json
 from pathlib import Path
+import sys
 
-root = Path(".")
-schema_dir = root / "docs/oble/schema"
+oble_root = Path(sys.argv[1])
+schema_dir = oble_root / "schema"
 mapping = json.loads((schema_dir / "example-map.json").read_text())["mappings"]
 
 for item in mapping:
@@ -27,23 +30,26 @@ for item in mapping:
 PY
 
 echo "[2/3] parse all OBLE examples as JSON"
-python3 - <<'PY'
+python3 - <<'PY' "$OBLE_ROOT"
 import json
 from pathlib import Path
+import sys
 
-for path in sorted(Path("docs/oble/examples").glob("*.json")):
+for path in sorted((Path(sys.argv[1]) / "examples").glob("*.json")):
     json.loads(path.read_text())
 PY
 
 echo "[3/3] validate OBLE docs cross-references"
-python3 - <<'PY'
+python3 - <<'PY' "$OBLE_ROOT"
 from pathlib import Path
 import re
+import sys
 
+oble_root = Path(sys.argv[1])
 docs = [
-    Path("docs/oble/README.md"),
-    Path("docs/oble/schema/README.md"),
-    Path("docs/oble/schema/validation.md"),
+    oble_root / "README.md",
+    oble_root / "schema" / "README.md",
+    oble_root / "schema" / "validation.md",
 ]
 pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
@@ -58,4 +64,9 @@ for doc in docs:
             raise SystemExit(f"broken link in {doc}: {target}")
 PY
 
+if [[ "$OBLE_ROOT" == "$OBLE_ROOT_DEFAULT" ]]; then
+  echo "Validated vendored OBLE snapshot at $OBLE_ROOT"
+else
+  echo "Validated external OBLE source at $OBLE_ROOT"
+fi
 echo "OBLE validation checks passed"
