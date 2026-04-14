@@ -123,6 +123,13 @@ Run it from the repo root with:
 zig build example-basic
 ```
 
+There is also an OBLE round-trip example at
+[examples/oble_roundtrip.zig](examples/oble_roundtrip.zig):
+
+```bash
+zig build example-oble-roundtrip
+```
+
 ## Docs
 
 - [Architecture](docs/architecture.md)

@@ -86,6 +86,20 @@ pub fn build(b: *std.Build) void {
         .root_module = example_mod,
     });
 
+    const oble_roundtrip_mod = b.createModule(.{
+        .root_source_file = b.path("examples/oble_roundtrip.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "heft", .module = mod },
+        },
+    });
+
+    const oble_roundtrip_exe = b.addExecutable(.{
+        .name = "heft-example-oble-roundtrip",
+        .root_module = oble_roundtrip_mod,
+    });
+
     const mod_tests = b.addTest(.{ .root_module = mod });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
@@ -96,6 +110,7 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_bench.addArgs(args);
 
     const run_example = b.addRunArtifact(example_exe);
+    const run_oble_roundtrip = b.addRunArtifact(oble_roundtrip_exe);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
@@ -106,6 +121,9 @@ pub fn build(b: *std.Build) void {
 
     const example_step = b.step("example-basic", "Run the basic Heft example");
     example_step.dependOn(&run_example.step);
+
+    const oble_roundtrip_step = b.step("example-oble-roundtrip", "Run the OBLE round-trip example");
+    oble_roundtrip_step.dependOn(&run_oble_roundtrip.step);
 
     const safe_mod = b.addModule("heft-safe", .{
         .root_source_file = b.path("src/root.zig"),

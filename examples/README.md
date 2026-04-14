@@ -25,3 +25,14 @@ zig build example-basic
 ```
 
 This example is intentionally small enough to read in one sitting.
+
+### `oble_roundtrip.zig`
+
+Creates a small source ledger, exports OBLE core and policy packets, imports
+them into a fresh ledger, and runs semantic verification on the result.
+
+Run it from the repo root with:
+
+```bash
+zig build example-oble-roundtrip
+```
