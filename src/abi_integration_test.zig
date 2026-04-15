@@ -151,6 +151,7 @@ const ledger_oble_export_classified_trial_balance_result = abi.ledger_oble_expor
 const ledger_oble_export_cash_flow_result = abi.ledger_oble_export_cash_flow_result;
 const ledger_oble_export_cash_flow_indirect_result = abi.ledger_oble_export_cash_flow_indirect_result;
 const ledger_oble_export_integrity_summary_result = abi.ledger_oble_export_integrity_summary_result;
+const ledger_oble_export_audit_trail_result = abi.ledger_oble_export_audit_trail_result;
 const ledger_oble_export_translated_trial_balance_result = abi.ledger_oble_export_translated_trial_balance_result;
 const ledger_oble_export_translated_income_statement_result = abi.ledger_oble_export_translated_income_statement_result;
 const ledger_oble_export_translated_balance_sheet_result = abi.ledger_oble_export_translated_balance_sheet_result;
@@ -1818,6 +1819,7 @@ test "C ABI: export wrappers null handle returns -1" {
     try std.testing.expectEqual(@as(i32, -1), ledger_export_subledger(null, 1, &buf, 4096, 0));
     try std.testing.expectEqual(@as(i32, -1), ledger_export_book_metadata(null, 1, &buf, 4096, 0));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_integrity_summary_result(null, 1, &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_audit_trail_result(null, 1, "2026-01-01", "2026-12-31", &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_result(null, 1, "2026-01-31", &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_translated_trial_balance_result(null, 1, "2026-01-31", "USD", 180000000, 185000000, &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_movement_result(null, 1, "2026-01-01", "2026-01-31", &buf, buf.len));
@@ -2031,6 +2033,10 @@ test "C ABI: OBLE export happy paths" {
     const integrity_len = ledger_oble_export_integrity_summary_result(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(integrity_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(integrity_len)], "\"packet_kind\":\"integrity_summary\"") != null);
+
+    const audit_trail_len = ledger_oble_export_audit_trail_result(handle, s.book_id, "2020-01-01", "2030-12-31", &buf, buf.len);
+    try std.testing.expect(audit_trail_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(audit_trail_len)], "\"packet_kind\":\"audit_trail\"") != null);
 
     const trial_balance_result_len = ledger_oble_export_trial_balance_result(handle, s.book_id, "2026-02-28", &buf, buf.len);
     try std.testing.expect(trial_balance_result_len > 0);

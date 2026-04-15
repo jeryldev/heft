@@ -391,6 +391,114 @@ pub fn exportIntegritySummaryResultPacketJson(database: db.Database, book_id: i6
     return buf[0..pos];
 }
 
+pub fn exportAuditTrailResultPacketJson(
+    database: db.Database,
+    book_id: i64,
+    start_date: []const u8,
+    end_date: []const u8,
+    buf: []u8,
+) ![]u8 {
+    var stmt = try database.prepare(
+        \\SELECT id, entity_type, entity_id, action, field_changed,
+        \\  old_value, new_value, performed_by, performed_at, hash_chain
+        \\FROM ledger_audit_log
+        \\WHERE book_id = ? AND performed_at BETWEEN ? AND ?
+        \\ORDER BY id;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindText(2, start_date);
+    try stmt.bindText(3, end_date);
+
+    var pos: usize = 0;
+    const header = try std.fmt.bufPrint(
+        buf[pos..],
+        "{{\"packet_kind\":\"audit_trail\",\"book_id\":\"book-{d}\",\"start_date\":\"",
+        .{book_id},
+    );
+    pos += header.len;
+    pos += try jsonString(buf[pos..], start_date);
+    try appendLiteral(buf, &pos, "\",\"end_date\":\"");
+    pos += try jsonString(buf[pos..], end_date);
+    try appendLiteral(buf, &pos, "\",\"records\":[");
+
+    var first = true;
+    while (try stmt.step()) {
+        if (!first) try appendLiteral(buf, &pos, ",");
+        first = false;
+
+        const id = stmt.columnInt64(0);
+        const entity_type = stmt.columnText(1) orelse "";
+        const entity_id = stmt.columnInt64(2);
+        const action = stmt.columnText(3) orelse "";
+        const field_changed = stmt.columnText(4);
+        const old_value = stmt.columnText(5);
+        const new_value = stmt.columnText(6);
+        const performed_by = stmt.columnText(7) orelse "";
+        const performed_at = stmt.columnText(8) orelse "";
+        const hash_chain = stmt.columnText(9);
+
+        const record_header = try std.fmt.bufPrint(
+            buf[pos..],
+            "{{\"id\":{d},\"entity_type\":\"",
+            .{id},
+        );
+        pos += record_header.len;
+        pos += try jsonString(buf[pos..], entity_type);
+        const record_mid = try std.fmt.bufPrint(
+            buf[pos..],
+            "\",\"entity_id\":{d},\"action\":\"",
+            .{entity_id},
+        );
+        pos += record_mid.len;
+        pos += try jsonString(buf[pos..], action);
+
+        try appendLiteral(buf, &pos, "\",\"field_changed\":");
+        if (field_changed) |value| {
+            try appendLiteral(buf, &pos, "\"");
+            pos += try jsonString(buf[pos..], value);
+            try appendLiteral(buf, &pos, "\"");
+        } else {
+            try appendLiteral(buf, &pos, "null");
+        }
+
+        try appendLiteral(buf, &pos, ",\"old_value\":");
+        if (old_value) |value| {
+            try appendLiteral(buf, &pos, "\"");
+            pos += try jsonString(buf[pos..], value);
+            try appendLiteral(buf, &pos, "\"");
+        } else {
+            try appendLiteral(buf, &pos, "null");
+        }
+
+        try appendLiteral(buf, &pos, ",\"new_value\":");
+        if (new_value) |value| {
+            try appendLiteral(buf, &pos, "\"");
+            pos += try jsonString(buf[pos..], value);
+            try appendLiteral(buf, &pos, "\"");
+        } else {
+            try appendLiteral(buf, &pos, "null");
+        }
+
+        try appendLiteral(buf, &pos, ",\"performed_by\":\"");
+        pos += try jsonString(buf[pos..], performed_by);
+        try appendLiteral(buf, &pos, "\",\"performed_at\":\"");
+        pos += try jsonString(buf[pos..], performed_at);
+        try appendLiteral(buf, &pos, "\",\"hash_chain\":");
+        if (hash_chain) |value| {
+            try appendLiteral(buf, &pos, "\"");
+            pos += try jsonString(buf[pos..], value);
+            try appendLiteral(buf, &pos, "\"");
+        } else {
+            try appendLiteral(buf, &pos, "null");
+        }
+        try appendLiteral(buf, &pos, "}");
+    }
+
+    try appendLiteral(buf, &pos, "]}");
+    return buf[0..pos];
+}
+
 pub fn exportTranslatedTrialBalanceResultPacketJson(
     database: db.Database,
     book_id: i64,
@@ -1398,6 +1506,22 @@ test "OBLE results: indirect cash flow, integrity, and translated statement pack
     try std.testing.expect(std.mem.indexOf(u8, translated_json, "\"source_currency\":\"PHP\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, translated_json, "\"target_currency\":\"USD\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, translated_json, "\"closing_rate\":\"0.0180000000\"") != null);
+}
+
+test "OBLE results: audit trail packet exports canonical JSON" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Audit Packet Book", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+
+    var buf: [128 * 1024]u8 = undefined;
+    const json = try exportAuditTrailResultPacketJson(database, book_id, "2020-01-01", "2030-12-31", &buf);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"packet_kind\":\"audit_trail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"entity_type\":\"book\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"performed_by\":\"admin\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"hash_chain\":\"") != null);
 }
 
 fn expectPacketMatchesExampleShape(actual_json: []const u8, example_json: []const u8, required_keys: []const ExampleKeyPath) !void {

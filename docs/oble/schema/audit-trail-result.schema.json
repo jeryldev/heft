@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/audit-trail-result.schema.json",
+  "title": "OBLE Audit Trail Result Packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["packet_kind", "book_id", "start_date", "end_date", "records"],
+  "properties": {
+    "packet_kind": { "type": "string", "enum": ["audit_trail"] },
+    "book_id": { "type": "string" },
+    "start_date": { "type": "string" },
+    "end_date": { "type": "string" },
+    "records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/record" }
+    }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entity_type",
+        "entity_id",
+        "action",
+        "field_changed",
+        "old_value",
+        "new_value",
+        "performed_by",
+        "performed_at",
+        "hash_chain"
+      ],
+      "properties": {
+        "id": { "type": "integer" },
+        "entity_type": { "type": "string" },
+        "entity_id": { "type": "integer" },
+        "action": { "type": "string" },
+        "field_changed": { "type": ["string", "null"] },
+        "old_value": { "type": ["string", "null"] },
+        "new_value": { "type": ["string", "null"] },
+        "performed_by": { "type": "string" },
+        "performed_at": { "type": "string" },
+        "hash_chain": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

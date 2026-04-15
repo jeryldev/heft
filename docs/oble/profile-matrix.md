@@ -61,6 +61,7 @@ Implementation details that are outside OBLE itself:
 | `Classifications / Report Structures` | `0009`, `0012`, `0015`, `0016`, `0017` | classification profile bundle, classified result packet, indirect cash flow result packet, core and comparative statement result packets, equity result packet | Strong |
 | `Dimensions / Analytics` | `0010`, `0013` | dimension profile bundle, dimension summary result packet | Strong |
 | `Budgets / Planning` | `0011`, `0014` | budget profile bundle, budget analysis result packet | Strong |
+| `Audit / Provenance` | `0019` | audit-trail result packet | Emerging |
 
 ## Public-boundary posture
 

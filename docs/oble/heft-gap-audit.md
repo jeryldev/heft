@@ -56,7 +56,7 @@ behavior rather than something OBLE should necessarily standardize.
 | Classifications | Confirmed | Heft now has a real OBLE classification profile boundary plus export-first classified result packets. |
 | Dimensions | Confirmed | Heft now has a real OBLE dimension profile boundary plus export-first summary and rollup result packets. |
 | Budgets | Confirmed | Heft now has a real OBLE budget profile boundary plus an export-first budget-analysis result packet. |
-| Audit trail export | Partial | Audit/provenance exists strongly in Heft, and integrity-summary result packets now exist, but OBLE still does not have a mature portable audit-log packet set. |
+| Audit trail export | Confirmed | Heft now exports a portable OBLE audit-trail result packet with immutable records and hash-chain visibility, while richer native audit internals remain Heft-specific. |
 | Verification / integrity checks | Confirmed | Heft now exports integrity-summary result packets and retains stronger native verify/conformance surfaces behind them. |
 | Batch workflows | Heft-only | Batch post/void orchestration is useful operational behavior, but not obviously a standards concern today. |
 | Query/report transport formats | Heft-only | CSV/JSON report formatting is a Heft boundary, not an OBLE interoperability layer. |
@@ -146,7 +146,7 @@ This is a good profile, but still not a fully frozen interchange story.
 
 ## 6. Close and reopen
 
-Status: `Partial`
+Status: `Confirmed`
 
 What is already real:
 
@@ -305,11 +305,13 @@ Heft is strong here internally:
 - per-book hash chains
 - audit export through native Heft surfaces
 
-OBLE now also has an integrity-summary result packet that captures the most
-portable verification posture.
+OBLE now also has:
 
-What is still missing is a mature portable audit-log packet family matching the
-full native Heft audit depth.
+- an integrity-summary result packet
+- an audit-trail result packet
+
+What is still missing is only any future richer audit-log packet family
+matching the full native Heft audit depth.
 
 ## 12. Verification and conformance reporting
 
@@ -354,18 +356,18 @@ These are important for the engine, but they are not protocol semantics.
 
 The most important remaining gaps are:
 
-1. portable audit/provenance shapes beyond integrity summaries
-2. any consolidation-oriented or later translation result packets
-3. stronger public posture for lifecycle-derived import replay
-4. broader live-export validation against canonical OBLE examples and schemas
-5. deciding which advanced outputs should stay Heft-native
+1. any consolidation-oriented or later translation result packets
+2. stronger public posture for lifecycle-derived import replay
+3. broader live-export validation against canonical OBLE examples and schemas
+4. deciding which advanced outputs should stay Heft-native
+5. whether richer native audit internals should ever extend beyond the first audit-trail packet
 
 ## Recommended next sequence
 
-1. Decide whether `audit/provenance` should become its own narrow OBLE profile beyond integrity summaries.
-2. Decide whether `consolidation` or later translation variants deserve new OBLE result packets.
-3. Keep `Close/Reopen` and `Revaluation` honest as reconstruction-oriented until replay semantics are truly stable.
-4. Deepen live-export validation against canonical OBLE examples and schemas.
+1. Decide whether `consolidation` or later translation variants deserve new OBLE result packets.
+2. Keep `Close/Reopen` and `Revaluation` honest as reconstruction-oriented until replay semantics are truly stable.
+3. Deepen live-export validation against canonical OBLE examples and schemas.
+4. Decide whether richer native audit internals should extend beyond the first audit-trail packet.
 5. Keep Heft-only runtime and workflow behavior clearly outside the standard.
 
 ## Practical conclusion

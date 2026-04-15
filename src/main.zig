@@ -807,6 +807,10 @@ pub export fn ledger_oble_export_integrity_summary_result(handle: ?*LedgerDB, bo
     return abi_buffers.ledger_oble_export_integrity_summary_result(handle, book_id, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_audit_trail_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_audit_trail_result(handle, book_id, start_date, end_date, buf, buf_len);
+}
+
 pub export fn ledger_oble_export_translated_trial_balance_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, target_currency: [*:0]const u8, closing_rate: i64, average_rate: i64, buf: ?[*]u8, buf_len: i32) i32 {
     return abi_buffers.ledger_oble_export_translated_trial_balance_result(handle, book_id, as_of_date, target_currency, closing_rate, average_rate, buf, buf_len);
 }

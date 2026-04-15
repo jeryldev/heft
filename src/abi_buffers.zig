@@ -710,6 +710,21 @@ pub fn ledger_oble_export_integrity_summary_result(handle: ?*LedgerDB, book_id: 
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_audit_trail_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportAuditTrailResultPacketJson(
+        h.sqlite,
+        book_id,
+        std.mem.span(start_date),
+        std.mem.span(end_date),
+        common.safeBuf(buf, buf_len) orelse return -1,
+    ) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_oble_export_translated_trial_balance_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, target_currency: [*:0]const u8, closing_rate: i64, average_rate: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const result = heft.oble_profile_results.exportTranslatedTrialBalanceResultPacketJson(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(target_currency), closing_rate, average_rate, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {

@@ -232,3 +232,18 @@ test "CONFORMANCE: OBLE indirect cash flow, integrity, and translated result pac
     const translated_json = try oble_results.exportTranslatedTrialBalanceResultPacketJson(database, book_id, "2026-02-28", "USD", 180000000, 185000000, &buf);
     try std.testing.expect(std.mem.indexOf(u8, translated_json, "\"packet_kind\":\"translated_trial_balance\"") != null);
 }
+
+test "CONFORMANCE: OBLE audit-trail result packet" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Audit Conformance Book", "PHP", 2, "admin");
+    _ = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+
+    var buf: [32 * 1024]u8 = undefined;
+    const audit_json = try oble_results.exportAuditTrailResultPacketJson(database, book_id, "2020-01-01", "2030-12-31", &buf);
+    try std.testing.expect(std.mem.indexOf(u8, audit_json, "\"packet_kind\":\"audit_trail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_json, "\"records\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_json, "\"hash_chain\":\"") != null);
+}

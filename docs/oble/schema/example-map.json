@@ -73,6 +73,10 @@
       "schema": "translated-statement-result.schema.json"
     },
     {
+      "example": "../examples/audit-trail-result.json",
+      "schema": "audit-trail-result.schema.json"
+    },
+    {
       "example": "../examples/book-snapshot.json",
       "schema": "book-snapshot.schema.json"
     },

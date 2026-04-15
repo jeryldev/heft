@@ -1,0 +1,20 @@
+{
+  "packet_kind": "audit_trail",
+  "book_id": "book-1",
+  "start_date": "2026-01-01",
+  "end_date": "2026-12-31",
+  "records": [
+    {
+      "id": 1,
+      "entity_type": "book",
+      "entity_id": 1,
+      "action": "create",
+      "field_changed": null,
+      "old_value": null,
+      "new_value": null,
+      "performed_by": "admin",
+      "performed_at": "2026-01-01T00:00:00Z",
+      "hash_chain": "0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}

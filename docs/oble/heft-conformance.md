@@ -55,6 +55,7 @@ standard boundary or testable conformance surface.
 | Budgets and Planning | Confirmed | Heft now has a budget profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports budget-analysis result packets as a distinct derived-output layer. |
 | Indirect Cash Flow and Integrity Result Packets | Confirmed | Heft now exports indirect cash-flow and integrity-summary result packets as explicit derived-output layers with public Zig and C surfaces plus conformance coverage. |
 | Translated Statement Result Packets | Confirmed | Heft now exports translated trial balance, translated income statement, and translated balance sheet packets as explicit derived-output layers with public Zig and C surfaces plus conformance coverage. |
+| Audit Trail and Provenance Result Packets | Confirmed | Heft now exports audit-trail result packets with immutable records and hash-chain visibility as an explicit derived-output layer with public Zig and C surfaces plus conformance coverage. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
@@ -287,12 +288,28 @@ Heft now has:
 These packets give the multi-currency/reporting layer a real portable
 presentation-currency output boundary.
 
+## OBLE-0019 Audit Trail and Provenance Result Packets
+
+Status: `Confirmed`
+
+Heft now has:
+
+- audit-trail result packet export
+- immutable audit record exposure
+- hash-chain visibility in the portable packet
+- public Zig and C export surfaces
+- direct packet tests
+- dedicated conformance coverage
+
+This packet is intentionally export-first. It exposes the portable provenance
+surface without pretending every native engine audit mechanism is identical.
+
 ## Biggest remaining gaps
 
 The most important gaps are now about completeness, not first principles.
 
 1. broaden packet coverage for close/reopen bundles and richer multi-currency examples
-2. decide whether audit/provenance should become a portable packet family beyond integrity summaries
+2. decide whether richer audit-log or provenance variants should extend beyond the first audit-trail packet
 3. automated schema validation of exported payloads
 4. broader public-surface exposure beyond the current Zig bridge and minimal C import session
 5. fuller live-export validation against a bundled draft-2020-12 schema validator once one is adopted
