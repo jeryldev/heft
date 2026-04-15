@@ -22,11 +22,12 @@ It can also import the safe user-authored parts of richer Zig-first bundles:
   revaluation packet was present
 - policy/lifecycle bundles import the policy profile and report whether close
   and revaluation packets were present
-- classification profile bundles import metadata and ordered nodes in Zig
+- classification profile bundles import metadata and ordered nodes through the
+  Zig import session
 - dimension profile bundles import definitions, values, and line assignments
-  in Zig
+  through the Zig import session
 - budget profile bundles import budget metadata, lifecycle state, and budget
-  lines in Zig
+  lines through the Zig import session
 
 Heft now also has explicit Zig-side reconstruction helpers for the cases where
 the imported bundle truthfully says: “derived lifecycle packets existed, but
@@ -136,6 +137,12 @@ consumer can resolve:
 - lines
 - counterparties
 - open items
+- classifications
+- classification nodes
+- dimensions
+- dimension values
+- budgets
+- budget lines
 
 without guessing row IDs after import.
 
@@ -204,8 +211,10 @@ Today, Heft can honestly claim:
 - OBLE export is available in Zig and C
 - OBLE import is available in Zig and minimally available in C
 - the newer classification, dimension, and budget profiles currently follow an
-  `export in Zig and C, import strongest in Zig` posture
+  `export in Zig and C, session import in Zig` posture
 - a real import-session boundary now exists in Zig for the implemented packet set
+- that Zig session now covers the classification, dimension, and budget
+  profiles as first-class import flows with logical-ID resolution
 - the Zig session can now import the safe portion of lifecycle-rich bundles and
   report the presence of derived packets that still require engine
   reconstruction

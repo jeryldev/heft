@@ -58,9 +58,9 @@ Implementation details that are outside OBLE itself:
 | `Multi-Currency` | `0006` | core entry export with foreign-currency lines, revaluation packet export | Emerging |
 | `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
-| `Classifications / Report Structures` | `0009` | classification profile bundle | Emerging |
-| `Dimensions / Analytics` | `0010` | dimension profile bundle | Emerging |
-| `Budgets / Planning` | `0011` | budget profile bundle | Emerging |
+| `Classifications / Report Structures` | `0009` | classification profile bundle | Strong |
+| `Dimensions / Analytics` | `0010` | dimension profile bundle | Strong |
+| `Budgets / Planning` | `0011` | budget profile bundle | Strong |
 
 ## Public-boundary posture
 
@@ -76,12 +76,12 @@ That means:
   session-based import in Zig and C
 - `Policy / Designations` has public export in Zig and C, and safe
   user-authored import in Zig and C
-- `Classifications / Report Structures` has public export in Zig and C, with
-  import currently strongest in Zig
-- `Dimensions / Analytics` has public export in Zig and C, with import
-  currently strongest in Zig
-- `Budgets / Planning` has public export in Zig and C, with import currently
-  strongest in Zig
+- `Classifications / Report Structures` has public export in Zig and C, and
+  session-based import in Zig
+- `Dimensions / Analytics` has public export in Zig and C, and session-based
+  import in Zig
+- `Budgets / Planning` has public export in Zig and C, and session-based
+  import in Zig
 - Zig import sessions can also consume richer `Policy / Designations` lifecycle
   bundles by importing the safe policy layer and reporting the presence of
   derived close/revaluation packets
@@ -200,7 +200,8 @@ This profile adds:
 - preserve hierarchical node ordering
 - preserve account binding identity
 - keep report structure distinct from chart-of-accounts identity
-- expose export surfaces broadly before freezing non-Zig import contracts
+- provide session-oriented import in richer runtimes before freezing non-Zig
+  import contracts
 
 ## 7. Dimensions / Analytics
 
@@ -215,7 +216,8 @@ This profile adds:
 - import/export dimensions and values
 - preserve line assignment semantics
 - keep analytical tags separate from balancing semantics
-- expose export surfaces broadly before freezing non-Zig import contracts
+- provide session-oriented import in richer runtimes before freezing non-Zig
+  import contracts
 
 ## 8. Budgets / Planning
 
@@ -231,11 +233,8 @@ This profile adds:
 - preserve budget line account/period intent
 - preserve budget lifecycle state
 - keep planning state distinct from posted history
-- expose export surfaces broadly before freezing non-Zig import contracts
-
-- import/export budget metadata
-- preserve account/period planning line intent
-- keep planning state distinct from posted ledger history
+- provide session-oriented import in richer runtimes before freezing non-Zig
+  import contracts
 
 ## Stable versus emerging areas
 
