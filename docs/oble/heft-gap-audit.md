@@ -54,7 +54,7 @@ behavior rather than something OBLE should necessarily standardize.
 | Semantic verification | Confirmed | Heft can verify semantic equivalence across source and imported ledgers. |
 | Reports and statements | Missing | Reports are available as Heft read APIs, but not currently as OBLE standard packets or profiles. |
 | Classifications | Missing | Heft has rich classification trees and classified reporting, but no explicit OBLE classification profile boundary yet. |
-| Dimensions | Missing | Heft supports dimensions and rollups, but there is no OBLE dimension profile yet. |
+| Dimensions | Partial | Heft now has a Zig-first dimension profile bundle for definitions, values, and line assignments, but broader standard packet coverage is still missing. |
 | Budgets | Missing | Heft budgets and budget-vs-actual workflows are not yet represented in OBLE. |
 | Audit trail export | Partial | Audit/provenance exists strongly in Heft, but OBLE does not yet have a mature portable audit packet set here. |
 | Verification / integrity checks | Partial | Heft exposes verification, but OBLE does not yet define a conformance-facing integrity-result packet. |
@@ -219,7 +219,7 @@ OBLE coverage.
 
 ## 9. Dimensions / Analytics
 
-Status: `Draft-defined, Missing implementation boundary`
+Status: `Partial`
 
 Heft already has:
 
@@ -233,7 +233,16 @@ OBLE now has an explicit draft profile for this area:
 
 - `OBLE-0010 Dimensions and Analytics`
 
-But Heft still has no implemented packet/profile boundary for it.
+Heft now has an initial Zig-first implemented boundary for this area:
+
+- dimension profile bundle export/import
+
+What is still missing:
+
+- broader packet breadth beyond the first bundle shape
+- public ABI exposure
+- canonical OBLE examples and schemas in the canonical repo
+- a clearer decision on whether dimension summaries and rollups should also become OBLE packets
 
 This is another strong candidate for future standardization if the goal is to
 cover more of Heft's analytic layer.
@@ -317,17 +326,17 @@ These are important for the engine, but they are not protocol semantics.
 The most important remaining gaps are:
 
 1. reports and statement semantics
-2. dimensions/analytics
-3. budgets/planning
-4. portable audit/provenance shapes
+2. budgets/planning
+3. portable audit/provenance shapes
+4. broader standards coverage for classifications and dimensions
 5. portable audit/conformance result shapes
 6. stronger public posture for lifecycle-derived import replay
 
 ## Recommended next sequence
 
 1. Broaden `Classifications / Report Structures` from the first bundle boundary into a fuller packet/example/schema set.
-2. Implement `Dimensions / Analytics` as the next analytical profile boundary.
-3. Follow with `Budgets / Planning` once the first two profile shapes are more concrete.
+2. Broaden `Dimensions / Analytics` from the first bundle boundary into examples, schemas, and wider packet coverage.
+3. Implement `Budgets / Planning` as the next planning-oriented profile boundary.
 4. Define a narrow OBLE audit/provenance profile only if there is real cross-engine need.
 5. Keep `Close/Reopen` and `Revaluation` honest as reconstruction-oriented until replay semantics are truly stable.
 
