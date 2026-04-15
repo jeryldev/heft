@@ -162,4 +162,48 @@ pub fn build(b: *std.Build) void {
 
     const check_step = b.step("check", "Build in ReleaseSafe to verify no UB");
     check_step.dependOn(&safe_lib.step);
+
+    // ── WebAssembly (browser) build ────────────────────────────────────
+    // Produces a wasm32-wasi reactor module with no entry point and all
+    // C ABI functions exported. The host (browser JS via a WASI shim)
+    // calls into the exported `ledger_*` functions and provides file I/O
+    // through the WASI filesystem API, which can be backed by OPFS.
+
+    const wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .wasi,
+    });
+
+    const wasm_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = wasm_target,
+        .optimize = optimize,
+    });
+    wasm_mod.addCSourceFile(.{
+        .file = b.path("vendor/sqlite3.c"),
+        .flags = sqlite_flags,
+    });
+    wasm_mod.addIncludePath(b.path("vendor/"));
+    wasm_mod.link_libc = true;
+
+    const wasm_main_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = wasm_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "heft", .module = wasm_mod },
+        },
+    });
+
+    const wasm_exe = b.addExecutable(.{
+        .name = "heft",
+        .root_module = wasm_main_mod,
+    });
+    wasm_exe.entry = .disabled;
+    wasm_exe.rdynamic = true;
+    wasm_exe.wasi_exec_model = .reactor;
+
+    const install_wasm = b.addInstallArtifact(wasm_exe, .{});
+    const wasm_step = b.step("wasm", "Build heft as a wasm32-wasi reactor module");
+    wasm_step.dependOn(&install_wasm.step);
 }
