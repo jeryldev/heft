@@ -56,6 +56,24 @@ fn internal_close(handle: *LedgerDB) void {
     std.heap.c_allocator.destroy(handle);
 }
 
+// ── Host scratch allocation (WASM hosts only need this) ────────
+// Hosts that embed heft as a WASM module need a way to allocate scratch
+// space inside heft's linear memory to pass strings and buffers across the
+// ABI boundary. Native callers can keep using the C heap directly.
+
+pub export fn ledger_host_alloc(n: usize) ?*anyopaque {
+    if (n == 0) return null;
+    const slice = std.heap.c_allocator.alignedAlloc(u8, .@"16", n) catch return null;
+    return @ptrCast(slice.ptr);
+}
+
+pub export fn ledger_host_free(ptr: ?*anyopaque, n: usize) void {
+    const p = ptr orelse return;
+    if (n == 0) return;
+    const bytes_ptr: [*]align(16) u8 = @ptrCast(@alignCast(p));
+    std.heap.c_allocator.free(bytes_ptr[0..n]);
+}
+
 // ── C ABI Exports ───────────────────────────────────────────────
 
 pub export fn ledger_open(path: ?[*:0]const u8) ?*LedgerDB {
