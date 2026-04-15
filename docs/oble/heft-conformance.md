@@ -50,9 +50,9 @@ standard boundary or testable conformance surface.
 | Multi-Currency Semantics | Confirmed | Heft stores transaction amounts, base amounts, and FX rates with exact integer arithmetic and revaluation flows. |
 | Close and Reopen Profile | Confirmed | Heft implements close-generated state, opening carry-forward, reopen cascades, and stale derived-state invalidation. |
 | Designations and Policy Profiles | Confirmed | Heft already uses designation-driven book policy heavily. |
-| Classifications and Report Structures | Partial | Heft now has an initial Zig-first classification profile bundle for metadata and ordered nodes, but broader packet coverage, examples, and schemas are still missing. |
-| Dimensions and Analytics | Partial | Heft now has an initial Zig-first dimension profile bundle for definitions, values, and line assignments, but broader packet coverage, examples, and schemas are still missing. |
-| Budgets and Planning | Partial | Heft now has an initial Zig-first budget profile bundle for budget metadata, lifecycle state, and budget lines, but broader packet coverage, examples, and schemas are still missing. |
+| Classifications and Report Structures | Partial | Heft now has a classification profile bundle with public Zig and C export surfaces, while import remains Zig-first and broader packet/examples/schema coverage is still emerging. |
+| Dimensions and Analytics | Partial | Heft now has a dimension profile bundle with public Zig and C export surfaces, while import remains Zig-first and broader packet/examples/schema coverage is still emerging. |
+| Budgets and Planning | Partial | Heft now has a budget profile bundle with public Zig and C export surfaces, while import remains Zig-first and broader packet/examples/schema coverage is still emerging. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
@@ -180,7 +180,7 @@ safe user-authored configuration layer:
 
 ## OBLE-0009 Classifications and Report Structures
 
-Status: `Draft-dependent`
+Status: `Partial`
 
 Heft already has:
 
@@ -189,11 +189,22 @@ Heft already has:
 - classified report behavior
 - cash-flow and classified trial-balance semantics
 
-What is missing is the explicit OBLE packet/profile boundary.
+Heft now has:
+
+- a classification profile bundle
+- public Zig export
+- public C export
+- Zig-first import
+
+What is still missing:
+
+- broader canonical examples and schemas beyond the first bundle
+- wider public import posture beyond Zig-first workflows
+- any later classified-report packet families if OBLE wants to standardize them
 
 ## OBLE-0010 Dimensions and Analytics
 
-Status: `Draft-dependent`
+Status: `Partial`
 
 Heft already has:
 
@@ -202,11 +213,22 @@ Heft already has:
 - line assignments
 - dimension summaries and rollups
 
-But OBLE does not yet have a stable implemented packet set for this area in Heft.
+Heft now has:
+
+- a dimension profile bundle
+- public Zig export
+- public C export
+- Zig-first import
+
+What is still missing:
+
+- broader canonical examples and schemas beyond the first bundle
+- wider public import posture beyond Zig-first workflows
+- any later summary/rollup packet families if OBLE wants to standardize them
 
 ## OBLE-0011 Budgets and Planning
 
-Status: `Draft-dependent`
+Status: `Partial`
 
 Heft already has:
 
@@ -215,7 +237,19 @@ Heft already has:
 - budget status transitions
 - budget-vs-actual reporting
 
-But this remains a Heft-native capability rather than an implemented OBLE packet/profile boundary.
+Heft now has:
+
+- a budget profile bundle
+- public Zig export
+- public C export
+- Zig-first import
+
+What is still missing:
+
+- broader canonical examples and schemas beyond the first bundle
+- wider public import posture beyond Zig-first workflows
+- a decision on whether budget-vs-actual belongs in this profile or a later
+  reporting-oriented extension
 
 ## Biggest remaining gaps
 
