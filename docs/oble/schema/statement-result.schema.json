@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/statement-result.schema.json",
+  "title": "OBLE Statement Result Packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "packet_kind",
+    "book_id",
+    "decimal_places",
+    "total_debits",
+    "total_credits",
+    "rows"
+  ],
+  "properties": {
+    "packet_kind": {
+      "type": "string",
+      "enum": [
+        "trial_balance",
+        "trial_balance_movement",
+        "income_statement",
+        "balance_sheet"
+      ]
+    },
+    "book_id": { "type": "string", "minLength": 1 },
+    "as_of_date": { "type": "string", "minLength": 1 },
+    "start_date": { "type": "string", "minLength": 1 },
+    "end_date": { "type": "string", "minLength": 1 },
+    "projected_retained_earnings": { "type": "boolean" },
+    "decimal_places": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "total_debits": { "type": "string", "minLength": 1 },
+    "total_credits": { "type": "string", "minLength": 1 },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "account_id",
+          "account_number",
+          "account_name",
+          "account_type",
+          "debit",
+          "credit"
+        ],
+        "properties": {
+          "account_id": { "type": "string", "minLength": 1 },
+          "account_number": { "type": "string" },
+          "account_name": { "type": "string" },
+          "account_type": { "type": "string", "minLength": 1 },
+          "debit": { "type": "string", "minLength": 1 },
+          "credit": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/equity-result.schema.json",
+  "title": "OBLE Equity Result Packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "packet_kind",
+    "book_id",
+    "start_date",
+    "end_date",
+    "fy_start_date",
+    "decimal_places",
+    "net_income",
+    "total_opening",
+    "total_closing",
+    "rows"
+  ],
+  "properties": {
+    "packet_kind": {
+      "type": "string",
+      "const": "equity_changes"
+    },
+    "book_id": { "type": "string", "minLength": 1 },
+    "start_date": { "type": "string", "minLength": 1 },
+    "end_date": { "type": "string", "minLength": 1 },
+    "fy_start_date": { "type": "string", "minLength": 1 },
+    "decimal_places": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "net_income": { "type": "string", "minLength": 1 },
+    "total_opening": { "type": "string", "minLength": 1 },
+    "total_closing": { "type": "string", "minLength": 1 },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "account_id",
+          "account_number",
+          "account_name",
+          "opening_balance",
+          "period_activity",
+          "closing_balance"
+        ],
+        "properties": {
+          "account_id": { "type": "string", "minLength": 1 },
+          "account_number": { "type": "string" },
+          "account_name": { "type": "string" },
+          "opening_balance": { "type": "string", "minLength": 1 },
+          "period_activity": { "type": "string", "minLength": 1 },
+          "closing_balance": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

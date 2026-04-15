@@ -49,6 +49,18 @@
       "schema": "budget-analysis-result.schema.json"
     },
     {
+      "example": "../examples/statement-result.json",
+      "schema": "statement-result.schema.json"
+    },
+    {
+      "example": "../examples/comparative-statement-result.json",
+      "schema": "comparative-statement-result.schema.json"
+    },
+    {
+      "example": "../examples/equity-result.json",
+      "schema": "equity-result.schema.json"
+    },
+    {
       "example": "../examples/book-snapshot.json",
       "schema": "book-snapshot.schema.json"
     },

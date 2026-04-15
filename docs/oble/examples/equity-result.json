@@ -1,0 +1,21 @@
+{
+  "packet_kind": "equity_changes",
+  "book_id": "book-1",
+  "start_date": "2026-02-01",
+  "end_date": "2026-02-28",
+  "fy_start_date": "2026-01-01",
+  "decimal_places": 2,
+  "net_income": "200.00",
+  "total_opening": "1000.00",
+  "total_closing": "1000.00",
+  "rows": [
+    {
+      "account_id": "acct-2",
+      "account_number": "3000",
+      "account_name": "Capital",
+      "opening_balance": "1000.00",
+      "period_activity": "0.00",
+      "closing_balance": "1000.00"
+    }
+  ]
+}

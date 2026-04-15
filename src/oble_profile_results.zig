@@ -9,6 +9,9 @@ const classification_mod = @import("classification.zig");
 const dimension_mod = @import("dimension.zig");
 const budget_mod = @import("budget.zig");
 const money = @import("money.zig");
+const report_statements = @import("report_statements.zig");
+const report_compare = @import("report_compare.zig");
+const report_common = @import("report_common.zig");
 
 const SummaryRow = struct {
     id: i64,
@@ -28,6 +31,23 @@ const BudgetAnalysisRow = struct {
     actual_credit: i64,
     actual_net: i64,
     variance: i64,
+};
+
+const StatementBoundary = struct {
+    as_of_date: ?[]const u8 = null,
+    start_date: ?[]const u8 = null,
+    end_date: ?[]const u8 = null,
+    projected_retained_earnings: bool = false,
+};
+
+const ComparativeBoundary = struct {
+    current_as_of_date: ?[]const u8 = null,
+    prior_as_of_date: ?[]const u8 = null,
+    current_start_date: ?[]const u8 = null,
+    current_end_date: ?[]const u8 = null,
+    prior_start_date: ?[]const u8 = null,
+    prior_end_date: ?[]const u8 = null,
+    fy_start_date: ?[]const u8 = null,
 };
 
 pub fn exportClassifiedReportPacketJson(database: db.Database, classification_id: i64, as_of_date: []const u8, buf: []u8) ![]u8 {
@@ -204,6 +224,130 @@ pub fn exportBudgetAnalysisResultPacketJson(database: db.Database, budget_id: i6
     return buf[0..pos];
 }
 
+pub fn exportTrialBalanceResultPacketJson(database: db.Database, book_id: i64, as_of_date: []const u8, buf: []u8) ![]u8 {
+    const result = try report_statements.trialBalance(database, book_id, as_of_date);
+    defer result.deinit();
+    return writeStatementPacket(buf, "trial_balance", book_id, .{ .as_of_date = as_of_date }, result);
+}
+
+pub fn exportTrialBalanceMovementResultPacketJson(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8, buf: []u8) ![]u8 {
+    const result = try report_statements.trialBalanceMovement(database, book_id, start_date, end_date);
+    defer result.deinit();
+    return writeStatementPacket(buf, "trial_balance_movement", book_id, .{
+        .start_date = start_date,
+        .end_date = end_date,
+    }, result);
+}
+
+pub fn exportIncomeStatementResultPacketJson(database: db.Database, book_id: i64, start_date: []const u8, end_date: []const u8, buf: []u8) ![]u8 {
+    const result = try report_statements.incomeStatement(database, book_id, start_date, end_date);
+    defer result.deinit();
+    return writeStatementPacket(buf, "income_statement", book_id, .{
+        .start_date = start_date,
+        .end_date = end_date,
+    }, result);
+}
+
+pub fn exportBalanceSheetResultPacketJson(database: db.Database, book_id: i64, as_of_date: []const u8, buf: []u8) ![]u8 {
+    const result = try report_statements.balanceSheetAutoWithProjectedRE(database, book_id, as_of_date);
+    defer result.deinit();
+    return writeStatementPacket(buf, "balance_sheet", book_id, .{
+        .as_of_date = as_of_date,
+        .projected_retained_earnings = true,
+    }, result);
+}
+
+pub fn exportTrialBalanceComparativeResultPacketJson(database: db.Database, book_id: i64, current_date: []const u8, prior_date: []const u8, buf: []u8) ![]u8 {
+    const result = try report_compare.trialBalanceComparative(database, book_id, current_date, prior_date);
+    defer result.deinit();
+    return writeComparativePacket(buf, "trial_balance_comparative", book_id, .{
+        .current_as_of_date = current_date,
+        .prior_as_of_date = prior_date,
+    }, result);
+}
+
+pub fn exportTrialBalanceMovementComparativeResultPacketJson(
+    database: db.Database,
+    book_id: i64,
+    current_start_date: []const u8,
+    current_end_date: []const u8,
+    prior_start_date: []const u8,
+    prior_end_date: []const u8,
+    buf: []u8,
+) ![]u8 {
+    const result = try report_compare.trialBalanceMovementComparative(
+        database,
+        book_id,
+        current_start_date,
+        current_end_date,
+        prior_start_date,
+        prior_end_date,
+    );
+    defer result.deinit();
+    return writeComparativePacket(buf, "trial_balance_movement_comparative", book_id, .{
+        .current_start_date = current_start_date,
+        .current_end_date = current_end_date,
+        .prior_start_date = prior_start_date,
+        .prior_end_date = prior_end_date,
+    }, result);
+}
+
+pub fn exportIncomeStatementComparativeResultPacketJson(
+    database: db.Database,
+    book_id: i64,
+    current_start_date: []const u8,
+    current_end_date: []const u8,
+    prior_start_date: []const u8,
+    prior_end_date: []const u8,
+    buf: []u8,
+) ![]u8 {
+    const result = try report_compare.incomeStatementComparative(
+        database,
+        book_id,
+        current_start_date,
+        current_end_date,
+        prior_start_date,
+        prior_end_date,
+    );
+    defer result.deinit();
+    return writeComparativePacket(buf, "income_statement_comparative", book_id, .{
+        .current_start_date = current_start_date,
+        .current_end_date = current_end_date,
+        .prior_start_date = prior_start_date,
+        .prior_end_date = prior_end_date,
+    }, result);
+}
+
+pub fn exportBalanceSheetComparativeResultPacketJson(
+    database: db.Database,
+    book_id: i64,
+    current_date: []const u8,
+    prior_date: []const u8,
+    fy_start_date: []const u8,
+    buf: []u8,
+) ![]u8 {
+    const result = try report_compare.balanceSheetComparative(database, book_id, current_date, prior_date, fy_start_date);
+    defer result.deinit();
+    return writeComparativePacket(buf, "balance_sheet_comparative", book_id, .{
+        .current_as_of_date = current_date,
+        .prior_as_of_date = prior_date,
+        .fy_start_date = fy_start_date,
+    }, result);
+}
+
+pub fn exportEquityChangesResultPacketJson(
+    database: db.Database,
+    book_id: i64,
+    start_date: []const u8,
+    end_date: []const u8,
+    fy_start_date: []const u8,
+    buf: []u8,
+) ![]u8 {
+    const result = try report_compare.equityChanges(database, book_id, start_date, end_date, fy_start_date);
+    defer result.deinit();
+    return writeEquityPacket(buf, book_id, start_date, end_date, fy_start_date, result);
+}
+
 const ClassificationMeta = struct {
     book_id: i64,
     report_type: []const u8,
@@ -271,6 +415,214 @@ fn writeClassificationPacket(
         pos += try appendAmount(buf[pos..], row.debit_balance, result.decimal_places);
         try appendLiteral(buf, &pos, "\",\"credit\":\"");
         pos += try appendAmount(buf[pos..], row.credit_balance, result.decimal_places);
+        try appendLiteral(buf, &pos, "\"}");
+    }
+
+    try appendLiteral(buf, &pos, "]}");
+    return buf[0..pos];
+}
+
+fn writeStatementPacket(
+    buf: []u8,
+    packet_kind: []const u8,
+    book_id: i64,
+    boundary: StatementBoundary,
+    result: *report_common.ReportResult,
+) ![]u8 {
+    var pos: usize = 0;
+    const header = try std.fmt.bufPrint(
+        buf[pos..],
+        "{{\"packet_kind\":\"{s}\",\"book_id\":\"book-{d}\"",
+        .{ packet_kind, book_id },
+    );
+    pos += header.len;
+    if (boundary.as_of_date) |date| {
+        try appendLiteral(buf, &pos, ",\"as_of_date\":\"");
+        pos += try jsonString(buf[pos..], date);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.start_date) |date| {
+        try appendLiteral(buf, &pos, ",\"start_date\":\"");
+        pos += try jsonString(buf[pos..], date);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.end_date) |date| {
+        try appendLiteral(buf, &pos, ",\"end_date\":\"");
+        pos += try jsonString(buf[pos..], date);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.projected_retained_earnings) {
+        try appendLiteral(buf, &pos, ",\"projected_retained_earnings\":true");
+    }
+    const tail = try std.fmt.bufPrint(buf[pos..], ",\"decimal_places\":{d},\"total_debits\":\"", .{result.decimal_places});
+    pos += tail.len;
+    pos += try appendAmount(buf[pos..], result.total_debits, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"total_credits\":\"");
+    pos += try appendAmount(buf[pos..], result.total_credits, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"rows\":[");
+
+    for (result.rows, 0..) |row, i| {
+        if (i > 0) try appendLiteral(buf, &pos, ",");
+        try appendLiteral(buf, &pos, "{\"account_id\":\"");
+        const account_ref = try std.fmt.bufPrint(buf[pos..], "acct-{d}", .{row.account_id});
+        pos += account_ref.len;
+        try appendLiteral(buf, &pos, "\",\"account_number\":\"");
+        pos += try jsonString(buf[pos..], row.account_number[0..row.account_number_len]);
+        try appendLiteral(buf, &pos, "\",\"account_name\":\"");
+        pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
+        try appendLiteral(buf, &pos, "\",\"account_type\":\"");
+        pos += try jsonString(buf[pos..], row.account_type[0..row.account_type_len]);
+        try appendLiteral(buf, &pos, "\",\"debit\":\"");
+        pos += try appendAmount(buf[pos..], row.debit_balance, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"credit\":\"");
+        pos += try appendAmount(buf[pos..], row.credit_balance, result.decimal_places);
+        try appendLiteral(buf, &pos, "\"}");
+    }
+
+    try appendLiteral(buf, &pos, "]}");
+    return buf[0..pos];
+}
+
+fn writeComparativePacket(
+    buf: []u8,
+    packet_kind: []const u8,
+    book_id: i64,
+    boundary: ComparativeBoundary,
+    result: *report_common.ComparativeReportResult,
+) ![]u8 {
+    var pos: usize = 0;
+    const header = try std.fmt.bufPrint(
+        buf[pos..],
+        "{{\"packet_kind\":\"{s}\",\"book_id\":\"book-{d}\"",
+        .{ packet_kind, book_id },
+    );
+    pos += header.len;
+
+    if (boundary.current_as_of_date) |value| {
+        try appendLiteral(buf, &pos, ",\"current_as_of_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.prior_as_of_date) |value| {
+        try appendLiteral(buf, &pos, ",\"prior_as_of_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.current_start_date) |value| {
+        try appendLiteral(buf, &pos, ",\"current_start_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.current_end_date) |value| {
+        try appendLiteral(buf, &pos, ",\"current_end_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.prior_start_date) |value| {
+        try appendLiteral(buf, &pos, ",\"prior_start_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.prior_end_date) |value| {
+        try appendLiteral(buf, &pos, ",\"prior_end_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+    if (boundary.fy_start_date) |value| {
+        try appendLiteral(buf, &pos, ",\"fy_start_date\":\"");
+        pos += try jsonString(buf[pos..], value);
+        try appendLiteral(buf, &pos, "\"");
+    }
+
+    const tail = try std.fmt.bufPrint(
+        buf[pos..],
+        ",\"decimal_places\":{d},\"current_total_debits\":\"",
+        .{result.decimal_places},
+    );
+    pos += tail.len;
+    pos += try appendAmount(buf[pos..], result.current_total_debits, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"current_total_credits\":\"");
+    pos += try appendAmount(buf[pos..], result.current_total_credits, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"prior_total_debits\":\"");
+    pos += try appendAmount(buf[pos..], result.prior_total_debits, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"prior_total_credits\":\"");
+    pos += try appendAmount(buf[pos..], result.prior_total_credits, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"rows\":[");
+
+    for (result.rows, 0..) |row, i| {
+        if (i > 0) try appendLiteral(buf, &pos, ",");
+        try appendLiteral(buf, &pos, "{\"account_id\":\"");
+        const account_ref = try std.fmt.bufPrint(buf[pos..], "acct-{d}", .{row.account_id});
+        pos += account_ref.len;
+        try appendLiteral(buf, &pos, "\",\"account_number\":\"");
+        pos += try jsonString(buf[pos..], row.account_number[0..row.account_number_len]);
+        try appendLiteral(buf, &pos, "\",\"account_name\":\"");
+        pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
+        try appendLiteral(buf, &pos, "\",\"account_type\":\"");
+        pos += try jsonString(buf[pos..], row.account_type[0..row.account_type_len]);
+        try appendLiteral(buf, &pos, "\",\"current_debit\":\"");
+        pos += try appendAmount(buf[pos..], row.current_debit, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"current_credit\":\"");
+        pos += try appendAmount(buf[pos..], row.current_credit, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"prior_debit\":\"");
+        pos += try appendAmount(buf[pos..], row.prior_debit, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"prior_credit\":\"");
+        pos += try appendAmount(buf[pos..], row.prior_credit, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"variance_debit\":\"");
+        pos += try appendAmount(buf[pos..], row.variance_debit, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"variance_credit\":\"");
+        pos += try appendAmount(buf[pos..], row.variance_credit, result.decimal_places);
+        try appendLiteral(buf, &pos, "\"}");
+    }
+
+    try appendLiteral(buf, &pos, "]}");
+    return buf[0..pos];
+}
+
+fn writeEquityPacket(
+    buf: []u8,
+    book_id: i64,
+    start_date: []const u8,
+    end_date: []const u8,
+    fy_start_date: []const u8,
+    result: *report_common.EquityResult,
+) ![]u8 {
+    var pos: usize = 0;
+    const header = try std.fmt.bufPrint(
+        buf[pos..],
+        "{{\"packet_kind\":\"equity_changes\",\"book_id\":\"book-{d}\",\"start_date\":\"",
+        .{book_id},
+    );
+    pos += header.len;
+    pos += try jsonString(buf[pos..], start_date);
+    try appendLiteral(buf, &pos, "\",\"end_date\":\"");
+    pos += try jsonString(buf[pos..], end_date);
+    try appendLiteral(buf, &pos, "\",\"fy_start_date\":\"");
+    pos += try jsonString(buf[pos..], fy_start_date);
+    const tail = try std.fmt.bufPrint(buf[pos..], "\",\"decimal_places\":{d},\"net_income\":\"", .{result.decimal_places});
+    pos += tail.len;
+    pos += try appendAmount(buf[pos..], result.net_income, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"total_opening\":\"");
+    pos += try appendAmount(buf[pos..], result.total_opening, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"total_closing\":\"");
+    pos += try appendAmount(buf[pos..], result.total_closing, result.decimal_places);
+    try appendLiteral(buf, &pos, "\",\"rows\":[");
+
+    for (result.rows, 0..) |row, i| {
+        if (i > 0) try appendLiteral(buf, &pos, ",");
+        try appendLiteral(buf, &pos, "{\"account_id\":\"");
+        const account_ref = try std.fmt.bufPrint(buf[pos..], "acct-{d}", .{row.account_id});
+        pos += account_ref.len;
+        try appendLiteral(buf, &pos, "\",\"account_number\":\"");
+        pos += try jsonString(buf[pos..], row.account_number[0..row.account_number_len]);
+        try appendLiteral(buf, &pos, "\",\"account_name\":\"");
+        pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
+        try appendLiteral(buf, &pos, "\",\"opening_balance\":\"");
+        pos += try appendAmount(buf[pos..], row.opening_balance, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"period_activity\":\"");
+        pos += try appendAmount(buf[pos..], row.period_activity, result.decimal_places);
+        try appendLiteral(buf, &pos, "\",\"closing_balance\":\"");
+        pos += try appendAmount(buf[pos..], row.closing_balance, result.decimal_places);
         try appendLiteral(buf, &pos, "\"}");
     }
 
@@ -592,4 +944,56 @@ test "OBLE results: budget analysis packet exports canonical JSON" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"budget\":\"1000.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"actual_net\":\"1200.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"variance\":\"200.00\"") != null);
+}
+
+test "OBLE results: statement, comparative, and equity packets export canonical JSON" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Statement Result Book", "USD", 2, "admin");
+    const cash_id = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital_id = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_id = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const open_id = try entry_mod.Entry.createDraft(database, book_id, "OPEN-1", "2026-01-01", "2026-01-01", null, jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, open_id, 1, 1_000_00_000_000, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, open_id, 2, 0, 1_000_00_000_000, "USD", money.FX_RATE_SCALE, capital_id, null, null, "admin");
+    try entry_mod.Entry.post(database, open_id, "admin");
+
+    const sale_id = try entry_mod.Entry.createDraft(database, book_id, "SALE-1", "2026-02-10", "2026-02-10", null, feb_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, sale_id, 1, 200_00_000_000, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, sale_id, 2, 0, 200_00_000_000, "USD", money.FX_RATE_SCALE, revenue_id, null, null, "admin");
+    try entry_mod.Entry.post(database, sale_id, "admin");
+
+    var statement_buf: [256 * 1024]u8 = undefined;
+    var comparative_buf: [256 * 1024]u8 = undefined;
+    var equity_buf: [256 * 1024]u8 = undefined;
+
+    const tb_json = try exportTrialBalanceResultPacketJson(database, book_id, "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"packet_kind\":\"trial_balance\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"total_debits\":\"1200.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"total_credits\":\"1200.00\"") != null);
+
+    const is_json = try exportIncomeStatementResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, is_json, "\"packet_kind\":\"income_statement\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, is_json, "\"credit\":\"200.00\"") != null);
+
+    const bs_json = try exportBalanceSheetResultPacketJson(database, book_id, "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, bs_json, "\"packet_kind\":\"balance_sheet\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bs_json, "\"projected_retained_earnings\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bs_json, "\"total_debits\":\"1200.00\"") != null);
+
+    const cmp_json = try exportTrialBalanceComparativeResultPacketJson(database, book_id, "2026-02-28", "2026-01-31", &comparative_buf);
+    try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"packet_kind\":\"trial_balance_comparative\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"current_total_debits\":\"1200.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"prior_total_debits\":\"1000.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"variance_debit\":\"200.00\"") != null);
+
+    const eq_json = try exportEquityChangesResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", "2026-01-01", &equity_buf);
+    try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"packet_kind\":\"equity_changes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"net_income\":\"200.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"total_opening\":\"1000.00\"") != null);
 }

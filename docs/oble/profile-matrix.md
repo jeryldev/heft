@@ -58,7 +58,7 @@ Implementation details that are outside OBLE itself:
 | `Multi-Currency` | `0006` | core entry export with foreign-currency lines, revaluation packet export | Emerging |
 | `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
-| `Classifications / Report Structures` | `0009`, `0012` | classification profile bundle, classified result packet | Strong |
+| `Classifications / Report Structures` | `0009`, `0012`, `0015`, `0016` | classification profile bundle, classified result packet, core and comparative statement result packets, equity result packet | Strong |
 | `Dimensions / Analytics` | `0010`, `0013` | dimension profile bundle, dimension summary result packet | Strong |
 | `Budgets / Planning` | `0011`, `0014` | budget profile bundle, budget analysis result packet | Strong |
 

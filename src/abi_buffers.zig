@@ -692,6 +692,87 @@ pub fn ledger_oble_export_cash_flow_result(handle: ?*LedgerDB, classification_id
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_trial_balance_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTrialBalanceResultPacketJson(h.sqlite, book_id, std.mem.span(as_of_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_trial_balance_movement_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTrialBalanceMovementResultPacketJson(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_income_statement_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportIncomeStatementResultPacketJson(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_balance_sheet_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportBalanceSheetResultPacketJson(h.sqlite, book_id, std.mem.span(as_of_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_trial_balance_comparative_result(handle: ?*LedgerDB, book_id: i64, current_as_of_date: [*:0]const u8, prior_as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTrialBalanceComparativeResultPacketJson(h.sqlite, book_id, std.mem.span(current_as_of_date), std.mem.span(prior_as_of_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_trial_balance_movement_comparative_result(handle: ?*LedgerDB, book_id: i64, current_start_date: [*:0]const u8, current_end_date: [*:0]const u8, prior_start_date: [*:0]const u8, prior_end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTrialBalanceMovementComparativeResultPacketJson(h.sqlite, book_id, std.mem.span(current_start_date), std.mem.span(current_end_date), std.mem.span(prior_start_date), std.mem.span(prior_end_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_income_statement_comparative_result(handle: ?*LedgerDB, book_id: i64, current_start_date: [*:0]const u8, current_end_date: [*:0]const u8, prior_start_date: [*:0]const u8, prior_end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportIncomeStatementComparativeResultPacketJson(h.sqlite, book_id, std.mem.span(current_start_date), std.mem.span(current_end_date), std.mem.span(prior_start_date), std.mem.span(prior_end_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_balance_sheet_comparative_result(handle: ?*LedgerDB, book_id: i64, current_as_of_date: [*:0]const u8, prior_as_of_date: [*:0]const u8, fy_start_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportBalanceSheetComparativeResultPacketJson(h.sqlite, book_id, std.mem.span(current_as_of_date), std.mem.span(prior_as_of_date), std.mem.span(fy_start_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_equity_changes_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, fy_start_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportEquityChangesResultPacketJson(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), std.mem.span(fy_start_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_oble_export_dimension_summary_result(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const result = heft.oble_profile_results.exportDimensionSummaryResultPacketJson(h.sqlite, book_id, dimension_id, std.mem.span(start_date), std.mem.span(end_date), false, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {

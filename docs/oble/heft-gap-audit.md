@@ -52,7 +52,7 @@ behavior rather than something OBLE should necessarily standardize.
 | Close and reopen | Partial | Close/reopen profile export exists, and Zig reconstruction helpers exist, but direct portable replay is intentionally conservative. |
 | Book snapshot / grouped export | Confirmed | Snapshot-style grouped export exists and is one of the strongest current interchange surfaces. |
 | Semantic verification | Confirmed | Heft can verify semantic equivalence across source and imported ledgers. |
-| Reports and statements | Partial | Heft now has the first export-first OBLE result-packet layer for classified outputs, dimension summaries, and budget analysis, but broader report/result coverage is still incomplete. |
+| Reports and statements | Partial | Heft now has export-first OBLE result packets for classified outputs, core statement outputs, comparative/equity outputs, dimension summaries, and budget analysis, but some result families still remain outside the packet set. |
 | Classifications | Confirmed | Heft now has a real OBLE classification profile boundary plus export-first classified result packets. |
 | Dimensions | Confirmed | Heft now has a real OBLE dimension profile boundary plus export-first summary and rollup result packets. |
 | Budgets | Confirmed | Heft now has a real OBLE budget profile boundary plus an export-first budget-analysis result packet. |
@@ -176,9 +176,11 @@ Heft has strong report surfaces:
 - comparative reports
 - cash flow variants
 
-The result layer is better now:
+The result layer is much better now:
 
 - classified result packets exist
+- core statement result packets exist
+- comparative and equity result packets exist
 - dimension summary result packets exist
 - budget analysis result packets exist
 
@@ -193,10 +195,9 @@ portable result-packet layer is still incomplete.
 
 What is still missing:
 
-- trial balance / income statement / balance sheet result packets
-- comparative result packets
 - cash-flow indirect result packets
-- a clearer standards posture for which report outputs should remain Heft-only
+- statement result packets for any later translation or consolidation variants
+- a clearer standards posture for which advanced outputs should remain Heft-only
   versus becoming OBLE packets
 
 ## 8. Classifications / Report Structures
@@ -221,10 +222,12 @@ Heft now has an implemented boundary for this area:
 - classified report result packet export
 - classified trial-balance result packet export
 - cash-flow statement result packet export
+- core statement result packet export
+- comparative statement result packet export
+- equity result packet export
 
 What is still missing:
 
-- broader packet breadth beyond the first structure and result packets
 - wider result coverage for indirect or comparative variants
 - any future decision on whether even more classified report families belong in
   OBLE

@@ -360,6 +360,15 @@ int32_t ledger_oble_export_fx_profile_bundle(LedgerDB* h, int64_t entry_id, int6
 int32_t ledger_oble_export_classified_report_result(LedgerDB* h, int64_t classification_id, const char* as_of_date, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_classified_trial_balance_result(LedgerDB* h, int64_t classification_id, const char* as_of_date, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_cash_flow_result(LedgerDB* h, int64_t classification_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_trial_balance_result(LedgerDB* h, int64_t book_id, const char* as_of_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_trial_balance_movement_result(LedgerDB* h, int64_t book_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_income_statement_result(LedgerDB* h, int64_t book_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_balance_sheet_result(LedgerDB* h, int64_t book_id, const char* as_of_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_trial_balance_comparative_result(LedgerDB* h, int64_t book_id, const char* current_as_of_date, const char* prior_as_of_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_trial_balance_movement_comparative_result(LedgerDB* h, int64_t book_id, const char* current_start_date, const char* current_end_date, const char* prior_start_date, const char* prior_end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_income_statement_comparative_result(LedgerDB* h, int64_t book_id, const char* current_start_date, const char* current_end_date, const char* prior_start_date, const char* prior_end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_balance_sheet_comparative_result(LedgerDB* h, int64_t book_id, const char* current_as_of_date, const char* prior_as_of_date, const char* fy_start_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_equity_changes_result(LedgerDB* h, int64_t book_id, const char* start_date, const char* end_date, const char* fy_start_date, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_dimension_summary_result(LedgerDB* h, int64_t book_id, int64_t dimension_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_dimension_rollup_result(LedgerDB* h, int64_t book_id, int64_t dimension_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_budget_analysis_result(LedgerDB* h, int64_t budget_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);

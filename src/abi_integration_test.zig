@@ -149,6 +149,15 @@ const ledger_oble_export_fx_profile_bundle = abi.ledger_oble_export_fx_profile_b
 const ledger_oble_export_classified_report_result = abi.ledger_oble_export_classified_report_result;
 const ledger_oble_export_classified_trial_balance_result = abi.ledger_oble_export_classified_trial_balance_result;
 const ledger_oble_export_cash_flow_result = abi.ledger_oble_export_cash_flow_result;
+const ledger_oble_export_trial_balance_result = abi.ledger_oble_export_trial_balance_result;
+const ledger_oble_export_trial_balance_movement_result = abi.ledger_oble_export_trial_balance_movement_result;
+const ledger_oble_export_income_statement_result = abi.ledger_oble_export_income_statement_result;
+const ledger_oble_export_balance_sheet_result = abi.ledger_oble_export_balance_sheet_result;
+const ledger_oble_export_trial_balance_comparative_result = abi.ledger_oble_export_trial_balance_comparative_result;
+const ledger_oble_export_trial_balance_movement_comparative_result = abi.ledger_oble_export_trial_balance_movement_comparative_result;
+const ledger_oble_export_income_statement_comparative_result = abi.ledger_oble_export_income_statement_comparative_result;
+const ledger_oble_export_balance_sheet_comparative_result = abi.ledger_oble_export_balance_sheet_comparative_result;
+const ledger_oble_export_equity_changes_result = abi.ledger_oble_export_equity_changes_result;
 const ledger_oble_export_dimension_summary_result = abi.ledger_oble_export_dimension_summary_result;
 const ledger_oble_export_dimension_rollup_result = abi.ledger_oble_export_dimension_rollup_result;
 const ledger_oble_export_budget_analysis_result = abi.ledger_oble_export_budget_analysis_result;
@@ -1998,6 +2007,42 @@ test "C ABI: OBLE export happy paths" {
     const cash_flow_result_len = ledger_oble_export_cash_flow_result(handle, s.cash_flow_classification_id, "2026-01-01", "2026-01-31", &buf, buf.len);
     try std.testing.expect(cash_flow_result_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(cash_flow_result_len)], "\"packet_kind\":\"cash_flow_statement\"") != null);
+
+    const trial_balance_result_len = ledger_oble_export_trial_balance_result(handle, s.book_id, "2026-02-28", &buf, buf.len);
+    try std.testing.expect(trial_balance_result_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(trial_balance_result_len)], "\"packet_kind\":\"trial_balance\"") != null);
+
+    const movement_result_len = ledger_oble_export_trial_balance_movement_result(handle, s.book_id, "2026-01-01", "2026-02-28", &buf, buf.len);
+    try std.testing.expect(movement_result_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(movement_result_len)], "\"packet_kind\":\"trial_balance_movement\"") != null);
+
+    const income_statement_result_len = ledger_oble_export_income_statement_result(handle, s.book_id, "2026-01-01", "2026-02-28", &buf, buf.len);
+    try std.testing.expect(income_statement_result_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(income_statement_result_len)], "\"packet_kind\":\"income_statement\"") != null);
+
+    const balance_sheet_result_len = ledger_oble_export_balance_sheet_result(handle, s.book_id, "2026-02-28", &buf, buf.len);
+    try std.testing.expect(balance_sheet_result_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(balance_sheet_result_len)], "\"packet_kind\":\"balance_sheet\"") != null);
+
+    const tb_comparative_len = ledger_oble_export_trial_balance_comparative_result(handle, s.book_id, "2026-02-28", "2026-01-31", &buf, buf.len);
+    try std.testing.expect(tb_comparative_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(tb_comparative_len)], "\"packet_kind\":\"trial_balance_comparative\"") != null);
+
+    const movement_comparative_len = ledger_oble_export_trial_balance_movement_comparative_result(handle, s.book_id, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31", &buf, buf.len);
+    try std.testing.expect(movement_comparative_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(movement_comparative_len)], "\"packet_kind\":\"trial_balance_movement_comparative\"") != null);
+
+    const income_comparative_len = ledger_oble_export_income_statement_comparative_result(handle, s.book_id, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31", &buf, buf.len);
+    try std.testing.expect(income_comparative_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(income_comparative_len)], "\"packet_kind\":\"income_statement_comparative\"") != null);
+
+    const balance_sheet_comparative_len = ledger_oble_export_balance_sheet_comparative_result(handle, s.book_id, "2026-02-28", "2026-01-31", "2026-01-01", &buf, buf.len);
+    try std.testing.expect(balance_sheet_comparative_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(balance_sheet_comparative_len)], "\"packet_kind\":\"balance_sheet_comparative\"") != null);
+
+    const equity_result_len = ledger_oble_export_equity_changes_result(handle, s.book_id, "2026-02-01", "2026-02-28", "2026-01-01", &buf, buf.len);
+    try std.testing.expect(equity_result_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(equity_result_len)], "\"packet_kind\":\"equity_changes\"") != null);
 
     const dimension_bundle_len = ledger_oble_export_dimension_profile_bundle(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(dimension_bundle_len > 0);

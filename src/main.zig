@@ -799,6 +799,42 @@ pub export fn ledger_oble_export_cash_flow_result(handle: ?*LedgerDB, classifica
     return abi_buffers.ledger_oble_export_cash_flow_result(handle, classification_id, start_date, end_date, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_trial_balance_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_trial_balance_result(handle, book_id, as_of_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_trial_balance_movement_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_trial_balance_movement_result(handle, book_id, start_date, end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_income_statement_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_income_statement_result(handle, book_id, start_date, end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_balance_sheet_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_balance_sheet_result(handle, book_id, as_of_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_trial_balance_comparative_result(handle: ?*LedgerDB, book_id: i64, current_as_of_date: [*:0]const u8, prior_as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_trial_balance_comparative_result(handle, book_id, current_as_of_date, prior_as_of_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_trial_balance_movement_comparative_result(handle: ?*LedgerDB, book_id: i64, current_start_date: [*:0]const u8, current_end_date: [*:0]const u8, prior_start_date: [*:0]const u8, prior_end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_trial_balance_movement_comparative_result(handle, book_id, current_start_date, current_end_date, prior_start_date, prior_end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_income_statement_comparative_result(handle: ?*LedgerDB, book_id: i64, current_start_date: [*:0]const u8, current_end_date: [*:0]const u8, prior_start_date: [*:0]const u8, prior_end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_income_statement_comparative_result(handle, book_id, current_start_date, current_end_date, prior_start_date, prior_end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_balance_sheet_comparative_result(handle: ?*LedgerDB, book_id: i64, current_as_of_date: [*:0]const u8, prior_as_of_date: [*:0]const u8, fy_start_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_balance_sheet_comparative_result(handle, book_id, current_as_of_date, prior_as_of_date, fy_start_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_equity_changes_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, fy_start_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_equity_changes_result(handle, book_id, start_date, end_date, fy_start_date, buf, buf_len);
+}
+
 pub export fn ledger_oble_export_dimension_summary_result(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
     return abi_buffers.ledger_oble_export_dimension_summary_result(handle, book_id, dimension_id, start_date, end_date, buf, buf_len);
 }
