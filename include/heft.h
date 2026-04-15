@@ -357,6 +357,12 @@ int32_t ledger_oble_export_reversal_pair(LedgerDB* h, int64_t original_entry_id,
 int32_t ledger_oble_export_counterparty_open_item(LedgerDB* h, int64_t open_item_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_revaluation_packet(LedgerDB* h, int64_t entry_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_fx_profile_bundle(LedgerDB* h, int64_t entry_id, int64_t revaluation_entry_id, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_classified_report_result(LedgerDB* h, int64_t classification_id, const char* as_of_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_classified_trial_balance_result(LedgerDB* h, int64_t classification_id, const char* as_of_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_cash_flow_result(LedgerDB* h, int64_t classification_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_dimension_summary_result(LedgerDB* h, int64_t book_id, int64_t dimension_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_dimension_rollup_result(LedgerDB* h, int64_t book_id, int64_t dimension_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_budget_analysis_result(LedgerDB* h, int64_t budget_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len);
 
 #ifdef __cplusplus
 }

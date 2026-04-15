@@ -50,9 +50,9 @@ standard boundary or testable conformance surface.
 | Multi-Currency Semantics | Confirmed | Heft stores transaction amounts, base amounts, and FX rates with exact integer arithmetic and revaluation flows. |
 | Close and Reopen Profile | Confirmed | Heft implements close-generated state, opening carry-forward, reopen cascades, and stale derived-state invalidation. |
 | Designations and Policy Profiles | Confirmed | Heft already uses designation-driven book policy heavily. |
-| Classifications and Report Structures | Confirmed | Heft now has a classification profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, while broader public C import remains intentionally deferred. |
-| Dimensions and Analytics | Confirmed | Heft now has a dimension profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, while broader public C import remains intentionally deferred. |
-| Budgets and Planning | Confirmed | Heft now has a budget profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, while broader public C import remains intentionally deferred. |
+| Classifications and Report Structures | Confirmed | Heft now has a classification profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports classified result packets as a distinct derived-output layer. |
+| Dimensions and Analytics | Confirmed | Heft now has a dimension profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports summary and rollup result packets as a distinct derived-output layer. |
+| Budgets and Planning | Confirmed | Heft now has a budget profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports budget-analysis result packets as a distinct derived-output layer. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
@@ -199,7 +199,7 @@ Heft now has:
 
 What is still missing:
 
-- broader canonical examples and schemas beyond the first bundle
+- broader canonical examples and schemas beyond the first structure and result packets
 - wider public import posture beyond Zig-first workflows
 - any later classified-report packet families if OBLE wants to standardize them
 
@@ -224,7 +224,7 @@ Heft now has:
 
 What is still missing:
 
-- broader canonical examples and schemas beyond the first bundle
+- broader canonical examples and schemas beyond the first profile and result packets
 - wider public import posture beyond Zig-first workflows
 - any later summary/rollup packet families if OBLE wants to standardize them
 
@@ -249,10 +249,10 @@ Heft now has:
 
 What is still missing:
 
-- broader canonical examples and schemas beyond the first bundle
+- broader canonical examples and schemas beyond the first profile and result packets
 - wider public import posture beyond Zig-first workflows
 - a decision on whether budget-vs-actual belongs in this profile or a later
-  reporting-oriented extension
+  reporting-oriented extension, now that the first result packet exists
 
 ## Biggest remaining gaps
 

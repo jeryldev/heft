@@ -58,9 +58,9 @@ Implementation details that are outside OBLE itself:
 | `Multi-Currency` | `0006` | core entry export with foreign-currency lines, revaluation packet export | Emerging |
 | `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
-| `Classifications / Report Structures` | `0009` | classification profile bundle | Strong |
-| `Dimensions / Analytics` | `0010` | dimension profile bundle | Strong |
-| `Budgets / Planning` | `0011` | budget profile bundle | Strong |
+| `Classifications / Report Structures` | `0009`, `0012` | classification profile bundle, classified result packet | Strong |
+| `Dimensions / Analytics` | `0010`, `0013` | dimension profile bundle, dimension summary result packet | Strong |
+| `Budgets / Planning` | `0011`, `0014` | budget profile bundle, budget analysis result packet | Strong |
 
 ## Public-boundary posture
 
@@ -82,6 +82,8 @@ That means:
   import in Zig
 - `Budgets / Planning` has public export in Zig and C, and session-based
   import in Zig
+- the new classified, dimension-summary, and budget-analysis packets are
+  export-first derived-output surfaces in Zig and C
 - Zig import sessions can also consume richer `Policy / Designations` lifecycle
   bundles by importing the safe policy layer and reporting the presence of
   derived close/revaluation packets
@@ -193,6 +195,7 @@ This profile adds:
 - hierarchical report nodes
 - account bindings for report structure
 - report intent such as balance sheet or cash flow
+- export-first classified result packets
 
 ### Minimum expectations
 
@@ -210,6 +213,7 @@ This profile adds:
 - dimension definitions
 - dimension values
 - line-level analytical assignments
+- export-first analytical summary packets
 
 ### Minimum expectations
 
@@ -226,6 +230,7 @@ This profile adds:
 - budget definitions
 - budget lines
 - budget lifecycle state
+- export-first budget-analysis packets
 
 ### Minimum expectations
 

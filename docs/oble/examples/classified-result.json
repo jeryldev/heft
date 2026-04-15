@@ -1,0 +1,34 @@
+{
+  "packet_kind": "classified_report",
+  "classification_id": "classification-1",
+  "book_id": "book-1",
+  "report_type": "balance_sheet",
+  "as_of_date": "2026-01-31",
+  "decimal_places": 2,
+  "total_debits": "1500.00",
+  "total_credits": "0.00",
+  "unclassified_debits": "0.00",
+  "unclassified_credits": "0.00",
+  "rows": [
+    {
+      "node_id": "classification-node-1",
+      "node_type": "group",
+      "depth": 0,
+      "position": 1,
+      "label": "Assets",
+      "account_id": null,
+      "debit": "1500.00",
+      "credit": "0.00"
+    },
+    {
+      "node_id": "classification-node-2",
+      "node_type": "account",
+      "depth": 1,
+      "position": 1,
+      "label": "Cash",
+      "account_id": "acct-1",
+      "debit": "1500.00",
+      "credit": "0.00"
+    }
+  ]
+}

@@ -52,10 +52,10 @@ behavior rather than something OBLE should necessarily standardize.
 | Close and reopen | Partial | Close/reopen profile export exists, and Zig reconstruction helpers exist, but direct portable replay is intentionally conservative. |
 | Book snapshot / grouped export | Confirmed | Snapshot-style grouped export exists and is one of the strongest current interchange surfaces. |
 | Semantic verification | Confirmed | Heft can verify semantic equivalence across source and imported ledgers. |
-| Reports and statements | Missing | Reports are available as Heft read APIs, but not currently as OBLE standard packets or profiles. |
-| Classifications | Missing | Heft has rich classification trees and classified reporting, but no explicit OBLE classification profile boundary yet. |
-| Dimensions | Partial | Heft now has a Zig-first dimension profile bundle for definitions, values, and line assignments, but broader standard packet coverage is still missing. |
-| Budgets | Partial | Heft now has a Zig-first budget profile bundle for budget metadata, lifecycle state, and budget lines, while derived budget-vs-actual reporting remains outside the portable minimum. |
+| Reports and statements | Partial | Heft now has the first export-first OBLE result-packet layer for classified outputs, dimension summaries, and budget analysis, but broader report/result coverage is still incomplete. |
+| Classifications | Confirmed | Heft now has a real OBLE classification profile boundary plus export-first classified result packets. |
+| Dimensions | Confirmed | Heft now has a real OBLE dimension profile boundary plus export-first summary and rollup result packets. |
+| Budgets | Confirmed | Heft now has a real OBLE budget profile boundary plus an export-first budget-analysis result packet. |
 | Audit trail export | Partial | Audit/provenance exists strongly in Heft, but OBLE does not yet have a mature portable audit packet set here. |
 | Verification / integrity checks | Partial | Heft exposes verification, but OBLE does not yet define a conformance-facing integrity-result packet. |
 | Batch workflows | Heft-only | Batch post/void orchestration is useful operational behavior, but not obviously a standards concern today. |
@@ -165,7 +165,7 @@ This is one of the most important remaining “honest partial” areas.
 
 ## 7. Reports and statements
 
-Status: `Missing`
+Status: `Partial`
 
 Heft has strong report surfaces:
 
@@ -176,20 +176,32 @@ Heft has strong report surfaces:
 - comparative reports
 - cash flow variants
 
-But these are currently:
+The result layer is better now:
+
+- classified result packets exist
+- dimension summary result packets exist
+- budget analysis result packets exist
+
+But these surfaces are still currently:
 
 - Heft report APIs
 - Heft C ABI surfaces
-- Heft CSV/JSON outputs
+- Heft-native comparative and statement outputs for many other report families
 
-They are not yet framed as OBLE report packets or a standards-level report
-profile.
+That means report semantics are no longer entirely outside OBLE, but the
+portable result-packet layer is still incomplete.
 
-That means report semantics are strong in Heft but not yet represented in OBLE.
+What is still missing:
+
+- trial balance / income statement / balance sheet result packets
+- comparative result packets
+- cash-flow indirect result packets
+- a clearer standards posture for which report outputs should remain Heft-only
+  versus becoming OBLE packets
 
 ## 8. Classifications / Report Structures
 
-Status: `Partial`
+Status: `Confirmed`
 
 Heft already has:
 
@@ -203,23 +215,25 @@ OBLE now has an explicit draft profile for this area:
 
 - `OBLE-0009 Classifications and Report Structures`
 
-Heft now has an initial Zig-first implemented boundary for this area:
+Heft now has an implemented boundary for this area:
 
 - classification profile bundle export/import
+- classified report result packet export
+- classified trial-balance result packet export
+- cash-flow statement result packet export
 
 What is still missing:
 
-- broader packet breadth beyond the first bundle shape
-- public ABI exposure
-- conformance examples and schemas in the canonical OBLE repo
-- classified report outputs as explicit OBLE packet families, if that becomes desirable
+- broader packet breadth beyond the first structure and result packets
+- wider result coverage for indirect or comparative variants
+- any future decision on whether even more classified report families belong in
+  OBLE
 
-This is one of the clearest next-candidate profile areas if you want broader
-OBLE coverage.
+This is now one of the stronger non-core OBLE areas in Heft.
 
 ## 9. Dimensions / Analytics
 
-Status: `Partial`
+Status: `Confirmed`
 
 Heft already has:
 
@@ -233,23 +247,22 @@ OBLE now has an explicit draft profile for this area:
 
 - `OBLE-0010 Dimensions and Analytics`
 
-Heft now has an initial Zig-first implemented boundary for this area:
+Heft now has an implemented boundary for this area:
 
 - dimension profile bundle export/import
+- dimension summary result packet export
+- dimension rollup result packet export
 
 What is still missing:
 
-- broader packet breadth beyond the first bundle shape
-- public ABI exposure
-- canonical OBLE examples and schemas in the canonical repo
-- a clearer decision on whether dimension summaries and rollups should also become OBLE packets
+- broader packet breadth beyond the first profile and result packets
+- any future analytics packets beyond summaries and rollups
 
-This is another strong candidate for future standardization if the goal is to
-cover more of Heft's analytic layer.
+This area is now materially aligned instead of merely aspirational.
 
 ## 10. Budgets / Planning
 
-Status: `Partial`
+Status: `Confirmed`
 
 Heft already has:
 
@@ -262,20 +275,20 @@ OBLE now has an explicit draft profile for this area:
 
 - `OBLE-0011 Budgets and Planning`
 
-Heft now also has an initial Zig-first OBLE profile bundle for:
+Heft now also has an implemented OBLE result layer for:
 
 - budget metadata
 - budget lifecycle state
 - budget lines
+- budget-vs-actual result export
 
 What is still missing:
 
-- canonical OBLE examples and schemas in the canonical repo
-- public-surface exposure beyond the Zig-first boundary
-- a decision on whether `budget vs actual` belongs in this profile or should
-  stay a later reporting-oriented extension
+- broader planning-result families beyond the first budget-analysis packet
+- any decision on whether multi-version or scenario planning belongs in later
+  OBLE drafts
 
-This profile is no longer hypothetical, but it is still early.
+This profile is now real, even if it is still early.
 
 ## 11. Audit and provenance
 

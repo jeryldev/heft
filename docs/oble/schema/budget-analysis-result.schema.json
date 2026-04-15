@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/budget-analysis-result.schema.json",
+  "title": "OBLE Budget Analysis Result Packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "packet_kind",
+    "book_id",
+    "budget_id",
+    "start_date",
+    "end_date",
+    "decimal_places",
+    "rows"
+  ],
+  "properties": {
+    "packet_kind": {
+      "type": "string",
+      "enum": ["budget_vs_actual"]
+    },
+    "book_id": { "type": "string", "minLength": 1 },
+    "budget_id": { "type": "string", "minLength": 1 },
+    "start_date": { "type": "string", "minLength": 1 },
+    "end_date": { "type": "string", "minLength": 1 },
+    "decimal_places": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "account_id",
+          "account_number",
+          "account_name",
+          "budget",
+          "actual_debit",
+          "actual_credit",
+          "actual_net",
+          "variance"
+        ],
+        "properties": {
+          "account_id": { "type": "string", "minLength": 1 },
+          "account_number": { "type": "string", "minLength": 1 },
+          "account_name": { "type": "string", "minLength": 1 },
+          "budget": { "type": "string", "minLength": 1 },
+          "actual_debit": { "type": "string", "minLength": 1 },
+          "actual_credit": { "type": "string", "minLength": 1 },
+          "actual_net": { "type": "string", "minLength": 1 },
+          "variance": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

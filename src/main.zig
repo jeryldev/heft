@@ -787,6 +787,30 @@ pub export fn ledger_oble_export_fx_profile_bundle(handle: ?*LedgerDB, entry_id:
     return abi_buffers.ledger_oble_export_fx_profile_bundle(handle, entry_id, revaluation_entry_id, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_classified_report_result(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_classified_report_result(handle, classification_id, as_of_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_classified_trial_balance_result(handle: ?*LedgerDB, classification_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_classified_trial_balance_result(handle, classification_id, as_of_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_cash_flow_result(handle: ?*LedgerDB, classification_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_cash_flow_result(handle, classification_id, start_date, end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_dimension_summary_result(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_dimension_summary_result(handle, book_id, dimension_id, start_date, end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_dimension_rollup_result(handle: ?*LedgerDB, book_id: i64, dimension_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_dimension_rollup_result(handle, book_id, dimension_id, start_date, end_date, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_budget_analysis_result(handle: ?*LedgerDB, budget_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_budget_analysis_result(handle, budget_id, start_date, end_date, buf, buf_len);
+}
+
 pub export fn ledger_transition_budget(handle: ?*LedgerDB, budget_id: i64, target_status: [*:0]const u8, performed_by: [*:0]const u8) bool {
     return abi_core.ledger_transition_budget(handle, budget_id, target_status, performed_by);
 }

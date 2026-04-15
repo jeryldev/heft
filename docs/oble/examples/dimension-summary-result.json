@@ -1,0 +1,21 @@
+{
+  "packet_kind": "dimension_summary",
+  "book_id": "book-1",
+  "dimension_id": "dimension-1",
+  "dimension_type": "tax_code",
+  "start_date": "2026-01-01",
+  "end_date": "2026-01-31",
+  "rollup": false,
+  "decimal_places": 2,
+  "rows": [
+    {
+      "dimension_value_id": "dimension-value-1",
+      "parent_value_id": null,
+      "code": "VAT12",
+      "label": "VAT 12%",
+      "total_debits": "100.00",
+      "total_credits": "0.00",
+      "net": "100.00"
+    }
+  ]
+}

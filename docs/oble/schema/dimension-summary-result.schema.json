@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/dimension-summary-result.schema.json",
+  "title": "OBLE Dimension Summary Result Packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "packet_kind",
+    "book_id",
+    "dimension_id",
+    "dimension_type",
+    "start_date",
+    "end_date",
+    "rollup",
+    "decimal_places",
+    "rows"
+  ],
+  "properties": {
+    "packet_kind": {
+      "type": "string",
+      "enum": ["dimension_summary", "dimension_summary_rollup"]
+    },
+    "book_id": { "type": "string", "minLength": 1 },
+    "dimension_id": { "type": "string", "minLength": 1 },
+    "dimension_type": { "type": "string", "minLength": 1 },
+    "start_date": { "type": "string", "minLength": 1 },
+    "end_date": { "type": "string", "minLength": 1 },
+    "rollup": { "type": "boolean" },
+    "decimal_places": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "dimension_value_id",
+          "parent_value_id",
+          "code",
+          "label",
+          "total_debits",
+          "total_credits",
+          "net"
+        ],
+        "properties": {
+          "dimension_value_id": { "type": "string", "minLength": 1 },
+          "parent_value_id": { "type": ["string", "null"] },
+          "code": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "total_debits": { "type": "string", "minLength": 1 },
+          "total_credits": { "type": "string", "minLength": 1 },
+          "net": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

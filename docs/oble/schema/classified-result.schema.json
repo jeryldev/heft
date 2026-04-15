@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/classified-result.schema.json",
+  "title": "OBLE Classified Result Packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "packet_kind",
+    "classification_id",
+    "book_id",
+    "report_type",
+    "decimal_places",
+    "rows"
+  ],
+  "properties": {
+    "packet_kind": {
+      "type": "string",
+      "enum": ["classified_report", "classified_trial_balance", "cash_flow_statement"]
+    },
+    "classification_id": { "type": "string", "minLength": 1 },
+    "book_id": { "type": "string", "minLength": 1 },
+    "report_type": { "type": "string", "minLength": 1 },
+    "as_of_date": { "type": "string", "minLength": 1 },
+    "start_date": { "type": "string", "minLength": 1 },
+    "end_date": { "type": "string", "minLength": 1 },
+    "decimal_places": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "total_debits": { "type": "string", "minLength": 1 },
+    "total_credits": { "type": "string", "minLength": 1 },
+    "unclassified_debits": { "type": "string", "minLength": 1 },
+    "unclassified_credits": { "type": "string", "minLength": 1 },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "node_id",
+          "node_type",
+          "depth",
+          "position",
+          "label",
+          "account_id",
+          "debit",
+          "credit"
+        ],
+        "properties": {
+          "node_id": { "type": "string", "minLength": 1 },
+          "node_type": { "type": "string", "enum": ["group", "account", "unclassified"] },
+          "depth": { "type": "integer", "minimum": 0 },
+          "position": { "type": "integer", "minimum": 0 },
+          "label": { "type": "string" },
+          "account_id": { "type": ["string", "null"] },
+          "debit": { "type": "string", "minLength": 1 },
+          "credit": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -37,6 +37,18 @@
       "schema": "budget-profile.schema.json"
     },
     {
+      "example": "../examples/classified-result.json",
+      "schema": "classified-result.schema.json"
+    },
+    {
+      "example": "../examples/dimension-summary-result.json",
+      "schema": "dimension-summary-result.schema.json"
+    },
+    {
+      "example": "../examples/budget-analysis-result.json",
+      "schema": "budget-analysis-result.schema.json"
+    },
+    {
       "example": "../examples/book-snapshot.json",
       "schema": "book-snapshot.schema.json"
     },
