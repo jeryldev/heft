@@ -2,7 +2,10 @@ const std = @import("std");
 const db = @import("db.zig");
 const oble_core = @import("oble_core.zig");
 const oble_import = @import("oble_import.zig");
+const oble_profile_budget = @import("oble_profile_budget.zig");
+const oble_profile_classification = @import("oble_profile_classification.zig");
 const oble_profile_counterparty = @import("oble_profile_counterparty.zig");
+const oble_profile_dimension = @import("oble_profile_dimension.zig");
 const oble_profile_fx = @import("oble_profile_fx.zig");
 const oble_profile_policy = @import("oble_profile_policy.zig");
 const oble_reconstruction = @import("oble_reconstruction.zig");
@@ -27,6 +30,12 @@ pub const EntityKind = enum {
     line,
     counterparty,
     open_item,
+    classification,
+    classification_node,
+    dimension,
+    dimension_value,
+    budget,
+    budget_line,
 };
 
 pub const Session = struct {
@@ -59,6 +68,12 @@ pub const Session = struct {
             .line => self.ctx.line_ids.get(logical_id),
             .counterparty => self.ctx.counterparty_ids.get(logical_id),
             .open_item => self.ctx.open_item_ids.get(logical_id),
+            .classification => self.ctx.classification_ids.get(logical_id),
+            .classification_node => self.ctx.classification_node_ids.get(logical_id),
+            .dimension => self.ctx.dimension_ids.get(logical_id),
+            .dimension_value => self.ctx.dimension_value_ids.get(logical_id),
+            .budget => self.ctx.budget_ids.get(logical_id),
+            .budget_line => self.ctx.budget_line_ids.get(logical_id),
         };
     }
 
@@ -80,6 +95,18 @@ pub const Session = struct {
 
     pub fn importCounterpartyProfileBundleJson(self: *Session, json: []const u8) !void {
         return oble_profile_counterparty.importCounterpartyProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
+    }
+
+    pub fn importClassificationProfileBundleJson(self: *Session, json: []const u8) !i64 {
+        return oble_profile_classification.importClassificationProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
+    }
+
+    pub fn importDimensionProfileBundleJson(self: *Session, json: []const u8) !void {
+        return oble_profile_dimension.importDimensionProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
+    }
+
+    pub fn importBudgetProfileBundleJson(self: *Session, json: []const u8) !i64 {
+        return oble_profile_budget.importBudgetProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importPolicyProfileJson(self: *Session, json: []const u8) !i64 {
@@ -370,4 +397,133 @@ test "OBLE import session: reconstruction helpers operate on imported logical ID
     const imported_period_id = session.resolveImportedId(.period, "period-2026-01").?;
     const close_json = try oble_profile_policy.exportCloseReopenProfileJson(target_db, imported_book_id, imported_period_id, &close_buf);
     try std.testing.expect(std.mem.indexOf(u8, close_json, "\"closing_entries\"") != null);
+}
+
+test "OBLE import session: classification profile imports and resolves logical IDs" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Classification Session Source", "USD", 2, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const receivable_id = try account_mod.Account.create(source_db, book_id, "1100", "Receivables", .asset, false, "admin");
+    _ = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const classification_id = try @import("classification.zig").Classification.create(source_db, book_id, "Balance Sheet", "balance_sheet", "admin");
+    const assets_group_id = try @import("classification.zig").ClassificationNode.addGroup(source_db, classification_id, "Assets", null, 1, "admin");
+    _ = try @import("classification.zig").ClassificationNode.addAccount(source_db, classification_id, cash_id, assets_group_id, 1, "admin");
+    _ = try @import("classification.zig").ClassificationNode.addAccount(source_db, classification_id, receivable_id, assets_group_id, 2, "admin");
+
+    var core_buf: [256 * 1024]u8 = undefined;
+    var classification_buf: [256 * 1024]u8 = undefined;
+    const core_json = try oble_core.exportCoreBundleJson(source_db, book_id, &core_buf);
+    const classification_json = try oble_profile_classification.exportClassificationProfileBundleJson(source_db, classification_id, &classification_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var session = Session.init(target_db, std.testing.allocator, "admin");
+    defer session.deinit();
+
+    _ = try session.importCoreBundleJson(core_json);
+    const imported_classification_id = try session.importClassificationProfileBundleJson(classification_json);
+
+    try std.testing.expectEqual(imported_classification_id, session.resolveImportedId(.classification, "classification-1").?);
+    try std.testing.expect(session.resolveImportedId(.classification_node, "classification-node-1") != null);
+    try std.testing.expect(session.resolveImportedId(.classification_node, "classification-node-2") != null);
+    try std.testing.expect(session.resolveImportedId(.classification_node, "classification-node-3") != null);
+
+    var round_buf: [256 * 1024]u8 = undefined;
+    const round_json = try oble_profile_classification.exportClassificationProfileBundleJson(target_db, imported_classification_id, &round_buf);
+    try std.testing.expectEqualStrings(classification_json, round_json);
+}
+
+test "OBLE import session: dimension profile imports and resolves logical IDs" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Dimension Session Source", "USD", 2, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(source_db, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const period_id = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(source_db, book_id, "SALE-001", "2026-01-10", "2026-01-10", "Sale", period_id, null, "admin");
+    const cash_line_id = try entry_mod.Entry.addLine(source_db, entry_id, 1, 100_00_000_000, 0, "USD", 10_000_000_000, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(source_db, entry_id, 2, 0, 100_00_000_000, "USD", 10_000_000_000, revenue_id, null, null, "admin");
+    try entry_mod.Entry.post(source_db, entry_id, "admin");
+
+    const dimension_mod = @import("dimension.zig");
+    const dimension_id = try dimension_mod.Dimension.create(source_db, book_id, "Tax Code", .tax_code, "admin");
+    const parent_value_id = try dimension_mod.DimensionValue.create(source_db, dimension_id, "VAT", "VAT", "admin");
+    const child_value_id = try dimension_mod.DimensionValue.createWithParent(source_db, dimension_id, "VAT12", "VAT 12%", parent_value_id, "admin");
+    try dimension_mod.LineDimension.assign(source_db, cash_line_id, child_value_id, "admin");
+
+    var core_buf: [256 * 1024]u8 = undefined;
+    var entry_buf: [64 * 1024]u8 = undefined;
+    var dimension_buf: [256 * 1024]u8 = undefined;
+    const core_json = try oble_core.exportCoreBundleJson(source_db, book_id, &core_buf);
+    const entry_json = try oble_core.exportEntryJson(source_db, entry_id, &entry_buf);
+    const dimension_json = try oble_profile_dimension.exportDimensionProfileBundleJson(source_db, book_id, &dimension_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var session = Session.init(target_db, std.testing.allocator, "admin");
+    defer session.deinit();
+
+    _ = try session.importCoreBundleJson(core_json);
+    _ = try session.importEntryJson(entry_json);
+    try session.importDimensionProfileBundleJson(dimension_json);
+
+    try std.testing.expect(session.resolveImportedId(.dimension, "dimension-1") != null);
+    try std.testing.expect(session.resolveImportedId(.dimension_value, "dimension-value-1") != null);
+    try std.testing.expect(session.resolveImportedId(.dimension_value, "dimension-value-2") != null);
+
+    var round_buf: [256 * 1024]u8 = undefined;
+    const imported_book_id = session.resolveImportedId(.book, "book-1").?;
+    const round_json = try oble_profile_dimension.exportDimensionProfileBundleJson(target_db, imported_book_id, &round_buf);
+    try std.testing.expectEqualStrings(dimension_json, round_json);
+}
+
+test "OBLE import session: budget profile imports and resolves logical IDs" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Budget Session Source", "USD", 2, "admin");
+    const cash_id = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    const revenue_id = try account_mod.Account.create(source_db, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const jan_id = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_id = try period_mod.Period.create(source_db, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const budget_id = try @import("budget.zig").Budget.create(source_db, book_id, "FY2026 Plan", 2026, "admin");
+    _ = try @import("budget.zig").BudgetLine.set(source_db, budget_id, cash_id, jan_id, 10_000_000_000, "admin");
+    _ = try @import("budget.zig").BudgetLine.set(source_db, budget_id, revenue_id, feb_id, 25_000_000_000, "admin");
+    try @import("budget.zig").Budget.transition(source_db, budget_id, .approved, "admin");
+
+    var core_buf: [256 * 1024]u8 = undefined;
+    var budget_buf: [256 * 1024]u8 = undefined;
+    const core_json = try oble_core.exportCoreBundleJson(source_db, book_id, &core_buf);
+    const budget_json = try oble_profile_budget.exportBudgetProfileBundleJson(source_db, budget_id, &budget_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var session = Session.init(target_db, std.testing.allocator, "admin");
+    defer session.deinit();
+
+    _ = try session.importCoreBundleJson(core_json);
+    const imported_budget_id = try session.importBudgetProfileBundleJson(budget_json);
+
+    try std.testing.expectEqual(imported_budget_id, session.resolveImportedId(.budget, "budget-1").?);
+    try std.testing.expect(session.resolveImportedId(.budget_line, "budget-line-1") != null);
+    try std.testing.expect(session.resolveImportedId(.budget_line, "budget-line-2") != null);
+
+    var round_buf: [256 * 1024]u8 = undefined;
+    const round_json = try oble_profile_budget.exportBudgetProfileBundleJson(target_db, imported_budget_id, &round_buf);
+    try std.testing.expectEqualStrings(budget_json, round_json);
 }
