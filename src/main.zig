@@ -739,6 +739,18 @@ pub export fn ledger_oble_export_counterparties(handle: ?*LedgerDB, book_id: i64
     return abi_buffers.ledger_oble_export_counterparties(handle, book_id, buf, buf_len);
 }
 
+pub export fn ledger_oble_export_classification_profile_bundle(handle: ?*LedgerDB, classification_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_classification_profile_bundle(handle, classification_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_dimension_profile_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_dimension_profile_bundle(handle, book_id, buf, buf_len);
+}
+
+pub export fn ledger_oble_export_budget_profile_bundle(handle: ?*LedgerDB, budget_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    return abi_buffers.ledger_oble_export_budget_profile_bundle(handle, budget_id, buf, buf_len);
+}
+
 pub export fn ledger_oble_export_counterparty_profile_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     return abi_buffers.ledger_oble_export_counterparty_profile_bundle(handle, book_id, buf, buf_len);
 }

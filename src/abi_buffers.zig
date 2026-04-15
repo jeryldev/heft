@@ -574,6 +574,33 @@ pub fn ledger_oble_export_counterparties(handle: ?*LedgerDB, book_id: i64, buf: 
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_classification_profile_bundle(handle: ?*LedgerDB, classification_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_classification.exportClassificationProfileBundleJson(h.sqlite, classification_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_dimension_profile_bundle(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_dimension.exportDimensionProfileBundleJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_budget_profile_bundle(handle: ?*LedgerDB, budget_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_budget.exportBudgetProfileBundleJson(h.sqlite, budget_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_oble_export_policy_profile(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const result = heft.oble_profile_policy.exportPolicyProfileJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {

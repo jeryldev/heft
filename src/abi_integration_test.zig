@@ -134,6 +134,9 @@ const ledger_oble_export_book_snapshot = abi.ledger_oble_export_book_snapshot;
 const ledger_oble_export_accounts = abi.ledger_oble_export_accounts;
 const ledger_oble_export_periods = abi.ledger_oble_export_periods;
 const ledger_oble_export_counterparties = abi.ledger_oble_export_counterparties;
+const ledger_oble_export_classification_profile_bundle = abi.ledger_oble_export_classification_profile_bundle;
+const ledger_oble_export_dimension_profile_bundle = abi.ledger_oble_export_dimension_profile_bundle;
+const ledger_oble_export_budget_profile_bundle = abi.ledger_oble_export_budget_profile_bundle;
 const ledger_oble_export_counterparty_profile_bundle = abi.ledger_oble_export_counterparty_profile_bundle;
 const ledger_oble_export_policy_profile = abi.ledger_oble_export_policy_profile;
 const ledger_oble_export_close_profile = abi.ledger_oble_export_close_profile;
@@ -1973,6 +1976,16 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(counterparties_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparties_len)], "\"role\":\"customer\"") != null);
 
+    const classification_bundle_len = ledger_oble_export_classification_profile_bundle(handle, s.trial_balance_classification_id, &buf, buf.len);
+    try std.testing.expect(classification_bundle_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(classification_bundle_len)], "\"classification\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(classification_bundle_len)], "\"nodes\"") != null);
+
+    const dimension_bundle_len = ledger_oble_export_dimension_profile_bundle(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(dimension_bundle_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(dimension_bundle_len)], "\"dimensions\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(dimension_bundle_len)], "\"line_dimension_assignments\"") != null);
+
     const counterparty_bundle_len = ledger_oble_export_counterparty_profile_bundle(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(counterparty_bundle_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(counterparty_bundle_len)], "\"counterparties\"") != null);
@@ -1981,6 +1994,18 @@ test "C ABI: OBLE export happy paths" {
     const policy_len = ledger_oble_export_policy_profile(handle, s.book_id, &buf, buf.len);
     try std.testing.expect(policy_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_len)], "\"policy_profiles\"") != null);
+
+    const budget_id = ledger_create_budget(handle, s.book_id, "FY2026 Plan", 2026, "admin");
+    try std.testing.expect(budget_id > 0);
+    try std.testing.expect(ledger_set_budget_line(handle, budget_id, s.cash_id, s.jan_2026_id, 10_000_000_000, "admin") > 0);
+    try std.testing.expect(ledger_set_budget_line(handle, budget_id, s.revenue_id, s.feb_2026_id, 25_000_000_000, "admin") > 0);
+    try std.testing.expect(ledger_transition_budget(handle, budget_id, "approved", "admin"));
+
+    const budget_bundle_len = ledger_oble_export_budget_profile_bundle(handle, budget_id, &buf, buf.len);
+    try std.testing.expect(budget_bundle_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(budget_bundle_len)], "\"budget\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(budget_bundle_len)], "\"budget_lines\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(budget_bundle_len)], "\"status\":\"approved\"") != null);
 
     const fx_entry_id = ledger_create_draft(handle, s.book_id, "FX-2026-001", "2026-01-25", "2026-01-25", "USD funding", s.jan_2026_id, null, "admin");
     try std.testing.expect(fx_entry_id > 0);

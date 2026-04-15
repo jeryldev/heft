@@ -345,6 +345,9 @@ int32_t ledger_oble_export_book_snapshot(LedgerDB* h, int64_t book_id, uint8_t* 
 int32_t ledger_oble_export_accounts(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_periods(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_counterparties(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_classification_profile_bundle(LedgerDB* h, int64_t classification_id, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_dimension_profile_bundle(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
+int32_t ledger_oble_export_budget_profile_bundle(LedgerDB* h, int64_t budget_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_counterparty_profile_bundle(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_policy_profile(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len);
 int32_t ledger_oble_export_close_profile(LedgerDB* h, int64_t book_id, int64_t period_id, uint8_t* buf, int32_t buf_len);
