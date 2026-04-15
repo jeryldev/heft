@@ -2140,6 +2140,44 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(policy_lifecycle_len)], "\"revaluation_packet\"") != null);
 }
 
+test "C ABI: OBLE statement exports return BufferTooSmall for tiny buffers" {
+    defer cleanupTestFile("test-cabi-oble-statement-smallbuf.ledger");
+    const handle = ledger_open("test-cabi-oble-statement-smallbuf.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const s = try setupAbiFeatureScenario(handle);
+    var tiny_buf: [32]u8 = undefined;
+
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_result(handle, s.book_id, "2026-02-28", &tiny_buf, tiny_buf.len));
+    try std.testing.expectEqual(@as(i32, 25), ledger_last_error());
+
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_income_statement_result(handle, s.book_id, "2026-01-01", "2026-02-28", &tiny_buf, tiny_buf.len));
+    try std.testing.expectEqual(@as(i32, 25), ledger_last_error());
+
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_equity_changes_result(handle, s.book_id, "2026-02-01", "2026-02-28", "2026-01-01", &tiny_buf, tiny_buf.len));
+    try std.testing.expectEqual(@as(i32, 25), ledger_last_error());
+}
+
+test "C ABI: OBLE statement exports return NotFound for unknown book" {
+    defer cleanupTestFile("test-cabi-oble-statement-notfound.ledger");
+    const handle = ledger_open("test-cabi-oble-statement-notfound.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    const book_id = ledger_create_book(handle, "NotFound Test", "PHP", 2, "admin");
+    try std.testing.expect(book_id > 0);
+
+    var buf: [2048]u8 = undefined;
+
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_result(handle, 9999, "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, 1), ledger_last_error());
+
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_balance_sheet_result(handle, 9999, "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, 1), ledger_last_error());
+
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_comparative_result(handle, 9999, "2026-02-28", "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, 1), ledger_last_error());
+}
+
 test "C ABI: OBLE import session happy path" {
     defer cleanupTestFile("test-cabi-oble-import-source.ledger");
     defer cleanupTestFile("test-cabi-oble-import-target.ledger");

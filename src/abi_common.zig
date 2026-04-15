@@ -59,6 +59,7 @@ pub fn mapError(err: anyerror) i32 {
         error.InvalidFxRate => 23,
         error.InvalidDecimalPlaces => 24,
         error.BufferTooSmall => 25,
+        error.NoSpaceLeft => 25,
         error.RetainedEarningsAccountRequired => 26,
         error.EquityCloseTargetRequired => 38,
         error.FxGainLossAccountRequired => 27,
