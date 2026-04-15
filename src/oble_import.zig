@@ -10,9 +10,13 @@ const open_item_mod = @import("open_item.zig");
 const money = @import("money.zig");
 const oble_export = @import("oble_export.zig");
 
+pub const DEFAULT_MAX_IMPORT_IDS_PER_KIND: usize = 100_000;
+pub const DEFAULT_MAX_IMPORT_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
+
 pub const ImportContext = struct {
     allocator: std.mem.Allocator,
     id_arena: std.heap.ArenaAllocator,
+    max_ids_per_kind: usize,
     book_ids: std.StringHashMap(i64),
     account_ids: std.StringHashMap(i64),
     period_ids: std.StringHashMap(i64),
@@ -28,9 +32,14 @@ pub const ImportContext = struct {
     budget_line_ids: std.StringHashMap(i64),
 
     pub fn init(allocator: std.mem.Allocator) ImportContext {
+        return initWithLimits(allocator, DEFAULT_MAX_IMPORT_IDS_PER_KIND);
+    }
+
+    pub fn initWithLimits(allocator: std.mem.Allocator, max_ids_per_kind: usize) ImportContext {
         return .{
             .allocator = allocator,
             .id_arena = std.heap.ArenaAllocator.init(allocator),
+            .max_ids_per_kind = max_ids_per_kind,
             .book_ids = std.StringHashMap(i64).init(allocator),
             .account_ids = std.StringHashMap(i64).init(allocator),
             .period_ids = std.StringHashMap(i64).init(allocator),
@@ -200,12 +209,21 @@ const BookSnapshotPayload = struct {
     policy_profile: ?PolicyProfilePayload = null,
 };
 
+pub fn validateImportPayloadWithLimit(json: []const u8, max_payload_bytes: usize) !void {
+    if (json.len > max_payload_bytes) return error.PayloadTooLarge;
+}
+
+pub fn validateImportPayload(json: []const u8) !void {
+    return validateImportPayloadWithLimit(json, DEFAULT_MAX_IMPORT_PAYLOAD_BYTES);
+}
+
 fn putUnique(ctx: *ImportContext, map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
+    if (map.contains(key)) return error.DuplicateNumber;
+    if (map.count() >= ctx.max_ids_per_kind) return error.TooManyImportIds;
+
     const owned_key = try ctx.stableAllocator().dupe(u8, key);
     errdefer ctx.stableAllocator().free(owned_key);
-    const gop = try map.getOrPut(owned_key);
-    if (gop.found_existing) return error.DuplicateNumber;
-    gop.value_ptr.* = value;
+    try map.putNoClobber(owned_key, value);
 }
 
 fn resolveId(map: *const std.StringHashMap(i64), key: []const u8) !i64 {
@@ -324,6 +342,7 @@ fn ensureCounterpartyImported(
 }
 
 pub fn importBookJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(BookPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -338,6 +357,7 @@ pub fn importBookJson(database: db.Database, ctx: *ImportContext, json: []const 
 }
 
 pub fn importAccountsJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !void {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice([]AccountPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -351,6 +371,7 @@ pub fn importAccountsJson(database: db.Database, ctx: *ImportContext, json: []co
 }
 
 pub fn importPeriodsJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !void {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice([]PeriodPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -373,6 +394,7 @@ pub fn importPeriodsJson(database: db.Database, ctx: *ImportContext, json: []con
 }
 
 pub fn importEntryJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(EntryPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -380,6 +402,7 @@ pub fn importEntryJson(database: db.Database, ctx: *ImportContext, json: []const
 }
 
 pub fn importCounterpartiesJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !void {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice([]CounterpartyPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -457,6 +480,7 @@ fn importEntryPayload(
 }
 
 pub fn importReversalPairJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !ReversalPairImportIds {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(ReversalPairPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -498,6 +522,7 @@ pub fn importReversalPairJson(database: db.Database, ctx: *ImportContext, json: 
 }
 
 pub fn importCounterpartyOpenItemJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !struct { counterparty_id: i64, open_item_id: i64 } {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(CounterpartyOpenItemPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -540,6 +565,7 @@ pub fn importCounterpartyOpenItemJson(database: db.Database, ctx: *ImportContext
 }
 
 pub fn importPolicyProfileJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(PolicyProfilePayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -571,6 +597,7 @@ pub fn importPolicyProfileJson(database: db.Database, ctx: *ImportContext, json:
 }
 
 pub fn importBookSnapshotJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    try validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(BookSnapshotPayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 

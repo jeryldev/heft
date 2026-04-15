@@ -78,12 +78,20 @@ pub export fn ledger_version() [*:0]const u8 {
     return VERSION;
 }
 
+pub export fn ledger_set_busy_timeout(handle: ?*LedgerDB, timeout_ms: i32) bool {
+    return abi_core.ledger_set_busy_timeout(handle, timeout_ms);
+}
+
 pub export fn ledger_oble_import_session_open(handle: ?*LedgerDB, performed_by: ?[*:0]const u8) ?*LedgerOBLEImportSession {
     return abi_import.ledger_oble_import_session_open(handle, performed_by);
 }
 
 pub export fn ledger_oble_import_session_close(session: ?*LedgerOBLEImportSession) void {
     abi_import.ledger_oble_import_session_close(session);
+}
+
+pub export fn ledger_oble_import_session_set_max_payload(session: ?*LedgerOBLEImportSession, max_payload_bytes: i32) bool {
+    return abi_import.ledger_oble_import_session_set_max_payload(session, max_payload_bytes);
 }
 
 pub export fn ledger_oble_import_core_bundle(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) i64 {

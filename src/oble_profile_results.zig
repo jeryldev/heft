@@ -1566,5 +1566,13 @@ fn expectArrayFirstObjectHasKey(value: std.json.Value, key: []const u8) !void {
 }
 
 fn loadExampleJson(allocator: std.mem.Allocator, relative_path: []const u8) ![]u8 {
-    return try std.fs.cwd().readFileAlloc(allocator, relative_path, 64 * 1024);
+    const embedded = if (std.mem.eql(u8, relative_path, "docs/oble/examples/statement-result.json"))
+        @embedFile("oble_testdata/statement-result.json")
+    else if (std.mem.eql(u8, relative_path, "docs/oble/examples/comparative-statement-result.json"))
+        @embedFile("oble_testdata/comparative-statement-result.json")
+    else if (std.mem.eql(u8, relative_path, "docs/oble/examples/equity-result.json"))
+        @embedFile("oble_testdata/equity-result.json")
+    else
+        return error.FileNotFound;
+    return try allocator.dupe(u8, embedded);
 }

@@ -85,6 +85,7 @@ pub fn exportBudgetProfileBundleJson(database: db.Database, budget_id: i64, buf:
 }
 
 pub fn importBudgetProfileBundleJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !i64 {
+    try oble_import.validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(BudgetProfileBundlePayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
@@ -125,11 +126,11 @@ pub fn importBudgetProfileBundleJson(database: db.Database, ctx: *ImportContext,
 }
 
 fn putUnique(ctx: *ImportContext, map: *std.StringHashMap(i64), key: []const u8, value: i64) !void {
+    if (map.contains(key)) return error.DuplicateNumber;
+    if (map.count() >= ctx.max_ids_per_kind) return error.TooManyImportIds;
     const owned_key = try ctx.stableAllocator().dupe(u8, key);
     errdefer ctx.stableAllocator().free(owned_key);
-    const gop = try map.getOrPut(owned_key);
-    if (gop.found_existing) return error.DuplicateNumber;
-    gop.value_ptr.* = value;
+    try map.putNoClobber(owned_key, value);
 }
 
 fn resolveId(map: *const std.StringHashMap(i64), key: []const u8) !i64 {

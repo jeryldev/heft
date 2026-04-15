@@ -53,6 +53,7 @@ pub fn exportMultiCurrencyBundleJson(database: db.Database, entry_id: i64, reval
 }
 
 pub fn importMultiCurrencyBundleJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !MultiCurrencyImportResult {
+    try oble_import.validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(MultiCurrencyBundlePayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 

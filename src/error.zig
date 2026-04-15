@@ -41,4 +41,6 @@ pub const LedgerError = error{
     ApprovalRequired,
     TooManyAccounts,
     VoidReasonRequired,
+    TooManyImportIds,
+    PayloadTooLarge,
 };

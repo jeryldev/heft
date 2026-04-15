@@ -114,6 +114,7 @@ pub fn exportCounterpartyProfileBundleJson(database: db.Database, book_id: i64, 
 }
 
 pub fn importCounterpartyProfileBundleJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !void {
+    try oble_import.validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(CounterpartyProfileBundlePayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 

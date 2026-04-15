@@ -42,15 +42,33 @@ pub const Session = struct {
     database: db.Database,
     allocator: std.mem.Allocator,
     performed_by_owned: []u8,
+    max_payload_bytes: usize,
     ctx: ImportContext,
 
     pub fn init(database: db.Database, allocator: std.mem.Allocator, performed_by: []const u8) Session {
+        return initWithLimits(
+            database,
+            allocator,
+            performed_by,
+            oble_import.DEFAULT_MAX_IMPORT_IDS_PER_KIND,
+            oble_import.DEFAULT_MAX_IMPORT_PAYLOAD_BYTES,
+        );
+    }
+
+    pub fn initWithLimits(
+        database: db.Database,
+        allocator: std.mem.Allocator,
+        performed_by: []const u8,
+        max_ids_per_kind: usize,
+        max_payload_bytes: usize,
+    ) Session {
         const owned_actor = allocator.dupe(u8, performed_by) catch @panic("out of memory");
         return .{
             .database = database,
             .allocator = allocator,
             .performed_by_owned = owned_actor,
-            .ctx = ImportContext.init(allocator),
+            .max_payload_bytes = max_payload_bytes,
+            .ctx = ImportContext.initWithLimits(allocator, max_ids_per_kind),
         };
     }
 
@@ -77,51 +95,72 @@ pub const Session = struct {
         };
     }
 
+    pub fn setMaxPayloadBytes(self: *Session, max_payload_bytes: usize) !void {
+        if (max_payload_bytes == 0) return error.InvalidInput;
+        self.max_payload_bytes = max_payload_bytes;
+    }
+
+    fn ensurePayloadWithinLimit(self: *const Session, json: []const u8) !void {
+        return oble_import.validateImportPayloadWithLimit(json, self.max_payload_bytes);
+    }
+
     pub fn importCoreBundleJson(self: *Session, json: []const u8) !i64 {
+        try self.ensurePayloadWithinLimit(json);
         return oble_core.importCoreBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importEntryJson(self: *Session, json: []const u8) !i64 {
+        try self.ensurePayloadWithinLimit(json);
         return oble_core.importEntryJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importReversalPairJson(self: *Session, json: []const u8) !ReversalPairImportIds {
+        try self.ensurePayloadWithinLimit(json);
         return oble_import.importReversalPairJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importCounterpartiesJson(self: *Session, json: []const u8) !void {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_counterparty.importCounterpartiesJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importCounterpartyProfileBundleJson(self: *Session, json: []const u8) !void {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_counterparty.importCounterpartyProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importClassificationProfileBundleJson(self: *Session, json: []const u8) !i64 {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_classification.importClassificationProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importDimensionProfileBundleJson(self: *Session, json: []const u8) !void {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_dimension.importDimensionProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importBudgetProfileBundleJson(self: *Session, json: []const u8) !i64 {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_budget.importBudgetProfileBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importPolicyProfileJson(self: *Session, json: []const u8) !i64 {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_policy.importPolicyProfileJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importMultiCurrencyBundleJson(self: *Session, json: []const u8) !MultiCurrencyImportResult {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_fx.importMultiCurrencyBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importPolicyLifecycleBundleJson(self: *Session, json: []const u8) !PolicyLifecycleImportResult {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_policy.importPolicyLifecycleBundleJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
     pub fn importBookSnapshotJson(self: *Session, json: []const u8) !i64 {
+        try self.ensurePayloadWithinLimit(json);
         return oble_profile_counterparty.importBookSnapshotJson(self.database, &self.ctx, json, self.performed_by_owned);
     }
 
@@ -526,4 +565,46 @@ test "OBLE import session: budget profile imports and resolves logical IDs" {
     var round_buf: [256 * 1024]u8 = undefined;
     const round_json = try oble_profile_budget.exportBudgetProfileBundleJson(target_db, imported_budget_id, &round_buf);
     try std.testing.expectEqualStrings(budget_json, round_json);
+}
+
+test "OBLE import session: max payload limit rejects oversized JSON" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    var session = Session.init(database, std.testing.allocator, "admin");
+    defer session.deinit();
+    try session.setMaxPayloadBytes(16);
+
+    const oversized = "01234567890123456";
+    try std.testing.expectError(error.PayloadTooLarge, session.importCoreBundleJson(oversized));
+}
+
+test "OBLE import session: per-kind id cap rejects oversized logical-id sets" {
+    const source_db = try db.Database.open(":memory:");
+    defer source_db.close();
+    try schema.createAll(source_db);
+
+    const book_id = try book_mod.Book.create(source_db, "Cap Source", "USD", 2, "admin");
+    _ = try account_mod.Account.create(source_db, book_id, "1000", "Cash", .asset, false, "admin");
+    _ = try account_mod.Account.create(source_db, book_id, "2000", "Payable", .liability, false, "admin");
+    _ = try period_mod.Period.create(source_db, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    var core_buf: [128 * 1024]u8 = undefined;
+    const core_json = try oble_core.exportCoreBundleJson(source_db, book_id, &core_buf);
+
+    const target_db = try db.Database.open(":memory:");
+    defer target_db.close();
+    try schema.createAll(target_db);
+
+    var session = Session.initWithLimits(
+        target_db,
+        std.testing.allocator,
+        "admin",
+        1,
+        oble_import.DEFAULT_MAX_IMPORT_PAYLOAD_BYTES,
+    );
+    defer session.deinit();
+
+    try std.testing.expectError(error.TooManyImportIds, session.importCoreBundleJson(core_json));
 }

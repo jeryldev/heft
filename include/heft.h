@@ -6,8 +6,22 @@
  * Thread safety:
  *   NOT thread-safe. One LedgerDB handle per thread. Do not share handles
  *   across threads. SQLite compiled with SQLITE_THREADSAFE=0 (no mutexes).
- *   If you need concurrent access, use one handle per thread with separate
- *   .ledger files, or serialize access with an external mutex.
+ *   If you need concurrent access, use one handle per thread and serialize
+ *   shared-file write access with an external mutex or sidecar layer.
+ *   Multiple processes may still access the same .ledger file through SQLite
+ *   WAL locking, but each process/thread must use its own handle.
+ *
+ * Filesystem and deployment responsibilities:
+ *   This is a library. Callers are responsible for validating database paths,
+ *   enforcing symlink or sandbox policy, and setting restrictive permissions
+ *   such as 0600 on created .ledger files where regulated data is stored.
+ *   Heft does not perform O_NOFOLLOW-style path policy or chmod for you.
+ *
+ * Production notes:
+ *   Use a non-debug log level in production builds if you do not want SQLite
+ *   constraint or exec failure text to appear in logs.
+ *   A minimum stack size of 512 KB is recommended for embedded targets because
+ *   close/revalue paths use bounded stack arrays for predictable allocation.
  *
  * Error handling:
  *   Functions returning int64_t return -1 on error.
@@ -30,6 +44,10 @@
  *   FX rates: int64_t scaled by 10^10 (1.0 = 10000000000)
  *   Dates:    "YYYY-MM-DD" (10 chars, NOT null-terminated in buffers)
  *   Timestamps: "YYYY-MM-DDTHH:MM:SSZ" (UTC)
+ *
+ * Audit identity:
+ *   performed_by is a caller-supplied attribution string. Heft records it
+ *   faithfully but does not authenticate or verify the actor identity.
  */
 
 #ifndef HEFT_H
@@ -104,6 +122,8 @@ enum {
     HEFT_EQUITY_ALLOCATION_TOTAL_INVALID = 36,
     HEFT_SUSPENSE_NOT_CLEAR             = 37,
     HEFT_EQUITY_CLOSE_TARGET_REQUIRED   = 38,
+    HEFT_TOO_MANY_IMPORT_IDS            = 39,
+    HEFT_PAYLOAD_TOO_LARGE              = 40,
     HEFT_SQLITE_OPEN_FAILED             = 90,
     HEFT_SQLITE_EXEC_FAILED             = 91,
     HEFT_SQLITE_PREPARE_FAILED          = 92,
@@ -129,12 +149,14 @@ const char* ledger_version(void);
 LedgerDB*   ledger_open(const char* path);
 void        ledger_close(LedgerDB* handle);
 int32_t     ledger_last_error(void);
+bool        ledger_set_busy_timeout(LedgerDB* h, int32_t timeout_ms);
 
 /* ── OBLE Import Session ───────────────────────────────────── */
 
 /* Import sessions require the parent LedgerDB handle to remain open. */
 LedgerOBLEImportSession* ledger_oble_import_session_open(LedgerDB* h, const char* performed_by);
 void     ledger_oble_import_session_close(LedgerOBLEImportSession* session);
+bool     ledger_oble_import_session_set_max_payload(LedgerOBLEImportSession* session, int32_t max_payload_bytes);
 int64_t  ledger_oble_import_core_bundle(LedgerOBLEImportSession* session, const char* json);
 int64_t  ledger_oble_import_entry(LedgerOBLEImportSession* session, const char* json);
 bool     ledger_oble_import_reversal_pair(LedgerOBLEImportSession* session, const char* json);

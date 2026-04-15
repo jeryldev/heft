@@ -4,9 +4,11 @@ const sqlite_flags = &.{
     "-DSQLITE_DQS=0",
     "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_OMIT_DEPRECATED",
+    "-DSQLITE_OMIT_PROGRESS_CALLBACK",
     "-DSQLITE_DEFAULT_MEMSTATUS=0",
     "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
     "-DSQLITE_OMIT_SHARED_CACHE",
+    "-DSQLITE_ENABLE_STAT4",
 };
 
 pub fn build(b: *std.Build) void {

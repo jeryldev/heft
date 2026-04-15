@@ -31,6 +31,7 @@ const Scenario = enum {
 
 const Config = struct {
     scenario: Scenario = .all,
+    warmup_iterations: usize = 1,
     read_iterations: usize = 30,
     write_iterations: usize = 10,
     report_entries: usize = 2_000,
@@ -82,14 +83,22 @@ const RevalueWorkload = struct {
     period_id: i64,
 };
 
+const TimingSummary = struct {
+    total_ns: u64,
+    avg_ns: u64,
+    p50_ns: u64,
+    p95_ns: u64,
+};
+
 var bench_sink: usize = 0;
 
 pub fn main() !void {
     const config = try parseArgs();
     std.debug.print(
-        "Heft benchmark\nscenario={s} read_iterations={d} write_iterations={d} report_entries={d} counterparties={d} close_entries={d} revalue_entries={d}\n\n",
+        "Heft benchmark\nscenario={s} warmup_iterations={d} read_iterations={d} write_iterations={d} report_entries={d} counterparties={d} close_entries={d} revalue_entries={d}\n\n",
         .{
             @tagName(config.scenario),
+            config.warmup_iterations,
             config.read_iterations,
             config.write_iterations,
             config.report_entries,
@@ -104,25 +113,26 @@ pub fn main() !void {
         var workload = try setupReportWorkload(config.report_entries, config.counterparty_count);
         const setup_ns = setup_timer.read();
         defer workload.database.close();
-        try printSplitBench("report_seed", 1, setup_ns, 0);
+        var report_seed_samples = [_]u64{setup_ns};
+        try printBench("report_seed", 0, &report_seed_samples);
 
         if (config.scenario == .all or config.scenario == .trial_balance) {
-            try runReadBench("trial_balance", config.read_iterations, setup_ns, &workload, benchTrialBalance);
+            try runReadBench("trial_balance", config.warmup_iterations, config.read_iterations, setup_ns, &workload, benchTrialBalance);
         }
         if (config.scenario == .all or config.scenario == .general_ledger) {
-            try runReadBench("general_ledger", config.read_iterations, setup_ns, &workload, benchGeneralLedger);
+            try runReadBench("general_ledger", config.warmup_iterations, config.read_iterations, setup_ns, &workload, benchGeneralLedger);
         }
         if (config.scenario == .all or config.scenario == .aged_subledger) {
-            try runReadBench("aged_subledger", config.read_iterations, setup_ns, &workload, benchAgedSubledger);
+            try runReadBench("aged_subledger", config.warmup_iterations, config.read_iterations, setup_ns, &workload, benchAgedSubledger);
         }
         if (config.scenario == .all or config.scenario == .statement_suite) {
-            try runStatementSuiteBench(config.read_iterations, setup_ns, &workload);
+            try runStatementSuiteBench(config.warmup_iterations, config.read_iterations, setup_ns, &workload);
         }
         if (config.scenario == .all or config.scenario == .comparative_suite) {
-            try runComparativeSuiteBench(config.read_iterations, setup_ns, &workload);
+            try runComparativeSuiteBench(config.warmup_iterations, config.read_iterations, setup_ns, &workload);
         }
         if (config.scenario == .all or config.scenario == .export_suite) {
-            try runExportSuiteBench(config.read_iterations, setup_ns, &workload);
+            try runExportSuiteBench(config.warmup_iterations, config.read_iterations, setup_ns, &workload);
         }
         std.debug.print("\n", .{});
     }
@@ -153,50 +163,50 @@ pub fn main() !void {
     }
 
     if (config.scenario == .query_scale) {
-        try runQueryScaleBench(config.read_iterations, config.report_entries, config.counterparty_count);
+        try runQueryScaleBench(config.warmup_iterations, config.read_iterations, config.report_entries, config.counterparty_count);
         std.debug.print("\n", .{});
     }
 
     if (config.scenario == .seed_report) {
-        try runSeedBench("seed_report", config.write_iterations, config.report_entries, config.counterparty_count, setupReportSeedOnly);
+        try runSeedBench("seed_report", config.warmup_iterations, config.write_iterations, config.report_entries, config.counterparty_count, setupReportSeedOnly);
     }
 
     if (config.scenario == .seed_close) {
-        try runSeedBench("seed_close_direct", config.write_iterations, config.close_entries, 0, setupCloseSeedDirectOnly);
-        try runSeedBench("seed_close_income_summary", config.write_iterations, config.close_entries, 0, setupCloseSeedIncomeSummaryOnly);
-        try runSeedBench("seed_close_allocated", config.write_iterations, config.close_entries, 0, setupCloseSeedAllocatedOnly);
+        try runSeedBench("seed_close_direct", config.warmup_iterations, config.write_iterations, config.close_entries, 0, setupCloseSeedDirectOnly);
+        try runSeedBench("seed_close_income_summary", config.warmup_iterations, config.write_iterations, config.close_entries, 0, setupCloseSeedIncomeSummaryOnly);
+        try runSeedBench("seed_close_allocated", config.warmup_iterations, config.write_iterations, config.close_entries, 0, setupCloseSeedAllocatedOnly);
     }
 
     if (config.scenario == .seed_revalue) {
-        try runSeedBench("seed_revalue", config.write_iterations, config.revalue_entries, 0, setupRevalueSeedOnly);
+        try runSeedBench("seed_revalue", config.warmup_iterations, config.write_iterations, config.revalue_entries, 0, setupRevalueSeedOnly);
     }
 
     if (config.scenario == .all or config.scenario == .close_period) {
-        try runCloseBench("close_direct", .direct, config.write_iterations, config.close_entries);
-        try runCloseBench("close_income_summary", .income_summary, config.write_iterations, config.close_entries);
-        try runCloseBench("close_allocated", .allocated, config.write_iterations, config.close_entries);
+        try runCloseBench("close_direct", .direct, config.warmup_iterations, config.write_iterations, config.close_entries);
+        try runCloseBench("close_income_summary", .income_summary, config.warmup_iterations, config.write_iterations, config.close_entries);
+        try runCloseBench("close_allocated", .allocated, config.warmup_iterations, config.write_iterations, config.close_entries);
     } else if (config.scenario == .close_direct) {
-        try runCloseBench("close_direct", .direct, config.write_iterations, config.close_entries);
+        try runCloseBench("close_direct", .direct, config.warmup_iterations, config.write_iterations, config.close_entries);
     } else if (config.scenario == .close_income_summary) {
-        try runCloseBench("close_income_summary", .income_summary, config.write_iterations, config.close_entries);
+        try runCloseBench("close_income_summary", .income_summary, config.warmup_iterations, config.write_iterations, config.close_entries);
     } else if (config.scenario == .close_allocated) {
-        try runCloseBench("close_allocated", .allocated, config.write_iterations, config.close_entries);
+        try runCloseBench("close_allocated", .allocated, config.warmup_iterations, config.write_iterations, config.close_entries);
     }
 
     if (config.scenario == .all or config.scenario == .revalue) {
-        try runRevalueBench(config.write_iterations, config.revalue_entries);
+        try runRevalueBench(config.warmup_iterations, config.write_iterations, config.revalue_entries);
     }
 
     if (config.scenario == .all or config.scenario == .recalculate_stale) {
-        try runCacheBench(config.write_iterations, config.close_entries);
+        try runCacheBench(config.warmup_iterations, config.write_iterations, config.close_entries);
     }
 
     if (config.scenario == .all or config.scenario == .post_generated_entry) {
-        try runPostBench(config.write_iterations, config.close_entries);
+        try runPostBench(config.warmup_iterations, config.write_iterations, config.close_entries);
     }
 
     if (config.scenario == .all or config.scenario == .generate_opening_entry) {
-        try runOpeningBench(config.write_iterations, config.close_entries);
+        try runOpeningBench(config.warmup_iterations, config.write_iterations, config.close_entries);
     }
 
     std.debug.print("\nbench_sink={d}\n", .{bench_sink});
@@ -215,6 +225,10 @@ fn parseArgs() !Config {
             i += 1;
             if (i >= args.len) return error.InvalidInput;
             config.scenario = parseScenario(args[i]) orelse return error.InvalidInput;
+        } else if (std.mem.eql(u8, arg, "--warmup-iterations")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidInput;
+            config.warmup_iterations = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--read-iterations")) {
             i += 1;
             if (i >= args.len) return error.InvalidInput;
@@ -264,6 +278,7 @@ fn printUsage() void {
         \\Usage: zig build bench -- [options]
         \\
         \\  --scenario all|trial_balance|general_ledger|aged_subledger|statement_suite|comparative_suite|export_suite|budget_suite|open_item_suite|classification_suite|dimension_suite|abi_buffer_suite|query_scale|seed_report|seed_close|seed_revalue|close_period|close_direct|close_income_summary|close_allocated|recalculate_stale|post_generated_entry|generate_opening_entry|revalue
+        \\  --warmup-iterations N
         \\  --read-iterations N
         \\  --write-iterations N
         \\  --report-entries N
@@ -274,161 +289,253 @@ fn printUsage() void {
     , .{});
 }
 
-fn runReadBench(label: []const u8, iterations: usize, setup_ns: u64, workload: *ReportWorkload, comptime runner: fn (*ReportWorkload) anyerror!void) !void {
-    var timer = try std.time.Timer.start();
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
+fn runReadBench(label: []const u8, warmup_iterations: usize, iterations: usize, setup_ns: u64, workload: *ReportWorkload, comptime runner: fn (*ReportWorkload) anyerror!void) !void {
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
         try runner(workload);
     }
-    try printSplitBench(label, iterations, setup_ns, timer.read());
+
+    const allocator = std.heap.page_allocator;
+    const setup_samples = try allocator.alloc(u64, 1);
+    defer allocator.free(setup_samples);
+    setup_samples[0] = setup_ns;
+
+    const op_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(op_samples);
+
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        var timer = try std.time.Timer.start();
+        try runner(workload);
+        op_samples[i] = timer.read();
+    }
+    try printSplitBench(label, warmup_iterations, setup_samples, op_samples);
 }
 
-fn runCloseBench(label: []const u8, mode: CloseMode, iterations: usize, entry_count: usize) !void {
-    var setup_ns: u64 = 0;
-    var op_ns: u64 = 0;
+fn runCloseBench(label: []const u8, mode: CloseMode, warmup_iterations: usize, iterations: usize, entry_count: usize) !void {
     var phase_totals = heft.close.ClosePeriodProfile{};
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
+        var warmup_workload = try setupCloseWorkload(mode, entry_count);
+        defer warmup_workload.database.close();
+        var warmup_profile = heft.close.ClosePeriodProfile{};
+        try benchClosePeriod(&warmup_workload, &warmup_profile);
+    }
+
+    const allocator = std.heap.page_allocator;
+    const setup_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(setup_samples);
+    const op_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(op_samples);
+
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var setup_timer = try std.time.Timer.start();
         var workload = try setupCloseWorkload(mode, entry_count);
-        setup_ns += setup_timer.read();
+        setup_samples[i] = setup_timer.read();
         defer workload.database.close();
         var op_timer = try std.time.Timer.start();
         try benchClosePeriod(&workload, &phase_totals);
-        op_ns += op_timer.read();
+        op_samples[i] = op_timer.read();
     }
-    try printSplitBench(label, iterations, setup_ns, op_ns);
+    try printSplitBench(label, warmup_iterations, setup_samples, op_samples);
     try printCloseProfile(label, iterations, phase_totals);
 }
 
-fn runRevalueBench(iterations: usize, entry_count: usize) !void {
-    var setup_ns: u64 = 0;
-    var op_ns: u64 = 0;
+fn runRevalueBench(warmup_iterations: usize, iterations: usize, entry_count: usize) !void {
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
+        var warmup_workload = try setupRevalueWorkload(entry_count);
+        defer warmup_workload.database.close();
+        try benchRevalue(&warmup_workload);
+    }
+
+    const allocator = std.heap.page_allocator;
+    const setup_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(setup_samples);
+    const op_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(op_samples);
+
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var setup_timer = try std.time.Timer.start();
         var workload = try setupRevalueWorkload(entry_count);
-        setup_ns += setup_timer.read();
+        setup_samples[i] = setup_timer.read();
         defer workload.database.close();
         var op_timer = try std.time.Timer.start();
         try benchRevalue(&workload);
-        op_ns += op_timer.read();
+        op_samples[i] = op_timer.read();
     }
-    try printSplitBench("revalue", iterations, setup_ns, op_ns);
+    try printSplitBench("revalue", warmup_iterations, setup_samples, op_samples);
 }
 
-fn runCacheBench(iterations: usize, entry_count: usize) !void {
-    var setup_ns: u64 = 0;
-    var elapsed_ns: u64 = 0;
+fn runCacheBench(warmup_iterations: usize, iterations: usize, entry_count: usize) !void {
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
+        var warmup_workload = try setupCacheWorkload(entry_count);
+        defer warmup_workload.database.close();
+        try benchRecalculateStale(&warmup_workload);
+    }
+
+    const allocator = std.heap.page_allocator;
+    const setup_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(setup_samples);
+    const op_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(op_samples);
+
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var setup_timer = try std.time.Timer.start();
         var workload = try setupCacheWorkload(entry_count);
-        setup_ns += setup_timer.read();
+        setup_samples[i] = setup_timer.read();
         defer workload.database.close();
         var timer = try std.time.Timer.start();
         try benchRecalculateStale(&workload);
-        elapsed_ns += timer.read();
+        op_samples[i] = timer.read();
     }
-    try printSplitBench("recalculate_stale", iterations, setup_ns, elapsed_ns);
+    try printSplitBench("recalculate_stale", warmup_iterations, setup_samples, op_samples);
 }
 
-fn runPostBench(iterations: usize, entry_count: usize) !void {
-    var setup_ns: u64 = 0;
-    var elapsed_ns: u64 = 0;
+fn runPostBench(warmup_iterations: usize, iterations: usize, entry_count: usize) !void {
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
+        var warmup_workload = try setupGeneratedPostWorkload(entry_count);
+        defer warmup_workload.database.close();
+        try benchPostGeneratedEntry(&warmup_workload);
+    }
+
+    const allocator = std.heap.page_allocator;
+    const setup_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(setup_samples);
+    const op_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(op_samples);
+
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var setup_timer = try std.time.Timer.start();
         var workload = try setupGeneratedPostWorkload(entry_count);
-        setup_ns += setup_timer.read();
+        setup_samples[i] = setup_timer.read();
         defer workload.database.close();
         var timer = try std.time.Timer.start();
         try benchPostGeneratedEntry(&workload);
-        elapsed_ns += timer.read();
+        op_samples[i] = timer.read();
     }
-    try printSplitBench("post_generated_entry", iterations, setup_ns, elapsed_ns);
+    try printSplitBench("post_generated_entry", warmup_iterations, setup_samples, op_samples);
 }
 
-fn runOpeningBench(iterations: usize, entry_count: usize) !void {
-    var setup_ns: u64 = 0;
-    var elapsed_ns: u64 = 0;
+fn runOpeningBench(warmup_iterations: usize, iterations: usize, entry_count: usize) !void {
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
+        var warmup_workload = try setupOpeningWorkload(entry_count);
+        defer warmup_workload.database.close();
+        try benchGenerateOpeningEntry(&warmup_workload);
+    }
+
+    const allocator = std.heap.page_allocator;
+    const setup_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(setup_samples);
+    const op_samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(op_samples);
+
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var setup_timer = try std.time.Timer.start();
         var workload = try setupOpeningWorkload(entry_count);
-        setup_ns += setup_timer.read();
+        setup_samples[i] = setup_timer.read();
         defer workload.database.close();
         var timer = try std.time.Timer.start();
         try benchGenerateOpeningEntry(&workload);
-        elapsed_ns += timer.read();
+        op_samples[i] = timer.read();
     }
-    try printSplitBench("generate_opening_entry", iterations, setup_ns, elapsed_ns);
+    try printSplitBench("generate_opening_entry", warmup_iterations, setup_samples, op_samples);
 }
 
-fn printBench(label: []const u8, iterations: usize, elapsed_ns: u64) !void {
-    const avg_ns = elapsed_ns / @as(u64, @intCast(if (iterations == 0) 1 else iterations));
-    const total_ms = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
-    const avg_ms = @as(f64, @floatFromInt(avg_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
-    const ops_per_sec = if (elapsed_ns == 0)
+fn printBench(label: []const u8, warmup_iterations: usize, samples: []u64) !void {
+    const summary = summarizeSamples(samples);
+    const sample_count = if (samples.len == 0) 1 else samples.len;
+    const total_ms = nsToMs(summary.total_ns);
+    const avg_ms = nsToMs(summary.avg_ns);
+    const p50_ms = nsToMs(summary.p50_ns);
+    const p95_ms = nsToMs(summary.p95_ns);
+    const ops_per_sec = if (summary.total_ns == 0)
         0.0
     else
-        (@as(f64, @floatFromInt(iterations)) * @as(f64, @floatFromInt(std.time.ns_per_s))) / @as(f64, @floatFromInt(elapsed_ns));
+        (@as(f64, @floatFromInt(sample_count)) * @as(f64, @floatFromInt(std.time.ns_per_s))) / @as(f64, @floatFromInt(summary.total_ns));
 
-    std.debug.print("{s:16} total={d:.3}ms avg={d:.3}ms ops/s={d:.2}\n", .{ label, total_ms, avg_ms, ops_per_sec });
-}
-
-fn printSplitBench(label: []const u8, iterations: usize, setup_ns: u64, op_ns: u64) !void {
-    const count = @as(u64, @intCast(if (iterations == 0) 1 else iterations));
-    const setup_avg_ms = @as(f64, @floatFromInt(setup_ns / count)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
-    const op_avg_ms = @as(f64, @floatFromInt(op_ns / count)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
-    const total_ns = setup_ns + op_ns;
-    const ops_per_sec = if (op_ns == 0)
-        0.0
-    else
-        (@as(f64, @floatFromInt(iterations)) * @as(f64, @floatFromInt(std.time.ns_per_s))) / @as(f64, @floatFromInt(op_ns));
-    const total_ms = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
     std.debug.print(
-        "{s:24} total={d:.3}ms setup_avg={d:.3}ms op_avg={d:.3}ms op_only_ops/s={d:.2}\n",
-        .{ label, total_ms, setup_avg_ms, op_avg_ms, ops_per_sec },
+        "{s:16} total={d:.3}ms avg={d:.3}ms p50={d:.3}ms p95={d:.3}ms warmups={d} ops/s={d:.2}\n",
+        .{ label, total_ms, avg_ms, p50_ms, p95_ms, warmup_iterations, ops_per_sec },
     );
 }
 
-fn runSeedBench(label: []const u8, iterations: usize, primary_size: usize, secondary_size: usize, comptime setup_fn: fn (usize, usize) anyerror!void) !void {
-    var elapsed_ns: u64 = 0;
+fn printSplitBench(label: []const u8, warmup_iterations: usize, setup_samples: []u64, op_samples: []u64) !void {
+    const setup_summary = summarizeSamples(setup_samples);
+    const op_summary = summarizeSamples(op_samples);
+    const total_ns = setup_summary.total_ns + op_summary.total_ns;
+    const ops_per_sec = if (op_summary.total_ns == 0)
+        0.0
+    else
+        (@as(f64, @floatFromInt(if (op_samples.len == 0) 1 else op_samples.len)) * @as(f64, @floatFromInt(std.time.ns_per_s))) / @as(f64, @floatFromInt(op_summary.total_ns));
+    const total_ms = nsToMs(total_ns);
+    std.debug.print(
+        "{s:24} total={d:.3}ms setup_avg={d:.3}ms op_avg={d:.3}ms op_p50={d:.3}ms op_p95={d:.3}ms warmups={d} op_only_ops/s={d:.2}\n",
+        .{
+            label,
+            total_ms,
+            nsToMs(setup_summary.avg_ns),
+            nsToMs(op_summary.avg_ns),
+            nsToMs(op_summary.p50_ns),
+            nsToMs(op_summary.p95_ns),
+            warmup_iterations,
+            ops_per_sec,
+        },
+    );
+}
+
+fn runSeedBench(label: []const u8, warmup_iterations: usize, iterations: usize, primary_size: usize, secondary_size: usize, comptime setup_fn: fn (usize, usize) anyerror!void) !void {
+    var warmup_index: usize = 0;
+    while (warmup_index < warmup_iterations) : (warmup_index += 1) {
+        try setup_fn(primary_size, secondary_size);
+    }
+
+    const allocator = std.heap.page_allocator;
+    const samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(samples);
+
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var timer = try std.time.Timer.start();
         try setup_fn(primary_size, secondary_size);
-        elapsed_ns += timer.read();
+        samples[i] = timer.read();
     }
-    try printBench(label, iterations, elapsed_ns);
+    try printBench(label, warmup_iterations, samples);
 }
 
-fn runStatementSuiteBench(iterations: usize, setup_ns: u64, workload: *ReportWorkload) !void {
-    try runReadBench("income_statement", iterations, setup_ns, workload, benchIncomeStatement);
-    try runReadBench("trial_balance_movement", iterations, setup_ns, workload, benchTrialBalanceMovement);
-    try runReadBench("balance_sheet_auto", iterations, setup_ns, workload, benchBalanceSheetAuto);
-    try runReadBench("balance_sheet_projected_re", iterations, setup_ns, workload, benchBalanceSheetProjectedRE);
+fn runStatementSuiteBench(warmup_iterations: usize, iterations: usize, setup_ns: u64, workload: *ReportWorkload) !void {
+    try runReadBench("income_statement", warmup_iterations, iterations, setup_ns, workload, benchIncomeStatement);
+    try runReadBench("trial_balance_movement", warmup_iterations, iterations, setup_ns, workload, benchTrialBalanceMovement);
+    try runReadBench("balance_sheet_auto", warmup_iterations, iterations, setup_ns, workload, benchBalanceSheetAuto);
+    try runReadBench("balance_sheet_projected_re", warmup_iterations, iterations, setup_ns, workload, benchBalanceSheetProjectedRE);
 }
 
-fn runComparativeSuiteBench(iterations: usize, setup_ns: u64, workload: *ReportWorkload) !void {
-    try runReadBench("tb_comparative", iterations, setup_ns, workload, benchTrialBalanceComparative);
-    try runReadBench("is_comparative", iterations, setup_ns, workload, benchIncomeStatementComparative);
-    try runReadBench("bs_comparative", iterations, setup_ns, workload, benchBalanceSheetComparative);
-    try runReadBench("tb_movement_comparative", iterations, setup_ns, workload, benchTrialBalanceMovementComparative);
-    try runReadBench("equity_changes", iterations, setup_ns, workload, benchEquityChanges);
+fn runComparativeSuiteBench(warmup_iterations: usize, iterations: usize, setup_ns: u64, workload: *ReportWorkload) !void {
+    try runReadBench("tb_comparative", warmup_iterations, iterations, setup_ns, workload, benchTrialBalanceComparative);
+    try runReadBench("is_comparative", warmup_iterations, iterations, setup_ns, workload, benchIncomeStatementComparative);
+    try runReadBench("bs_comparative", warmup_iterations, iterations, setup_ns, workload, benchBalanceSheetComparative);
+    try runReadBench("tb_movement_comparative", warmup_iterations, iterations, setup_ns, workload, benchTrialBalanceMovementComparative);
+    try runReadBench("equity_changes", warmup_iterations, iterations, setup_ns, workload, benchEquityChanges);
 }
 
-fn runExportSuiteBench(iterations: usize, setup_ns: u64, workload: *ReportWorkload) !void {
-    try runReadBench("export_chart_of_accounts", iterations, setup_ns, workload, benchExportChartOfAccounts);
-    try runReadBench("export_journal_entries", iterations, setup_ns, workload, benchExportJournalEntries);
-    try runReadBench("export_audit_trail", iterations, setup_ns, workload, benchExportAuditTrail);
-    try runReadBench("export_periods", iterations, setup_ns, workload, benchExportPeriods);
-    try runReadBench("export_subledger", iterations, setup_ns, workload, benchExportSubledger);
-    try runReadBench("export_book_metadata", iterations, setup_ns, workload, benchExportBookMetadata);
+fn runExportSuiteBench(warmup_iterations: usize, iterations: usize, setup_ns: u64, workload: *ReportWorkload) !void {
+    try runReadBench("export_chart_of_accounts", warmup_iterations, iterations, setup_ns, workload, benchExportChartOfAccounts);
+    try runReadBench("export_journal_entries", warmup_iterations, iterations, setup_ns, workload, benchExportJournalEntries);
+    try runReadBench("export_audit_trail", warmup_iterations, iterations, setup_ns, workload, benchExportAuditTrail);
+    try runReadBench("export_periods", warmup_iterations, iterations, setup_ns, workload, benchExportPeriods);
+    try runReadBench("export_subledger", warmup_iterations, iterations, setup_ns, workload, benchExportSubledger);
+    try runReadBench("export_book_metadata", warmup_iterations, iterations, setup_ns, workload, benchExportBookMetadata);
 }
 
-fn runQueryScaleBench(iterations: usize, base_entries: usize, counterparty_count: usize) !void {
+fn runQueryScaleBench(warmup_iterations: usize, iterations: usize, base_entries: usize, counterparty_count: usize) !void {
     const scales = [_]usize{ 1, 5, 10 };
     for (scales) |scale| {
         const entry_count = base_entries * scale;
@@ -439,14 +546,41 @@ fn runQueryScaleBench(iterations: usize, base_entries: usize, counterparty_count
 
         var label_buf: [64]u8 = undefined;
         const tb_label = try std.fmt.bufPrint(&label_buf, "trial_balance_{d}", .{entry_count});
-        try runReadBench(tb_label, iterations, setup_ns, &workload, benchTrialBalance);
+        try runReadBench(tb_label, warmup_iterations, iterations, setup_ns, &workload, benchTrialBalance);
 
         const gl_label = try std.fmt.bufPrint(&label_buf, "general_ledger_{d}", .{entry_count});
-        try runReadBench(gl_label, iterations, setup_ns, &workload, benchGeneralLedger);
+        try runReadBench(gl_label, warmup_iterations, iterations, setup_ns, &workload, benchGeneralLedger);
 
         const aged_label = try std.fmt.bufPrint(&label_buf, "aged_subledger_{d}", .{entry_count});
-        try runReadBench(aged_label, iterations, setup_ns, &workload, benchAgedSubledger);
+        try runReadBench(aged_label, warmup_iterations, iterations, setup_ns, &workload, benchAgedSubledger);
     }
+}
+
+fn summarizeSamples(samples: []u64) TimingSummary {
+    if (samples.len == 0) {
+        return .{ .total_ns = 0, .avg_ns = 0, .p50_ns = 0, .p95_ns = 0 };
+    }
+
+    var total_ns: u64 = 0;
+    for (samples) |sample| total_ns += sample;
+    std.mem.sort(u64, samples, {}, std.sort.asc(u64));
+
+    return .{
+        .total_ns = total_ns,
+        .avg_ns = total_ns / @as(u64, @intCast(samples.len)),
+        .p50_ns = samples[percentileIndex(samples.len, 50, 100)],
+        .p95_ns = samples[percentileIndex(samples.len, 95, 100)],
+    };
+}
+
+fn percentileIndex(sample_count: usize, numerator: usize, denominator: usize) usize {
+    if (sample_count == 0) return 0;
+    const rank = @max(@as(usize, 1), @divTrunc((sample_count * numerator) + denominator - 1, denominator));
+    return @min(sample_count - 1, rank - 1);
+}
+
+fn nsToMs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
 }
 
 fn setupReportWorkload(entry_count: usize, counterparty_count: usize) !ReportWorkload {

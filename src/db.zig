@@ -30,7 +30,11 @@ pub const Database = struct {
 
         try self.exec("PRAGMA foreign_keys = ON;");
         try self.exec("PRAGMA journal_mode = WAL;");
+        try self.exec("PRAGMA synchronous = NORMAL;");
         try self.exec("PRAGMA busy_timeout = 5000;");
+        try self.exec("PRAGMA cache_size = -64000;");
+        try self.exec("PRAGMA mmap_size = 268435456;");
+        try self.exec("PRAGMA temp_store = MEMORY;");
 
         return self;
     }
@@ -106,6 +110,14 @@ pub const Database = struct {
 
     pub fn commit(self: Database) !void {
         try self.exec("COMMIT;");
+    }
+
+    pub fn setBusyTimeout(self: Database, timeout_ms: i32) !void {
+        if (timeout_ms < 0) return error.InvalidInput;
+
+        var pragma_buf: [64:0]u8 = undefined;
+        const pragma = try std.fmt.bufPrintZ(&pragma_buf, "PRAGMA busy_timeout = {d};", .{timeout_ms});
+        try self.exec(pragma);
     }
 
     pub fn lastInsertRowId(self: Database) i64 {

@@ -1,0 +1,25 @@
+{
+  "packet_kind": "trial_balance_comparative",
+  "book_id": "book-1",
+  "current_as_of_date": "2026-02-28",
+  "prior_as_of_date": "2026-01-31",
+  "decimal_places": 2,
+  "current_total_debits": "1200.00",
+  "current_total_credits": "1200.00",
+  "prior_total_debits": "1000.00",
+  "prior_total_credits": "1000.00",
+  "rows": [
+    {
+      "account_id": "acct-1",
+      "account_number": "1000",
+      "account_name": "Cash",
+      "account_type": "asset",
+      "current_debit": "1200.00",
+      "current_credit": "0.00",
+      "prior_debit": "1000.00",
+      "prior_credit": "0.00",
+      "variance_debit": "200.00",
+      "variance_credit": "0.00"
+    }
+  ]
+}

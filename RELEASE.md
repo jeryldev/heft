@@ -19,6 +19,14 @@ This checklist is for preparing a public release of Heft.
 - run `zig build bench`
 - or run `bash scripts/quality-gate.sh`
 
+## Build reproducibility gate
+
+- record the exact Zig toolchain version used for the release
+- record the vendored SQLite version in the release notes if it changed
+- build from a clean worktree
+- note whether symbols were stripped for release artifacts
+- avoid shipping production builds with debug logging enabled
+
 ## Benchmark gate
 
 Recommended smoke scenarios:

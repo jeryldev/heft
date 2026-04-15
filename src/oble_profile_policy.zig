@@ -70,6 +70,7 @@ pub fn exportPolicyLifecycleBundleJson(database: db.Database, book_id: i64, peri
 }
 
 pub fn importPolicyLifecycleBundleJson(database: db.Database, ctx: *ImportContext, json: []const u8, performed_by: []const u8) !PolicyLifecycleImportResult {
+    try oble_import.validateImportPayload(json);
     var parsed = try std.json.parseFromSlice(PolicyLifecycleBundlePayload, ctx.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 

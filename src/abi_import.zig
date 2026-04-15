@@ -59,7 +59,21 @@ pub fn ledger_oble_import_session_open(handle: ?*LedgerDB, performed_by: ?[*:0]c
 pub fn ledger_oble_import_session_close(session: ?*LedgerOBLEImportSession) void {
     const s = session orelse return;
     s.session.deinit();
+    std.heap.c_allocator.free(s.performed_by_owned);
     std.heap.c_allocator.destroy(s);
+}
+
+pub fn ledger_oble_import_session_set_max_payload(session: ?*LedgerOBLEImportSession, max_payload_bytes: i32) bool {
+    const s = session orelse return common.invalidHandleBool();
+    if (max_payload_bytes <= 0) {
+        common.setError(common.mapError(error.InvalidInput));
+        return false;
+    }
+    s.session.setMaxPayloadBytes(@intCast(max_payload_bytes)) catch |err| {
+        common.setError(common.mapError(err));
+        return false;
+    };
+    return true;
 }
 
 pub fn ledger_oble_import_core_bundle(session: ?*LedgerOBLEImportSession, json: ?[*:0]const u8) i64 {

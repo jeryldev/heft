@@ -14,6 +14,9 @@ The benchmark surface is intended to answer three different questions:
 
 Those are intentionally separated now.
 
+The harness also supports a small warm-up phase so the first cold-cache
+iteration does not dominate the measured output.
+
 ## Main scenario groups
 
 ### Read scenarios
@@ -26,6 +29,7 @@ These run against one seeded reporting workload and print:
 
 - setup time
 - operation time
+- `p50` and `p95` operation latency after warm-up
 
 ### Seed scenarios
 
@@ -46,6 +50,7 @@ These print both:
 
 - setup vs operation time
 - internal close-phase timing
+- `p50` and `p95` operation latency after warm-up
 
 ### Close component scenarios
 
@@ -145,6 +150,23 @@ This runs key C ABI buffer endpoints to measure marshaling plus engine cost:
 
 This runs the main read/report surfaces at multiple dataset sizes.
 
+## Warm-up and percentile output
+
+Benchmarks default to one warm-up iteration:
+
+- `--warmup-iterations 1`
+
+Measured runs now print:
+
+- total time
+- average time
+- `p50`
+- `p95`
+- warm-up count
+
+The percentile figures are especially useful when the first measured run used
+to absorb page-cache or planner warm-up cost.
+
 ## Current interpretation of results
 
 The main lessons from the current harness are:
@@ -159,6 +181,7 @@ The main lessons from the current harness are:
 
 ```bash
 zig build bench
+zig build bench -- --warmup-iterations 2
 zig build bench -- --scenario seed_report --write-iterations 3 --report-entries 5000 --counterparties 128
 zig build bench -- --scenario close_period --write-iterations 5 --close-entries 2000
 zig build bench -- --scenario statement_suite --read-iterations 10 --report-entries 2000 --counterparties 128
@@ -184,6 +207,7 @@ Do not compare benchmark runs casually unless:
 
 - optimization mode is the same
 - scenario parameters are the same
+- warm-up counts are the same
 - setup and operation output are both considered
 
 ## Recommended release benchmark gate

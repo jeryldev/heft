@@ -93,6 +93,26 @@ pub const Entry = struct {
         credit_sum: i64 = 0,
         entry_count: i64 = 0,
     };
+
+    const PostContext = struct {
+        period_id: i64,
+        entry_book_id: i64,
+        rounding_account_id: i64,
+        is_opening_entry: bool,
+        period_end_date_buf: [11]u8,
+        period_end_date_len: usize,
+
+        fn periodEndDate(self: *const PostContext) []const u8 {
+            return self.period_end_date_buf[0..self.period_end_date_len];
+        }
+    };
+
+    const PostingLineTotals = struct {
+        total_base_debits: i64 = 0,
+        total_base_credits: i64 = 0,
+        line_count: i32 = 0,
+    };
+
     const MaxCacheDeltaAccounts: usize = 500;
 
     /// Verifies an account exists, is active (not inactive/archived), and belongs
@@ -177,6 +197,166 @@ pub const Entry = struct {
             cache_stmt.reset();
             cache_stmt.clearBindings();
         }
+    }
+
+    fn loadPostContext(database: db.Database, entry_id: i64) !PostContext {
+        var ctx = PostContext{
+            .period_id = 0,
+            .entry_book_id = 0,
+            .rounding_account_id = 0,
+            .is_opening_entry = false,
+            .period_end_date_buf = undefined,
+            .period_end_date_len = 0,
+        };
+
+        var stmt = try database.prepare(
+            \\SELECT e.status, e.period_id, e.book_id, e.entry_type, e.approval_status,
+            \\  b.require_approval, b.rounding_account_id, p.status, p.end_date
+            \\FROM ledger_entries e
+            \\JOIN ledger_books b ON b.id = e.book_id
+            \\JOIN ledger_periods p ON p.id = e.period_id
+            \\WHERE e.id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, entry_id);
+        const has_row = try stmt.step();
+        if (!has_row) return error.NotFound;
+        const status = EntryStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
+        if (status != .draft) return error.AlreadyPosted;
+        ctx.period_id = stmt.columnInt64(1);
+        ctx.entry_book_id = stmt.columnInt64(2);
+        ctx.rounding_account_id = stmt.columnInt64(6);
+        if (stmt.columnText(3)) |et| {
+            if (std.mem.eql(u8, et, "opening")) ctx.is_opening_entry = true;
+        }
+
+        if (stmt.columnInt(5) == 1) {
+            const approval = stmt.columnText(4).?;
+            if (!std.mem.eql(u8, approval, "approved")) return error.ApprovalRequired;
+        }
+
+        const period_status = stmt.columnText(7).?;
+        if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
+        if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
+        if (stmt.columnText(8)) |end_date| {
+            ctx.period_end_date_len = @min(end_date.len, ctx.period_end_date_buf.len);
+            @memcpy(ctx.period_end_date_buf[0..ctx.period_end_date_len], end_date[0..ctx.period_end_date_len]);
+        }
+
+        return ctx;
+    }
+
+    fn processPostingLines(database: db.Database, entry_id: i64, is_opening_entry: bool, cache_deltas: *std.AutoHashMap(i64, CacheDelta)) !PostingLineTotals {
+        var totals = PostingLineTotals{};
+
+        var read_stmt = try database.prepare(
+            \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.base_debit_amount, el.base_credit_amount, el.fx_rate,
+            \\  el.counterparty_id, cp.status,
+            \\  (SELECT COUNT(*) FROM ledger_subledger_groups sg WHERE sg.gl_account_id = el.account_id)
+            \\FROM ledger_entry_lines el
+            \\LEFT JOIN ledger_subledger_accounts cp ON cp.id = el.counterparty_id
+            \\WHERE el.entry_id = ?;
+        );
+        defer read_stmt.finalize();
+        try read_stmt.bindInt(1, entry_id);
+
+        var update_stmt = try database.prepare("UPDATE ledger_entry_lines SET base_debit_amount = ?, base_credit_amount = ? WHERE id = ?;");
+        defer update_stmt.finalize();
+
+        while (try read_stmt.step()) {
+            totals.line_count += 1;
+            const line_id = read_stmt.columnInt64(0);
+            const acct_id = read_stmt.columnInt64(1);
+            const debit = read_stmt.columnInt64(2);
+            const credit = read_stmt.columnInt64(3);
+            const stored_base_debit = read_stmt.columnInt64(4);
+            const stored_base_credit = read_stmt.columnInt64(5);
+            const fx_rate = read_stmt.columnInt64(6);
+            const cp_id_raw = read_stmt.columnInt64(7);
+            const cp_status = read_stmt.columnText(8);
+            const has_counterparty = cp_id_raw != 0;
+            const is_control = read_stmt.columnInt(9) > 0;
+
+            if (!is_opening_entry) {
+                if (is_control and !has_counterparty) return error.MissingCounterparty;
+                if (!is_control and has_counterparty) return error.InvalidCounterparty;
+            }
+
+            if (has_counterparty) {
+                if (cp_status == null or !std.mem.eql(u8, cp_status.?, "active")) return error.AccountInactive;
+            }
+
+            const base_debit = try money.computeBaseAmount(debit, fx_rate);
+            const base_credit = try money.computeBaseAmount(credit, fx_rate);
+
+            if (stored_base_debit != base_debit or stored_base_credit != base_credit) {
+                try update_stmt.bindInt(1, base_debit);
+                try update_stmt.bindInt(2, base_credit);
+                try update_stmt.bindInt(3, line_id);
+                _ = try update_stmt.step();
+                update_stmt.reset();
+                update_stmt.clearBindings();
+            }
+
+            totals.total_base_debits = std.math.add(i64, totals.total_base_debits, base_debit) catch return error.AmountOverflow;
+            totals.total_base_credits = std.math.add(i64, totals.total_base_credits, base_credit) catch return error.AmountOverflow;
+
+            if (!is_opening_entry) try accumulateCacheDelta(cache_deltas, acct_id, base_debit, base_credit, 1);
+        }
+
+        return totals;
+    }
+
+    fn maybeApplyRoundingAdjustment(database: db.Database, entry_id: i64, performed_by: []const u8, post_ctx: PostContext, totals: *PostingLineTotals, cache_deltas: *std.AutoHashMap(i64, CacheDelta)) !void {
+        if (totals.total_base_debits == totals.total_base_credits) return;
+
+        const diff = std.math.sub(i64, totals.total_base_debits, totals.total_base_credits) catch return error.AmountOverflow;
+        const abs_diff: i64 = if (diff == std.math.minInt(i64)) return error.AmountOverflow else if (diff < 0) -diff else diff;
+        const max_rounding: i64 = 100;
+        if (abs_diff > max_rounding) return error.UnbalancedEntry;
+
+        const rounding_acct_id: ?i64 = if (post_ctx.rounding_account_id > 0) post_ctx.rounding_account_id else null;
+        const ra_id = rounding_acct_id orelse return error.UnbalancedEntry;
+        try verifyAccountPostable(database, ra_id, post_ctx.entry_book_id);
+
+        const next_line = totals.line_count + 1;
+        var rounding_debit: i64 = 0;
+        var rounding_credit: i64 = 0;
+        if (diff > 0) {
+            rounding_credit = diff;
+        } else {
+            rounding_debit = std.math.negate(diff) catch return error.AmountOverflow;
+        }
+
+        var round_stmt = try database.prepare(
+            \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
+            \\  base_debit_amount, base_credit_amount, transaction_currency, fx_rate,
+            \\  account_id, entry_id, description)
+            \\VALUES (?, ?, ?, ?, ?, (SELECT base_currency FROM ledger_books WHERE id = ?),
+            \\  10000000000, ?, ?, 'FX rounding adjustment');
+        );
+        defer round_stmt.finalize();
+        try round_stmt.bindInt(1, @intCast(next_line));
+        try round_stmt.bindInt(2, rounding_debit);
+        try round_stmt.bindInt(3, rounding_credit);
+        try round_stmt.bindInt(4, rounding_debit);
+        try round_stmt.bindInt(5, rounding_credit);
+        try round_stmt.bindInt(6, post_ctx.entry_book_id);
+        try round_stmt.bindInt(7, ra_id);
+        try round_stmt.bindInt(8, entry_id);
+        _ = try round_stmt.step();
+
+        const rounding_line_id = database.lastInsertRowId();
+        try audit.log(database, "entry_line", rounding_line_id, "create", null, null, "FX rounding auto-post", performed_by, post_ctx.entry_book_id);
+        try accumulateCacheDelta(cache_deltas, ra_id, rounding_debit, rounding_credit, 1);
+    }
+
+    fn markEntryPosted(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
+        var stmt = try database.prepare("UPDATE ledger_entries SET status = 'posted', posted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), posted_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindText(1, performed_by);
+        try stmt.bindInt(2, entry_id);
+        _ = try stmt.step();
     }
 
     pub const LineAppender = struct {
@@ -521,204 +701,29 @@ pub const Entry = struct {
     }
 
     pub fn post(database: db.Database, entry_id: i64, performed_by: []const u8) !void {
-        // Step 1: Fetch entry, book, and period metadata in one round-trip.
-        var period_id: i64 = 0;
-        var entry_book_id: i64 = 0;
-        var rounding_account_id: i64 = 0;
-        var is_opening_entry = false;
-        var period_end_date_buf: [11]u8 = undefined;
-        var period_end_date_len: usize = 0;
-
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
+        const post_ctx = try loadPostContext(database, entry_id);
 
-        {
-            var stmt = try database.prepare(
-                \\SELECT e.status, e.period_id, e.book_id, e.entry_type, e.approval_status,
-                \\  b.require_approval, b.rounding_account_id, p.status, p.end_date
-                \\FROM ledger_entries e
-                \\JOIN ledger_books b ON b.id = e.book_id
-                \\JOIN ledger_periods p ON p.id = e.period_id
-                \\WHERE e.id = ?;
-            );
-            defer stmt.finalize();
-            try stmt.bindInt(1, entry_id);
-            const has_row = try stmt.step();
-            if (!has_row) return error.NotFound;
-            const status = EntryStatus.fromString(stmt.columnText(0).?) orelse return error.InvalidInput;
-            if (status != .draft) return error.AlreadyPosted;
-            period_id = stmt.columnInt64(1);
-            entry_book_id = stmt.columnInt64(2);
-            rounding_account_id = stmt.columnInt64(6);
-            if (stmt.columnText(3)) |et| {
-                if (std.mem.eql(u8, et, "opening")) is_opening_entry = true;
-            }
+        var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.c_allocator);
+        defer cache_deltas.deinit();
 
-            if (stmt.columnInt(5) == 1) {
-                const approval = stmt.columnText(4).?;
-                if (!std.mem.eql(u8, approval, "approved")) return error.ApprovalRequired;
-            }
+        var totals = try processPostingLines(database, entry_id, post_ctx.is_opening_entry, &cache_deltas);
+        if (totals.line_count < 2) return error.TooFewLines;
 
-            const period_status = stmt.columnText(7).?;
-            if (std.mem.eql(u8, period_status, "closed")) return error.PeriodClosed;
-            if (std.mem.eql(u8, period_status, "locked")) return error.PeriodLocked;
-            if (stmt.columnText(8)) |end_date| {
-                period_end_date_len = @min(end_date.len, period_end_date_buf.len);
-                @memcpy(period_end_date_buf[0..period_end_date_len], end_date[0..period_end_date_len]);
-            }
-        }
-        const period_end_date = period_end_date_buf[0..period_end_date_len];
+        try maybeApplyRoundingAdjustment(database, entry_id, performed_by, post_ctx, &totals, &cache_deltas);
 
-        // Steps 3b + 4 + 5 combined into a single pass over entry_lines.
-        // Previously this was 3 separate SELECT queries + 1 SUM query on the same table.
-        // Single-pass approach: one SELECT with correlated subquery for control account
-        // check, then compute base amounts, verify balance, and update cache in the same
-        // iteration. Reduces DB round-trips from 6 to 3 (1 read + 1 update reuse + 1 cache reuse).
-        {
-            var read_stmt = try database.prepare(
-                \\SELECT el.id, el.account_id, el.debit_amount, el.credit_amount, el.base_debit_amount, el.base_credit_amount, el.fx_rate,
-                \\  el.counterparty_id, cp.status,
-                \\  (SELECT COUNT(*) FROM ledger_subledger_groups sg WHERE sg.gl_account_id = el.account_id)
-                \\FROM ledger_entry_lines el
-                \\LEFT JOIN ledger_subledger_accounts cp ON cp.id = el.counterparty_id
-                \\WHERE el.entry_id = ?;
-            );
-            defer read_stmt.finalize();
-            try read_stmt.bindInt(1, entry_id);
-
-            var update_stmt = try database.prepare("UPDATE ledger_entry_lines SET base_debit_amount = ?, base_credit_amount = ? WHERE id = ?;");
-            defer update_stmt.finalize();
-
-            // Bounded by the number of distinct accounts on one entry, which is
-            // small in normal use and still transitively bounded by engine rules.
-            var cache_deltas = std.AutoHashMap(i64, CacheDelta).init(std.heap.c_allocator);
-            defer cache_deltas.deinit();
-
-            var total_base_debits: i64 = 0;
-            var total_base_credits: i64 = 0;
-            var line_count: i32 = 0;
-
-            while (try read_stmt.step()) {
-                line_count += 1;
-                const line_id = read_stmt.columnInt64(0);
-                const acct_id = read_stmt.columnInt64(1);
-                const debit = read_stmt.columnInt64(2);
-                const credit = read_stmt.columnInt64(3);
-                const stored_base_debit = read_stmt.columnInt64(4);
-                const stored_base_credit = read_stmt.columnInt64(5);
-                const fx_rate = read_stmt.columnInt64(6);
-                const cp_id_raw = read_stmt.columnInt64(7);
-                const cp_status = read_stmt.columnText(8);
-                const has_counterparty = cp_id_raw != 0;
-                const is_control = read_stmt.columnInt(9) > 0;
-
-                // Control account enforcement (skipped for opening entries — they
-                // bring forward control account balances without counterparty,
-                // which is correct because per-counterparty open items are
-                // tracked independently of the GL control account balance)
-                if (!is_opening_entry) {
-                    if (is_control and !has_counterparty) return error.MissingCounterparty;
-                    if (!is_control and has_counterparty) return error.InvalidCounterparty;
-                }
-
-                // Counterparty status enforcement
-                if (has_counterparty) {
-                    if (cp_status == null or !std.mem.eql(u8, cp_status.?, "active")) return error.AccountInactive;
-                }
-
-                // Compute base amounts
-                const base_debit = try money.computeBaseAmount(debit, fx_rate);
-                const base_credit = try money.computeBaseAmount(credit, fx_rate);
-
-                if (stored_base_debit != base_debit or stored_base_credit != base_credit) {
-                    try update_stmt.bindInt(1, base_debit);
-                    try update_stmt.bindInt(2, base_credit);
-                    try update_stmt.bindInt(3, line_id);
-                    _ = try update_stmt.step();
-                    update_stmt.reset();
-                    update_stmt.clearBindings();
-                }
-
-                total_base_debits = std.math.add(i64, total_base_debits, base_debit) catch return error.AmountOverflow;
-                total_base_credits = std.math.add(i64, total_base_credits, base_credit) catch return error.AmountOverflow;
-
-                if (!is_opening_entry) try accumulateCacheDelta(&cache_deltas, acct_id, base_debit, base_credit, 1);
-            }
-
-            if (line_count < 2) return error.TooFewLines;
-
-            // Verify balance equation — auto-post rounding if book has rounding account
-            if (total_base_debits != total_base_credits) {
-                const diff = std.math.sub(i64, total_base_debits, total_base_credits) catch return error.AmountOverflow;
-                const abs_diff: i64 = if (diff == std.math.minInt(i64)) return error.AmountOverflow else if (diff < 0) -diff else diff;
-                const max_rounding: i64 = 100; // 0.000001 in 10^8 scale — sub-cent tolerance
-
-                if (abs_diff > max_rounding) return error.UnbalancedEntry;
-
-                // Check if book has a rounding account
-                const rounding_acct_id: ?i64 = if (rounding_account_id > 0) rounding_account_id else null;
-
-                if (rounding_acct_id) |ra_id| {
-                    // Rounding line bypasses addLine, so validate the account
-                    // here. An archived/inactive or cross-book rounding account
-                    // would otherwise silently accept posts via the raw INSERT.
-                    try verifyAccountPostable(database, ra_id, entry_book_id);
-                    // Auto-add rounding line
-                    const next_line = line_count + 1;
-                    var rounding_debit: i64 = 0;
-                    var rounding_credit: i64 = 0;
-                    if (diff > 0) {
-                        rounding_credit = diff; // debits exceed credits, add rounding credit
-                    } else {
-                        rounding_debit = std.math.negate(diff) catch return error.AmountOverflow;
-                    }
-
-                    var round_stmt = try database.prepare(
-                        \\INSERT INTO ledger_entry_lines (line_number, debit_amount, credit_amount,
-                        \\  base_debit_amount, base_credit_amount, transaction_currency, fx_rate,
-                        \\  account_id, entry_id, description)
-                        \\VALUES (?, ?, ?, ?, ?, (SELECT base_currency FROM ledger_books WHERE id = ?),
-                        \\  10000000000, ?, ?, 'FX rounding adjustment');
-                    );
-                    defer round_stmt.finalize();
-                    try round_stmt.bindInt(1, @intCast(next_line));
-                    try round_stmt.bindInt(2, rounding_debit);
-                    try round_stmt.bindInt(3, rounding_credit);
-                    try round_stmt.bindInt(4, rounding_debit);
-                    try round_stmt.bindInt(5, rounding_credit);
-                    try round_stmt.bindInt(6, entry_book_id);
-                    try round_stmt.bindInt(7, ra_id);
-                    try round_stmt.bindInt(8, entry_id);
-                    _ = try round_stmt.step();
-
-                    const rounding_line_id = database.lastInsertRowId();
-                    try audit.log(database, "entry_line", rounding_line_id, "create", null, null, "FX rounding auto-post", performed_by, entry_book_id);
-
-                    try accumulateCacheDelta(&cache_deltas, ra_id, rounding_debit, rounding_credit, 1);
-                } else {
-                    return error.UnbalancedEntry;
-                }
-            }
-
-            if (!is_opening_entry) try flushCacheDeltas(database, &cache_deltas, period_id, entry_book_id);
+        if (!post_ctx.is_opening_entry) {
+            try flushCacheDeltas(database, &cache_deltas, post_ctx.period_id, post_ctx.entry_book_id);
         }
 
-        // Step 6: Update entry status to 'posted'
-        {
-            var stmt = try database.prepare("UPDATE ledger_entries SET status = 'posted', posted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), posted_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?;");
-            defer stmt.finalize();
-            try stmt.bindText(1, performed_by);
-            try stmt.bindInt(2, entry_id);
-            _ = try stmt.step();
+        try markEntryPosted(database, entry_id, performed_by);
+
+        if (!post_ctx.is_opening_entry) {
+            try markFuturePeriodsStale(database, post_ctx.entry_book_id, post_ctx.periodEndDate());
         }
 
-        // Step 7: Mark future periods stale (skipped for opening entries)
-        if (!is_opening_entry) {
-            try markFuturePeriodsStale(database, entry_book_id, period_end_date);
-        }
-
-        // Step 8: Audit log
-        try audit.log(database, "entry", entry_id, "post", "status", "draft", "posted", performed_by, entry_book_id);
+        try audit.log(database, "entry", entry_id, "post", "status", "draft", "posted", performed_by, post_ctx.entry_book_id);
 
         if (owns_txn) try database.commit();
     }

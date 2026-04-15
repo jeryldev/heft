@@ -7,6 +7,7 @@ const SCHEMA_VERSION = heft.schema.SCHEMA_VERSION;
 const ledger_open_raw = abi.ledger_open;
 const ledger_close = abi.ledger_close;
 const ledger_version = abi.ledger_version;
+const ledger_set_busy_timeout = abi.ledger_set_busy_timeout;
 const ledger_create_book = abi.ledger_create_book;
 const ledger_create_account = abi.ledger_create_account;
 const ledger_create_period = abi.ledger_create_period;
@@ -169,6 +170,7 @@ const ledger_oble_export_dimension_rollup_result = abi.ledger_oble_export_dimens
 const ledger_oble_export_budget_analysis_result = abi.ledger_oble_export_budget_analysis_result;
 const ledger_oble_import_session_open = abi.ledger_oble_import_session_open;
 const ledger_oble_import_session_close = abi.ledger_oble_import_session_close;
+const ledger_oble_import_session_set_max_payload = abi.ledger_oble_import_session_set_max_payload;
 const ledger_oble_import_core_bundle = abi.ledger_oble_import_core_bundle;
 const ledger_oble_import_entry = abi.ledger_oble_import_entry;
 const ledger_oble_import_counterparties = abi.ledger_oble_import_counterparties;
@@ -349,6 +351,8 @@ test "header error codes match public mapError contract" {
         "HEFT_BUFFER_TOO_SMALL               = 25",
         "HEFT_PERIOD_NOT_IN_BALANCE          = 32",
         "HEFT_EQUITY_ALLOCATION_TOTAL_INVALID = 36",
+        "HEFT_TOO_MANY_IMPORT_IDS            = 39",
+        "HEFT_PAYLOAD_TOO_LARGE              = 40",
         "HEFT_SQLITE_BIND_FAILED             = 94",
     };
     for (required) |needle| {
@@ -2332,6 +2336,34 @@ test "C ABI: OBLE import session null handle protection" {
     try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
 
     try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_resolve_id(null, 1, "book-1"));
+    try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
+}
+
+test "C ABI: OBLE import session payload limit rejects oversized payloads" {
+    defer cleanupTestFile("test-cabi-oble-import-payload-limit.ledger");
+    const target = ledger_open("test-cabi-oble-import-payload-limit.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(target);
+
+    const session = ledger_oble_import_session_open(target, "admin") orelse return error.TestUnexpectedResult;
+    defer ledger_oble_import_session_close(session);
+
+    try std.testing.expect(ledger_oble_import_session_set_max_payload(session, 16));
+
+    var oversized: [32:0]u8 = undefined;
+    @memcpy(oversized[0..31], "0123456789012345678901234567890");
+    oversized[31] = 0;
+
+    try std.testing.expectEqual(@as(i64, -1), ledger_oble_import_core_bundle(session, &oversized));
+    try std.testing.expectEqual(@as(i32, 40), ledger_last_error());
+}
+
+test "C ABI: busy timeout setter validates input" {
+    defer cleanupTestFile("test-cabi-busy-timeout.ledger");
+    const handle = ledger_open("test-cabi-busy-timeout.ledger") orelse return error.TestUnexpectedResult;
+    defer ledger_close(handle);
+
+    try std.testing.expect(ledger_set_busy_timeout(handle, 250));
+    try std.testing.expect(!ledger_set_busy_timeout(handle, -1));
     try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
 }
 

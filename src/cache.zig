@@ -160,6 +160,25 @@ fn readCacheStale(database: db.Database, book_id: i64, period_id: i64, account_i
     return -1;
 }
 
+fn readCacheSums(database: db.Database, book_id: i64, period_id: i64, account_id: i64) !struct { debit: i64, credit: i64, balance: i64 } {
+    var stmt = try database.prepare(
+        \\SELECT debit_sum, credit_sum, balance FROM ledger_account_balances
+        \\WHERE book_id = ? AND period_id = ? AND account_id = ?;
+    );
+    defer stmt.finalize();
+    try stmt.bindInt(1, book_id);
+    try stmt.bindInt(2, period_id);
+    try stmt.bindInt(3, account_id);
+    if (try stmt.step()) {
+        return .{
+            .debit = stmt.columnInt64(0),
+            .credit = stmt.columnInt64(1),
+            .balance = stmt.columnInt64(2),
+        };
+    }
+    return error.NotFound;
+}
+
 test "recalculateStale fixes stale cache" {
     const database = try setupTestDb();
     defer database.close();
@@ -276,6 +295,42 @@ test "recalculateStale after void shows zero cache" {
         try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(0));
         try std.testing.expectEqual(@as(i64, 0), stmt.columnInt64(1));
     }
+}
+
+test "cache lifecycle: future periods become stale and recalculate restores corrupted rows" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    _ = try period_mod.Period.create(database, 1, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    try postEntry(database, "FEB-001", "2026-02-15", 2, 1, 2, 500_000_000_00);
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 2, 1));
+
+    // A backdated posting invalidates downstream cache rows because future
+    // reports depend on cumulative balances, not just per-period activity.
+    try postEntry(database, "JAN-001", "2026-01-20", 1, 1, 2, 1_000_000_000_00);
+    try std.testing.expectEqual(@as(i32, 1), try readCacheStale(database, 1, 2, 1));
+    try std.testing.expectEqual(@as(i32, 1), try readCacheStale(database, 1, 2, 2));
+
+    try corruptCache(database, 1, 2);
+
+    const fixed = try recalculateAllStale(database, 1);
+    try std.testing.expectEqual(@as(u32, 2), fixed);
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 2, 1));
+    try std.testing.expectEqual(@as(i32, 0), try readCacheStale(database, 1, 2, 2));
+
+    const cash_cache = try readCacheSums(database, 1, 2, 1);
+    const payable_cache = try readCacheSums(database, 1, 2, 2);
+    try std.testing.expectEqual(@as(i64, 500_000_000_00), cash_cache.debit);
+    try std.testing.expectEqual(@as(i64, 0), cash_cache.credit);
+    try std.testing.expectEqual(@as(i64, 500_000_000_00), cash_cache.balance);
+    try std.testing.expectEqual(@as(i64, 0), payable_cache.debit);
+    try std.testing.expectEqual(@as(i64, 500_000_000_00), payable_cache.credit);
+    try std.testing.expectEqual(@as(i64, -500_000_000_00), payable_cache.balance);
+
+    const trial_balance = try report.trialBalance(database, 1, "2026-02-28");
+    defer trial_balance.deinit();
+    try std.testing.expect(trial_balance.rows.len >= 2);
 }
 
 test "recalculateStale with multiple accounts in same period" {

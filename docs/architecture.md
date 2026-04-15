@@ -129,6 +129,15 @@ Supporting mechanisms:
 - targeted recalculation of stale periods
 - verification routines that compare cache state to recomputed truth
 
+One tradeoff is worth naming directly: when a post backdates into an earlier
+period, Heft marks later cached periods stale so reports and close flows cannot
+silently rely on invalid derived balances. That is the right correctness choice,
+but sequential close work across many periods can trigger repeated stale
+recalculation if you close one period at a time. In practice that is a lifecycle
+cost, not a posting hot-path cost, and it is one reason the benchmark surface
+measures `recalculate_stale`, `close_period`, and opening-entry generation
+separately.
+
 ## Reporting model
 
 Reporting is intentionally split into two styles:

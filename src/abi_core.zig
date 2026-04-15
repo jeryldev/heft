@@ -4,6 +4,15 @@ const common = @import("abi_common.zig");
 
 const LedgerDB = common.LedgerDB;
 
+pub fn ledger_set_busy_timeout(handle: ?*LedgerDB, timeout_ms: i32) bool {
+    const h = handle orelse return common.invalidHandleBool();
+    h.sqlite.setBusyTimeout(timeout_ms) catch |err| {
+        common.setError(common.mapError(err));
+        return false;
+    };
+    return true;
+}
+
 pub fn ledger_create_book(handle: ?*LedgerDB, name: [*:0]const u8, base_currency: [*:0]const u8, decimal_places: i32, performed_by: [*:0]const u8) i64 {
     const h = handle orelse return common.invalidHandleI64();
     return heft.book.Book.create(h.sqlite, std.mem.span(name), std.mem.span(base_currency), decimal_places, std.mem.span(performed_by)) catch |err| {
