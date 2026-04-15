@@ -53,6 +53,8 @@ standard boundary or testable conformance surface.
 | Classifications and Report Structures | Confirmed | Heft now has a classification profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports classified, statement, comparative-statement, and equity result packets as distinct derived-output layers. |
 | Dimensions and Analytics | Confirmed | Heft now has a dimension profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports summary and rollup result packets as a distinct derived-output layer. |
 | Budgets and Planning | Confirmed | Heft now has a budget profile bundle with public Zig and C export surfaces plus session-oriented Zig import and logical-ID resolution, and it now exports budget-analysis result packets as a distinct derived-output layer. |
+| Indirect Cash Flow and Integrity Result Packets | Confirmed | Heft now exports indirect cash-flow and integrity-summary result packets as explicit derived-output layers with public Zig and C surfaces plus conformance coverage. |
+| Translated Statement Result Packets | Confirmed | Heft now exports translated trial balance, translated income statement, and translated balance sheet packets as explicit derived-output layers with public Zig and C surfaces plus conformance coverage. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
@@ -254,12 +256,43 @@ What is still missing:
 - a decision on whether budget-vs-actual belongs in this profile or a later
   reporting-oriented extension, now that the first result packet exists
 
+## OBLE-0017 Indirect Cash Flow and Integrity Result Packets
+
+Status: `Confirmed`
+
+Heft now has:
+
+- indirect cash-flow result packet export
+- integrity-summary result packet export
+- public Zig and C export surfaces
+- direct packet tests
+- dedicated conformance coverage
+
+These packets are intentionally export-first derived outputs rather than a new
+import-heavy lifecycle boundary.
+
+## OBLE-0018 Translated Statement Result Packets
+
+Status: `Confirmed`
+
+Heft now has:
+
+- translated trial balance result packet export
+- translated income statement result packet export
+- translated balance sheet result packet export
+- public Zig and C export surfaces
+- direct packet tests
+- dedicated conformance coverage
+
+These packets give the multi-currency/reporting layer a real portable
+presentation-currency output boundary.
+
 ## Biggest remaining gaps
 
 The most important gaps are now about completeness, not first principles.
 
-1. implement packet/profile boundaries for classifications, dimensions, and budgets
-2. broaden packet coverage for close/reopen bundles and richer multi-currency examples
+1. broaden packet coverage for close/reopen bundles and richer multi-currency examples
+2. decide whether audit/provenance should become a portable packet family beyond integrity summaries
 3. automated schema validation of exported payloads
 4. broader public-surface exposure beyond the current Zig bridge and minimal C import session
 5. fuller live-export validation against a bundled draft-2020-12 schema validator once one is adopted

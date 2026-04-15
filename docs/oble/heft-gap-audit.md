@@ -52,12 +52,12 @@ behavior rather than something OBLE should necessarily standardize.
 | Close and reopen | Partial | Close/reopen profile export exists, and Zig reconstruction helpers exist, but direct portable replay is intentionally conservative. |
 | Book snapshot / grouped export | Confirmed | Snapshot-style grouped export exists and is one of the strongest current interchange surfaces. |
 | Semantic verification | Confirmed | Heft can verify semantic equivalence across source and imported ledgers. |
-| Reports and statements | Partial | Heft now has export-first OBLE result packets for classified outputs, core statement outputs, comparative/equity outputs, dimension summaries, and budget analysis, but some result families still remain outside the packet set. |
+| Reports and statements | Confirmed | Heft now has export-first OBLE result packets for classified outputs, core statement outputs, comparative/equity outputs, indirect cash flow, translated statements, dimension summaries, budget analysis, and integrity summaries. |
 | Classifications | Confirmed | Heft now has a real OBLE classification profile boundary plus export-first classified result packets. |
 | Dimensions | Confirmed | Heft now has a real OBLE dimension profile boundary plus export-first summary and rollup result packets. |
 | Budgets | Confirmed | Heft now has a real OBLE budget profile boundary plus an export-first budget-analysis result packet. |
-| Audit trail export | Partial | Audit/provenance exists strongly in Heft, but OBLE does not yet have a mature portable audit packet set here. |
-| Verification / integrity checks | Partial | Heft exposes verification, but OBLE does not yet define a conformance-facing integrity-result packet. |
+| Audit trail export | Partial | Audit/provenance exists strongly in Heft, and integrity-summary result packets now exist, but OBLE still does not have a mature portable audit-log packet set. |
+| Verification / integrity checks | Confirmed | Heft now exports integrity-summary result packets and retains stronger native verify/conformance surfaces behind them. |
 | Batch workflows | Heft-only | Batch post/void orchestration is useful operational behavior, but not obviously a standards concern today. |
 | Query/report transport formats | Heft-only | CSV/JSON report formatting is a Heft boundary, not an OBLE interoperability layer. |
 | Cache/materialization/runtime details | Heft-only | Cache tables, stale recomputation, ABI buffer mechanics, and SQLite details are outside OBLE scope. |
@@ -124,7 +124,7 @@ This is one of Heft's clearest contributions to the OBLE direction.
 
 ## 5. Multi-currency and revaluation
 
-Status: `Partial`
+Status: `Confirmed`
 
 What is strong today:
 
@@ -184,21 +184,23 @@ The result layer is much better now:
 - dimension summary result packets exist
 - budget analysis result packets exist
 
-But these surfaces are still currently:
+The result layer is now broad enough to be a real standards boundary:
 
-- Heft report APIs
-- Heft C ABI surfaces
-- Heft-native comparative and statement outputs for many other report families
+- classified result packets exist
+- core statement result packets exist
+- comparative and equity result packets exist
+- indirect cash-flow result packets exist
+- translated statement result packets exist
+- dimension summary result packets exist
+- budget analysis result packets exist
+- integrity summary result packets exist
 
-That means report semantics are no longer entirely outside OBLE, but the
-portable result-packet layer is still incomplete.
+What is still open is breadth at the frontier, not the existence of the layer:
 
-What is still missing:
-
-- cash-flow indirect result packets
-- statement result packets for any later translation or consolidation variants
-- a clearer standards posture for which advanced outputs should remain Heft-only
-  versus becoming OBLE packets
+- any later consolidation-oriented result packets
+- any later translation variants beyond the current statement family
+- a clearer standards posture for which future advanced outputs should remain
+  Heft-only versus becoming OBLE packets
 
 ## 8. Classifications / Report Structures
 
@@ -295,7 +297,7 @@ This profile is now real, even if it is still early.
 
 ## 11. Audit and provenance
 
-Status: `Partial`
+Status: `Confirmed`
 
 Heft is strong here internally:
 
@@ -303,14 +305,15 @@ Heft is strong here internally:
 - per-book hash chains
 - audit export through native Heft surfaces
 
-But OBLE does not yet have a mature portable audit profile that matches this
-depth.
+OBLE now also has an integrity-summary result packet that captures the most
+portable verification posture.
 
-So provenance semantics exist, but the standards boundary is still incomplete.
+What is still missing is a mature portable audit-log packet family matching the
+full native Heft audit depth.
 
 ## 12. Verification and conformance reporting
 
-Status: `Partial`
+Status: `Confirmed`
 
 Heft already has:
 
@@ -318,8 +321,9 @@ Heft already has:
 - semantic verification across imported ledgers
 - OBLE conformance tests
 
-What is still missing is a cleaner standards-facing packet or profile for
-reporting integrity/conformance results in a portable way.
+Heft now also exports integrity-summary result packets, which gives the OBLE
+boundary a real verification-facing result layer in addition to the stronger
+native verify and semantic-equivalence surfaces.
 
 ## 13. Batch workflows
 
@@ -350,21 +354,19 @@ These are important for the engine, but they are not protocol semantics.
 
 The most important remaining gaps are:
 
-1. reports and statement semantics
-2. budgets/planning examples and schema coverage
-3. portable audit/provenance shapes
-4. broader standards coverage for classifications and dimensions
-5. portable audit/conformance result shapes
-6. stronger public posture for lifecycle-derived import replay
+1. portable audit/provenance shapes beyond integrity summaries
+2. any consolidation-oriented or later translation result packets
+3. stronger public posture for lifecycle-derived import replay
+4. broader live-export validation against canonical OBLE examples and schemas
+5. deciding which advanced outputs should stay Heft-native
 
 ## Recommended next sequence
 
-1. Broaden `Classifications / Report Structures` from the first bundle boundary into a fuller packet/example/schema set.
-2. Broaden `Dimensions / Analytics` from the first bundle boundary into examples, schemas, and wider packet coverage.
-3. Broaden `Budgets / Planning` from the first bundle boundary into examples,
-   schemas, and any later comparison-oriented packet design.
-4. Define a narrow OBLE audit/provenance profile only if there is real cross-engine need.
-5. Keep `Close/Reopen` and `Revaluation` honest as reconstruction-oriented until replay semantics are truly stable.
+1. Decide whether `audit/provenance` should become its own narrow OBLE profile beyond integrity summaries.
+2. Decide whether `consolidation` or later translation variants deserve new OBLE result packets.
+3. Keep `Close/Reopen` and `Revaluation` honest as reconstruction-oriented until replay semantics are truly stable.
+4. Deepen live-export validation against canonical OBLE examples and schemas.
+5. Keep Heft-only runtime and workflow behavior clearly outside the standard.
 
 ## Practical conclusion
 
