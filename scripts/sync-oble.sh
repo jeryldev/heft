@@ -23,9 +23,9 @@ mkdir -p "$TARGET"
 rm -rf "$TARGET/examples" "$TARGET/schema"
 mkdir -p "$TARGET/examples" "$TARGET/schema"
 
-find "$TARGET" -maxdepth 1 -type f \( -name '000*.md' -o -name 'introduction.md' -o -name 'glossary.md' -o -name 'profile-matrix.md' -o -name 'import-boundary.md' -o -name 'conformance-checklist.md' -o -name 'heft-conformance.md' \) -delete
+find "$TARGET" -maxdepth 1 -type f \( -name '0*.md' -o -name 'introduction.md' -o -name 'glossary.md' -o -name 'profile-matrix.md' -o -name 'import-boundary.md' -o -name 'conformance-checklist.md' -o -name 'heft-conformance.md' \) -delete
 
-cp "$SOURCE/spec"/000*.md "$TARGET/"
+cp "$SOURCE/spec"/0*.md "$TARGET/"
 cp "$SOURCE/spec"/introduction.md "$TARGET/"
 cp "$SOURCE/spec"/glossary.md "$TARGET/"
 cp "$SOURCE/examples"/* "$TARGET/examples/"

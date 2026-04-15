@@ -20,6 +20,8 @@ pub const ImportContext = struct {
     line_ids: std.StringHashMap(i64),
     counterparty_ids: std.StringHashMap(i64),
     open_item_ids: std.StringHashMap(i64),
+    classification_ids: std.StringHashMap(i64),
+    classification_node_ids: std.StringHashMap(i64),
 
     pub fn init(allocator: std.mem.Allocator) ImportContext {
         return .{
@@ -32,6 +34,8 @@ pub const ImportContext = struct {
             .line_ids = std.StringHashMap(i64).init(allocator),
             .counterparty_ids = std.StringHashMap(i64).init(allocator),
             .open_item_ids = std.StringHashMap(i64).init(allocator),
+            .classification_ids = std.StringHashMap(i64).init(allocator),
+            .classification_node_ids = std.StringHashMap(i64).init(allocator),
         };
     }
 
@@ -43,6 +47,8 @@ pub const ImportContext = struct {
         self.line_ids.deinit();
         self.counterparty_ids.deinit();
         self.open_item_ids.deinit();
+        self.classification_ids.deinit();
+        self.classification_node_ids.deinit();
         self.id_arena.deinit();
     }
 

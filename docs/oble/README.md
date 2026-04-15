@@ -22,12 +22,16 @@ What to read first:
 - in the canonical repo:
   - [spec/introduction.md](https://github.com/jeryldev/oble/blob/main/spec/introduction.md)
   - [spec/0000-vision.md](https://github.com/jeryldev/oble/blob/main/spec/0000-vision.md)
+  - [spec/0009-classifications-and-report-structures.md](https://github.com/jeryldev/oble/blob/main/spec/0009-classifications-and-report-structures.md)
+  - [spec/0010-dimensions-and-analytics.md](https://github.com/jeryldev/oble/blob/main/spec/0010-dimensions-and-analytics.md)
+  - [spec/0011-budgets-and-planning.md](https://github.com/jeryldev/oble/blob/main/spec/0011-budgets-and-planning.md)
   - [profiles/profile-matrix.md](https://github.com/jeryldev/oble/blob/main/profiles/profile-matrix.md)
   - [conformance/conformance-checklist.md](https://github.com/jeryldev/oble/blob/main/conformance/conformance-checklist.md)
 
 Inside `Heft`, the most relevant companion docs are:
 
 - [Source of Truth](source-of-truth.md)
+- [Heft Gap Audit](heft-gap-audit.md)
 - [Heft vs OBLE](../architecture/heft-vs-oble.md)
 - [OBLE Repo Split Plan](../architecture/oble-repo-split-plan.md)
 

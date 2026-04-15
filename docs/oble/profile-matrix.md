@@ -35,6 +35,9 @@ Portable layers that build on the core for richer accounting behavior:
 - multi-currency
 - close/reopen lifecycle
 - policy/designations
+- classifications/report structures
+- dimensions/analytics
+- budgets/planning
 
 ### Runtime
 
@@ -55,6 +58,9 @@ Implementation details that are outside OBLE itself:
 | `Multi-Currency` | `0006` | core entry export with foreign-currency lines, revaluation packet export | Emerging |
 | `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
+| `Classifications / Report Structures` | `0009` | classification profile bundle (Zig-first) | Emerging |
+| `Dimensions / Analytics` | `0010` | none yet | Draft-defined |
+| `Budgets / Planning` | `0011` | none yet | Draft-defined |
 
 ## Public-boundary posture
 
@@ -173,6 +179,50 @@ This profile adds:
 - import safe user-authored policy state
 - preserve designation identity without conflating it with core ledger state
 
+## 6. Classifications / Report Structures
+
+This profile adds:
+
+- classification definitions
+- hierarchical report nodes
+- account bindings for report structure
+- report intent such as balance sheet or cash flow
+
+### Minimum expectations
+
+- import/export classification metadata
+- preserve hierarchical node ordering
+- preserve account binding identity
+- keep report structure distinct from chart-of-accounts identity
+
+## 7. Dimensions / Analytics
+
+This profile adds:
+
+- dimension definitions
+- dimension values
+- line-level analytical assignments
+
+### Minimum expectations
+
+- import/export dimensions and values
+- preserve line assignment semantics
+- keep analytical tags separate from balancing semantics
+
+## 8. Budgets / Planning
+
+This profile adds:
+
+- budget definitions
+- budget lines
+- budget lifecycle state
+
+### Minimum expectations
+
+- import/export budget metadata
+- preserve account/period planning line intent
+- keep planning state distinct from posted ledger history
+
 ## Stable versus emerging areas
 
 ### Strongest today
@@ -188,6 +238,9 @@ real export/import coverage.
 
 - `Multi-Currency`
 - `Close / Reopen`
+- `Classifications / Report Structures`
+- `Dimensions / Analytics`
+- `Budgets / Planning`
 
 These already have meaningful export coverage, but they still need broader
 packet breadth and stronger interoperability posture before they should be
@@ -214,6 +267,7 @@ Good claims:
 - "Heft implements the OBLE Counterparty/Open Item profile."
 - "Heft implements the OBLE Policy/Designations profile."
 - "Heft has emerging support for the OBLE Multi-Currency and Close/Reopen profiles."
+- "OBLE defines draft profiles for classifications, dimensions, and budgets that are not yet widely implemented."
 
 Weaker claims that should be avoided for now:
 
