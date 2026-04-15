@@ -50,9 +50,9 @@ standard boundary or testable conformance surface.
 | Multi-Currency Semantics | Confirmed | Heft stores transaction amounts, base amounts, and FX rates with exact integer arithmetic and revaluation flows. |
 | Close and Reopen Profile | Confirmed | Heft implements close-generated state, opening carry-forward, reopen cascades, and stale derived-state invalidation. |
 | Designations and Policy Profiles | Confirmed | Heft already uses designation-driven book policy heavily. |
-| Classifications and Report Structures | Partial | Heft now has an initial Zig-first classification profile bundle for metadata and ordered nodes, but broader packet coverage, public-surface exposure, and canonical OBLE examples/schemas are still missing. |
-| Dimensions and Analytics | Partial | Heft now has an initial Zig-first dimension profile bundle for definitions, values, and line assignments, but broader packet coverage, public-surface exposure, and canonical OBLE examples/schemas are still missing. |
-| Budgets and Planning | Draft-dependent | Heft has budget workflow semantics, but no stable OBLE packet/profile boundary yet. |
+| Classifications and Report Structures | Partial | Heft now has an initial Zig-first classification profile bundle for metadata and ordered nodes, but broader packet coverage, examples, and schemas are still missing. |
+| Dimensions and Analytics | Partial | Heft now has an initial Zig-first dimension profile bundle for definitions, values, and line assignments, but broader packet coverage, examples, and schemas are still missing. |
+| Budgets and Planning | Partial | Heft now has an initial Zig-first budget profile bundle for budget metadata, lifecycle state, and budget lines, but broader packet coverage, examples, and schemas are still missing. |
 | Example payload validation | Confirmed | The published OBLE examples map to draft schemas, and Heft's implemented packet shapes follow the same canonical JSON conventions. |
 | Fixture-driven OBLE conformance | Confirmed | Heft now has dedicated conformance tests plus executable round-trip tests for the implemented OBLE packets and profiles. |
 | Canonical `Heft -> OBLE` export | Confirmed | Heft exports canonical OBLE JSON for `Book`, `Account[]`, `Period[]`, `Entry`, `BookSnapshot`, `Counterparty[]`, `ReversalPair`, `CounterpartyOpenItem`, `PolicyProfile`, `CloseReopenProfile`, and `RevaluationPacket`. |
@@ -180,7 +180,7 @@ safe user-authored configuration layer:
 
 ## OBLE-0009 Classifications and Report Structures
 
-Status: `Partial`
+Status: `Draft-dependent`
 
 Heft already has:
 
@@ -189,23 +189,11 @@ Heft already has:
 - classified report behavior
 - cash-flow and classified trial-balance semantics
 
-Heft now also has an initial Zig-first classification profile bundle boundary
-for:
-
-- classification metadata
-- ordered nodes
-- account-binding nodes
-
-What is still missing:
-
-- broader packet breadth
-- public ABI exposure
-- canonical OBLE examples and schemas for this profile
-- a clearer decision on whether rendered classified reports should also become OBLE packets
+What is missing is the explicit OBLE packet/profile boundary.
 
 ## OBLE-0010 Dimensions and Analytics
 
-Status: `Partial`
+Status: `Draft-dependent`
 
 Heft already has:
 
@@ -214,18 +202,7 @@ Heft already has:
 - line assignments
 - dimension summaries and rollups
 
-Heft now also has an initial Zig-first dimension profile bundle boundary for:
-
-- dimension definitions
-- dimension values
-- line-level assignments
-
-What is still missing:
-
-- broader packet breadth
-- public ABI exposure
-- canonical OBLE examples and schemas for this profile
-- a clearer decision on whether summaries and rollups should become OBLE packet families
+But OBLE does not yet have a stable implemented packet set for this area in Heft.
 
 ## OBLE-0011 Budgets and Planning
 
@@ -244,12 +221,11 @@ But this remains a Heft-native capability rather than an implemented OBLE packet
 
 The most important gaps are now about completeness, not first principles.
 
-1. broaden the new classification and dimension boundaries into examples, schemas, and wider packet coverage
-2. implement packet/profile boundaries for budgets
-3. broaden packet coverage for close/reopen bundles and richer multi-currency examples
-4. automated schema validation of exported payloads
-5. broader public-surface exposure beyond the current Zig bridge and minimal C import session
-6. fuller live-export validation against a bundled draft-2020-12 schema validator once one is adopted
+1. implement packet/profile boundaries for classifications, dimensions, and budgets
+2. broaden packet coverage for close/reopen bundles and richer multi-currency examples
+3. automated schema validation of exported payloads
+4. broader public-surface exposure beyond the current Zig bridge and minimal C import session
+5. fuller live-export validation against a bundled draft-2020-12 schema validator once one is adopted
 
 ## Current practical claim
 
@@ -271,8 +247,7 @@ the draft set and more integration boundaries.
 
 ## Immediate next steps
 
-1. broaden the classification exporter/importer into a fuller standards surface
-2. implement dimensions and budgets as the next OBLE profiles
-3. automate schema validation for canonical exports
-4. turn profile claims into fuller executable conformance checks
-5. decide how much more of the import surface should be frozen in the C ABI
+1. broaden the exporter/importer packet set to more OBLE profiles
+2. automate schema validation for canonical exports
+3. turn profile claims into fuller executable conformance checks
+4. decide how much more of the import surface should be frozen in the C ABI

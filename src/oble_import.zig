@@ -24,6 +24,8 @@ pub const ImportContext = struct {
     classification_node_ids: std.StringHashMap(i64),
     dimension_ids: std.StringHashMap(i64),
     dimension_value_ids: std.StringHashMap(i64),
+    budget_ids: std.StringHashMap(i64),
+    budget_line_ids: std.StringHashMap(i64),
 
     pub fn init(allocator: std.mem.Allocator) ImportContext {
         return .{
@@ -40,6 +42,8 @@ pub const ImportContext = struct {
             .classification_node_ids = std.StringHashMap(i64).init(allocator),
             .dimension_ids = std.StringHashMap(i64).init(allocator),
             .dimension_value_ids = std.StringHashMap(i64).init(allocator),
+            .budget_ids = std.StringHashMap(i64).init(allocator),
+            .budget_line_ids = std.StringHashMap(i64).init(allocator),
         };
     }
 
@@ -55,6 +59,8 @@ pub const ImportContext = struct {
         self.classification_node_ids.deinit();
         self.dimension_ids.deinit();
         self.dimension_value_ids.deinit();
+        self.budget_ids.deinit();
+        self.budget_line_ids.deinit();
         self.id_arena.deinit();
     }
 

@@ -60,7 +60,7 @@ Implementation details that are outside OBLE itself:
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
 | `Classifications / Report Structures` | `0009` | classification profile bundle (Zig-first) | Emerging |
 | `Dimensions / Analytics` | `0010` | dimension profile bundle (Zig-first) | Emerging |
-| `Budgets / Planning` | `0011` | none yet | Draft-defined |
+| `Budgets / Planning` | `0011` | budget profile bundle (Zig-first) | Emerging |
 
 ## Public-boundary posture
 

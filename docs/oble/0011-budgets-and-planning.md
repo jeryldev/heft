@@ -143,7 +143,8 @@ This profile should currently be treated as:
 
 - an important planning-oriented extension
 - useful, but less foundational than the current implemented profiles
-- not yet represented by stable OBLE packet/code surfaces
+- now represented by an initial Zig-first profile bundle in Heft, but still
+  missing broader examples, schemas, and wider public-surface exposure
 
 ## Immediate next steps
 

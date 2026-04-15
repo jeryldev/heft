@@ -95,6 +95,9 @@ future refactors.
 - `src/oble_profile_dimension.zig`
   Explicit profile boundary for dimension definitions, values, and line-level
   analytical assignments.
+- `src/oble_profile_budget.zig`
+  Explicit profile boundary for budget metadata, lifecycle state, and budget
+  line planning bundles.
 - `src/oble_profile_policy.zig`
   Explicit profile boundary for policy/designation import-export plus the
   current close/reopen and revaluation lifecycle packet surface.

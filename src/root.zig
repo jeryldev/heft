@@ -24,6 +24,7 @@ pub const oble_core = @import("oble_core.zig");
 pub const oble_profile_counterparty = @import("oble_profile_counterparty.zig");
 pub const oble_profile_classification = @import("oble_profile_classification.zig");
 pub const oble_profile_dimension = @import("oble_profile_dimension.zig");
+pub const oble_profile_budget = @import("oble_profile_budget.zig");
 pub const oble_profile_fx = @import("oble_profile_fx.zig");
 pub const oble_profile_policy = @import("oble_profile_policy.zig");
 pub const oble_export = @import("oble_export.zig");
@@ -61,6 +62,7 @@ comptime {
     _ = oble_profile_counterparty;
     _ = oble_profile_classification;
     _ = oble_profile_dimension;
+    _ = oble_profile_budget;
     _ = oble_profile_fx;
     _ = oble_profile_policy;
     _ = oble_export;

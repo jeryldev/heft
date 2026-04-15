@@ -55,7 +55,7 @@ behavior rather than something OBLE should necessarily standardize.
 | Reports and statements | Missing | Reports are available as Heft read APIs, but not currently as OBLE standard packets or profiles. |
 | Classifications | Missing | Heft has rich classification trees and classified reporting, but no explicit OBLE classification profile boundary yet. |
 | Dimensions | Partial | Heft now has a Zig-first dimension profile bundle for definitions, values, and line assignments, but broader standard packet coverage is still missing. |
-| Budgets | Missing | Heft budgets and budget-vs-actual workflows are not yet represented in OBLE. |
+| Budgets | Partial | Heft now has a Zig-first budget profile bundle for budget metadata, lifecycle state, and budget lines, while derived budget-vs-actual reporting remains outside the portable minimum. |
 | Audit trail export | Partial | Audit/provenance exists strongly in Heft, but OBLE does not yet have a mature portable audit packet set here. |
 | Verification / integrity checks | Partial | Heft exposes verification, but OBLE does not yet define a conformance-facing integrity-result packet. |
 | Batch workflows | Heft-only | Batch post/void orchestration is useful operational behavior, but not obviously a standards concern today. |
@@ -249,7 +249,7 @@ cover more of Heft's analytic layer.
 
 ## 10. Budgets / Planning
 
-Status: `Draft-defined, Missing implementation boundary`
+Status: `Partial`
 
 Heft already has:
 
@@ -262,11 +262,20 @@ OBLE now has an explicit draft profile for this area:
 
 - `OBLE-0011 Budgets and Planning`
 
-But these remain entirely Heft-native today from an interoperability point of
-view.
+Heft now also has an initial Zig-first OBLE profile bundle for:
 
-If OBLE expands into planning-oriented accounting profiles, budgets are an
-obvious future area.
+- budget metadata
+- budget lifecycle state
+- budget lines
+
+What is still missing:
+
+- canonical OBLE examples and schemas in the canonical repo
+- public-surface exposure beyond the Zig-first boundary
+- a decision on whether `budget vs actual` belongs in this profile or should
+  stay a later reporting-oriented extension
+
+This profile is no longer hypothetical, but it is still early.
 
 ## 11. Audit and provenance
 
@@ -326,7 +335,7 @@ These are important for the engine, but they are not protocol semantics.
 The most important remaining gaps are:
 
 1. reports and statement semantics
-2. budgets/planning
+2. budgets/planning examples and schema coverage
 3. portable audit/provenance shapes
 4. broader standards coverage for classifications and dimensions
 5. portable audit/conformance result shapes
@@ -336,7 +345,8 @@ The most important remaining gaps are:
 
 1. Broaden `Classifications / Report Structures` from the first bundle boundary into a fuller packet/example/schema set.
 2. Broaden `Dimensions / Analytics` from the first bundle boundary into examples, schemas, and wider packet coverage.
-3. Implement `Budgets / Planning` as the next planning-oriented profile boundary.
+3. Broaden `Budgets / Planning` from the first bundle boundary into examples,
+   schemas, and any later comparison-oriented packet design.
 4. Define a narrow OBLE audit/provenance profile only if there is real cross-engine need.
 5. Keep `Close/Reopen` and `Revaluation` honest as reconstruction-oriented until replay semantics are truly stable.
 
