@@ -11,6 +11,7 @@ const revaluation_mod = @import("revaluation.zig");
 const money = @import("money.zig");
 const oble_export = @import("oble_export.zig");
 const oble_import = @import("oble_import.zig");
+const oble_results = @import("oble_profile_results.zig");
 
 test "CONFORMANCE: OBLE Core profile" {
     const source_db = try db.Database.open(":memory:");
@@ -136,4 +137,59 @@ test "CONFORMANCE: OBLE Close/Reopen profile" {
     const close_json = try oble_export.exportCloseReopenProfileJson(database, book_id, jan_id, &close_buf);
     try std.testing.expect(std.mem.indexOf(u8, close_json, "\"closing_entries\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, close_json, "\"next_opening_entry\"") != null);
+}
+
+test "CONFORMANCE: OBLE statement-result packet family" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Statement Conformance Book", "PHP", 2, "admin");
+    const cash_id = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital_id = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, book_id, capital_id, "admin");
+
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_id = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const open_id = try entry_mod.Entry.createDraft(database, book_id, "OPEN-001", "2026-01-01", "2026-01-01", null, jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, open_id, 1, 1_000_00_000_000, 0, "PHP", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, open_id, 2, 0, 1_000_00_000_000, "PHP", money.FX_RATE_SCALE, capital_id, null, null, "admin");
+    try entry_mod.Entry.post(database, open_id, "admin");
+
+    const sale_id = try entry_mod.Entry.createDraft(database, book_id, "SALE-001", "2026-02-10", "2026-02-10", null, feb_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, sale_id, 1, 200_00_000_000, 0, "PHP", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, sale_id, 2, 0, 200_00_000_000, "PHP", money.FX_RATE_SCALE, revenue_id, null, null, "admin");
+    try entry_mod.Entry.post(database, sale_id, "admin");
+
+    var statement_buf: [32 * 1024]u8 = undefined;
+    const tb_json = try oble_results.exportTrialBalanceResultPacketJson(database, book_id, "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"packet_kind\":\"trial_balance\"") != null);
+
+    const movement_json = try oble_results.exportTrialBalanceMovementResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, movement_json, "\"packet_kind\":\"trial_balance_movement\"") != null);
+
+    const income_json = try oble_results.exportIncomeStatementResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, income_json, "\"packet_kind\":\"income_statement\"") != null);
+
+    const balance_json = try oble_results.exportBalanceSheetResultPacketJson(database, book_id, "2026-02-28", &statement_buf);
+    try std.testing.expect(std.mem.indexOf(u8, balance_json, "\"packet_kind\":\"balance_sheet\"") != null);
+
+    var comparative_buf: [32 * 1024]u8 = undefined;
+    const tb_cmp_json = try oble_results.exportTrialBalanceComparativeResultPacketJson(database, book_id, "2026-02-28", "2026-01-31", &comparative_buf);
+    try std.testing.expect(std.mem.indexOf(u8, tb_cmp_json, "\"packet_kind\":\"trial_balance_comparative\"") != null);
+
+    const movement_cmp_json = try oble_results.exportTrialBalanceMovementComparativeResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31", &comparative_buf);
+    try std.testing.expect(std.mem.indexOf(u8, movement_cmp_json, "\"packet_kind\":\"trial_balance_movement_comparative\"") != null);
+
+    const income_cmp_json = try oble_results.exportIncomeStatementComparativeResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31", &comparative_buf);
+    try std.testing.expect(std.mem.indexOf(u8, income_cmp_json, "\"packet_kind\":\"income_statement_comparative\"") != null);
+
+    const balance_cmp_json = try oble_results.exportBalanceSheetComparativeResultPacketJson(database, book_id, "2026-02-28", "2026-01-31", "2026-01-01", &comparative_buf);
+    try std.testing.expect(std.mem.indexOf(u8, balance_cmp_json, "\"packet_kind\":\"balance_sheet_comparative\"") != null);
+
+    var equity_buf: [32 * 1024]u8 = undefined;
+    const equity_json = try oble_results.exportEquityChangesResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", "2026-01-01", &equity_buf);
+    try std.testing.expect(std.mem.indexOf(u8, equity_json, "\"packet_kind\":\"equity_changes\"") != null);
 }

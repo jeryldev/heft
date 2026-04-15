@@ -1812,6 +1812,15 @@ test "C ABI: export wrappers null handle returns -1" {
     try std.testing.expectEqual(@as(i32, -1), ledger_export_periods(null, 1, &buf, 4096, 0));
     try std.testing.expectEqual(@as(i32, -1), ledger_export_subledger(null, 1, &buf, 4096, 0));
     try std.testing.expectEqual(@as(i32, -1), ledger_export_book_metadata(null, 1, &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_result(null, 1, "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_movement_result(null, 1, "2026-01-01", "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_income_statement_result(null, 1, "2026-01-01", "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_balance_sheet_result(null, 1, "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_comparative_result(null, 1, "2026-02-28", "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_movement_comparative_result(null, 1, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_income_statement_comparative_result(null, 1, "2026-02-01", "2026-02-28", "2026-01-01", "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_balance_sheet_comparative_result(null, 1, "2026-02-28", "2026-01-31", "2026-01-01", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_equity_changes_result(null, 1, "2026-02-01", "2026-02-28", "2026-01-01", &buf, buf.len));
     try std.testing.expect(!ledger_transition_budget(null, 1, "approved", "admin"));
 }
 

@@ -997,3 +997,22 @@ test "OBLE results: statement, comparative, and equity packets export canonical 
     try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"net_income\":\"200.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"total_opening\":\"1000.00\"") != null);
 }
+
+test "OBLE results: statement packet exporters fail cleanly on tiny buffer" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Tiny Buffer Book", "USD", 2, "admin");
+    const cash_id = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital_id = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const period_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    const entry_id = try entry_mod.Entry.createDraft(database, book_id, "OPEN-1", "2026-01-01", "2026-01-01", null, period_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 1, 100_00_000_000, 0, "USD", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, entry_id, 2, 0, 100_00_000_000, "USD", money.FX_RATE_SCALE, capital_id, null, null, "admin");
+    try entry_mod.Entry.post(database, entry_id, "admin");
+
+    var tiny_buf: [32]u8 = undefined;
+    try std.testing.expectError(error.NoSpaceLeft, exportTrialBalanceResultPacketJson(database, book_id, "2026-01-31", &tiny_buf));
+}
