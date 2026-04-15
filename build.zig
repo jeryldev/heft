@@ -116,6 +116,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_abi_tests.step);
 
+    const test_mod_step = b.step("test-mod", "Run module tests");
+    test_mod_step.dependOn(&run_mod_tests.step);
+
+    const test_abi_step = b.step("test-abi", "Run ABI integration tests");
+    test_abi_step.dependOn(&run_abi_tests.step);
+
     const bench_step = b.step("bench", "Run lightweight performance benchmarks");
     bench_step.dependOn(&run_bench.step);
 

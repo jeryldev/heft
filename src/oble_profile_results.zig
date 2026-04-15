@@ -50,6 +50,11 @@ const ComparativeBoundary = struct {
     fy_start_date: ?[]const u8 = null,
 };
 
+const ExampleKeyPath = struct {
+    container: []const u8,
+    key: []const u8,
+};
+
 pub fn exportClassifiedReportPacketJson(database: db.Database, classification_id: i64, as_of_date: []const u8, buf: []u8) ![]u8 {
     const result = try classification_mod.classifiedReport(database, classification_id, as_of_date);
     defer result.deinit();
@@ -971,11 +976,31 @@ test "OBLE results: statement, comparative, and equity packets export canonical 
     var statement_buf: [256 * 1024]u8 = undefined;
     var comparative_buf: [256 * 1024]u8 = undefined;
     var equity_buf: [256 * 1024]u8 = undefined;
+    const statement_example = try loadExampleJson(std.testing.allocator, "docs/oble/examples/statement-result.json");
+    defer std.testing.allocator.free(statement_example);
+    const comparative_example = try loadExampleJson(std.testing.allocator, "docs/oble/examples/comparative-statement-result.json");
+    defer std.testing.allocator.free(comparative_example);
+    const equity_example = try loadExampleJson(std.testing.allocator, "docs/oble/examples/equity-result.json");
+    defer std.testing.allocator.free(equity_example);
 
     const tb_json = try exportTrialBalanceResultPacketJson(database, book_id, "2026-02-28", &statement_buf);
     try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"packet_kind\":\"trial_balance\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"total_debits\":\"1200.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, tb_json, "\"total_credits\":\"1200.00\"") != null);
+    try expectPacketMatchesExampleShape(tb_json, statement_example, &.{
+        .{ .container = "", .key = "packet_kind" },
+        .{ .container = "", .key = "book_id" },
+        .{ .container = "", .key = "as_of_date" },
+        .{ .container = "", .key = "decimal_places" },
+        .{ .container = "", .key = "total_debits" },
+        .{ .container = "", .key = "total_credits" },
+        .{ .container = "rows", .key = "account_id" },
+        .{ .container = "rows", .key = "account_number" },
+        .{ .container = "rows", .key = "account_name" },
+        .{ .container = "rows", .key = "account_type" },
+        .{ .container = "rows", .key = "debit" },
+        .{ .container = "rows", .key = "credit" },
+    });
 
     const is_json = try exportIncomeStatementResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", &statement_buf);
     try std.testing.expect(std.mem.indexOf(u8, is_json, "\"packet_kind\":\"income_statement\"") != null);
@@ -991,11 +1016,49 @@ test "OBLE results: statement, comparative, and equity packets export canonical 
     try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"current_total_debits\":\"1200.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"prior_total_debits\":\"1000.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, cmp_json, "\"variance_debit\":\"200.00\"") != null);
+    try expectPacketMatchesExampleShape(cmp_json, comparative_example, &.{
+        .{ .container = "", .key = "packet_kind" },
+        .{ .container = "", .key = "book_id" },
+        .{ .container = "", .key = "current_as_of_date" },
+        .{ .container = "", .key = "prior_as_of_date" },
+        .{ .container = "", .key = "decimal_places" },
+        .{ .container = "", .key = "current_total_debits" },
+        .{ .container = "", .key = "current_total_credits" },
+        .{ .container = "", .key = "prior_total_debits" },
+        .{ .container = "", .key = "prior_total_credits" },
+        .{ .container = "rows", .key = "account_id" },
+        .{ .container = "rows", .key = "account_number" },
+        .{ .container = "rows", .key = "account_name" },
+        .{ .container = "rows", .key = "account_type" },
+        .{ .container = "rows", .key = "current_debit" },
+        .{ .container = "rows", .key = "current_credit" },
+        .{ .container = "rows", .key = "prior_debit" },
+        .{ .container = "rows", .key = "prior_credit" },
+        .{ .container = "rows", .key = "variance_debit" },
+        .{ .container = "rows", .key = "variance_credit" },
+    });
 
     const eq_json = try exportEquityChangesResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", "2026-01-01", &equity_buf);
     try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"packet_kind\":\"equity_changes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"net_income\":\"200.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, eq_json, "\"total_opening\":\"1000.00\"") != null);
+    try expectPacketMatchesExampleShape(eq_json, equity_example, &.{
+        .{ .container = "", .key = "packet_kind" },
+        .{ .container = "", .key = "book_id" },
+        .{ .container = "", .key = "start_date" },
+        .{ .container = "", .key = "end_date" },
+        .{ .container = "", .key = "fy_start_date" },
+        .{ .container = "", .key = "decimal_places" },
+        .{ .container = "", .key = "net_income" },
+        .{ .container = "", .key = "total_opening" },
+        .{ .container = "", .key = "total_closing" },
+        .{ .container = "rows", .key = "account_id" },
+        .{ .container = "rows", .key = "account_number" },
+        .{ .container = "rows", .key = "account_name" },
+        .{ .container = "rows", .key = "opening_balance" },
+        .{ .container = "rows", .key = "period_activity" },
+        .{ .container = "rows", .key = "closing_balance" },
+    });
 }
 
 test "OBLE results: statement packet exporters fail cleanly on tiny buffer" {
@@ -1015,4 +1078,49 @@ test "OBLE results: statement packet exporters fail cleanly on tiny buffer" {
 
     var tiny_buf: [32]u8 = undefined;
     try std.testing.expectError(error.NoSpaceLeft, exportTrialBalanceResultPacketJson(database, book_id, "2026-01-31", &tiny_buf));
+}
+
+fn expectPacketMatchesExampleShape(actual_json: []const u8, example_json: []const u8, required_keys: []const ExampleKeyPath) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const actual = try std.json.parseFromSlice(std.json.Value, allocator, actual_json, .{});
+    const example = try std.json.parseFromSlice(std.json.Value, allocator, example_json, .{});
+
+    try expectObjectHasKeys(actual.value, example.value, required_keys);
+}
+
+fn expectObjectHasKeys(actual: std.json.Value, example: std.json.Value, required_keys: []const ExampleKeyPath) !void {
+    const actual_object = actual.object;
+    const example_object = example.object;
+
+    for (required_keys) |required| {
+        if (required.container.len == 0) {
+            try std.testing.expect(actual_object.get(required.key) != null);
+            try std.testing.expect(example_object.get(required.key) != null);
+            continue;
+        }
+
+        const actual_container = actual_object.get(required.container) orelse {
+            try std.testing.expect(false);
+            return;
+        };
+        const example_container = example_object.get(required.container) orelse {
+            try std.testing.expect(false);
+            return;
+        };
+        try expectArrayFirstObjectHasKey(actual_container, required.key);
+        try expectArrayFirstObjectHasKey(example_container, required.key);
+    }
+}
+
+fn expectArrayFirstObjectHasKey(value: std.json.Value, key: []const u8) !void {
+    const array = value.array;
+    try std.testing.expect(array.items.len > 0);
+    try std.testing.expect(array.items[0].object.get(key) != null);
+}
+
+fn loadExampleJson(allocator: std.mem.Allocator, relative_path: []const u8) ![]u8 {
+    return try std.fs.cwd().readFileAlloc(allocator, relative_path, 64 * 1024);
 }
