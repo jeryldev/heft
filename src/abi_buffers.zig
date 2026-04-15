@@ -692,6 +692,51 @@ pub fn ledger_oble_export_cash_flow_result(handle: ?*LedgerDB, classification_id
     return common.safeIntCast(result.len);
 }
 
+pub fn ledger_oble_export_cash_flow_indirect_result(handle: ?*LedgerDB, book_id: i64, classification_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportCashFlowIndirectResultPacketJson(h.sqlite, book_id, classification_id, std.mem.span(start_date), std.mem.span(end_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_integrity_summary_result(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportIntegritySummaryResultPacketJson(h.sqlite, book_id, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_translated_trial_balance_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, target_currency: [*:0]const u8, closing_rate: i64, average_rate: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTranslatedTrialBalanceResultPacketJson(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(target_currency), closing_rate, average_rate, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_translated_income_statement_result(handle: ?*LedgerDB, book_id: i64, start_date: [*:0]const u8, end_date: [*:0]const u8, target_currency: [*:0]const u8, closing_rate: i64, average_rate: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTranslatedIncomeStatementResultPacketJson(h.sqlite, book_id, std.mem.span(start_date), std.mem.span(end_date), std.mem.span(target_currency), closing_rate, average_rate, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
+pub fn ledger_oble_export_translated_balance_sheet_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, target_currency: [*:0]const u8, closing_rate: i64, average_rate: i64, buf: ?[*]u8, buf_len: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const result = heft.oble_profile_results.exportTranslatedBalanceSheetResultPacketJson(h.sqlite, book_id, std.mem.span(as_of_date), std.mem.span(target_currency), closing_rate, average_rate, common.safeBuf(buf, buf_len) orelse return -1) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(result.len);
+}
+
 pub fn ledger_oble_export_trial_balance_result(handle: ?*LedgerDB, book_id: i64, as_of_date: [*:0]const u8, buf: ?[*]u8, buf_len: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const result = heft.oble_profile_results.exportTrialBalanceResultPacketJson(h.sqlite, book_id, std.mem.span(as_of_date), common.safeBuf(buf, buf_len) orelse return -1) catch |err| {

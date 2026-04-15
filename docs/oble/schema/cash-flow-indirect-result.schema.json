@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/cash-flow-indirect-result.schema.json",
+  "title": "OBLE Indirect Cash Flow Result Packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "packet_kind",
+    "classification_id",
+    "book_id",
+    "start_date",
+    "end_date",
+    "decimal_places",
+    "net_income",
+    "operating_total",
+    "investing_total",
+    "financing_total",
+    "net_cash_change",
+    "adjustments"
+  ],
+  "properties": {
+    "packet_kind": { "type": "string", "enum": ["cash_flow_indirect"] },
+    "classification_id": { "type": "string", "minLength": 1 },
+    "book_id": { "type": "string", "minLength": 1 },
+    "start_date": { "type": "string", "minLength": 1 },
+    "end_date": { "type": "string", "minLength": 1 },
+    "decimal_places": { "type": "integer", "minimum": 0, "maximum": 8 },
+    "net_income": { "type": "string", "minLength": 1 },
+    "operating_total": { "type": "string", "minLength": 1 },
+    "investing_total": { "type": "string", "minLength": 1 },
+    "financing_total": { "type": "string", "minLength": 1 },
+    "net_cash_change": { "type": "string", "minLength": 1 },
+    "adjustments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "node_id",
+          "node_type",
+          "depth",
+          "position",
+          "label",
+          "account_id",
+          "debit",
+          "credit"
+        ],
+        "properties": {
+          "node_id": { "type": "string", "minLength": 1 },
+          "node_type": { "type": "string", "enum": ["group", "account", "unclassified"] },
+          "depth": { "type": "integer", "minimum": 0 },
+          "position": { "type": "integer", "minimum": 0 },
+          "label": { "type": "string" },
+          "account_id": { "type": ["string", "null"] },
+          "debit": { "type": "string", "minLength": 1 },
+          "credit": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -61,6 +61,18 @@
       "schema": "equity-result.schema.json"
     },
     {
+      "example": "../examples/cash-flow-indirect-result.json",
+      "schema": "cash-flow-indirect-result.schema.json"
+    },
+    {
+      "example": "../examples/integrity-summary-result.json",
+      "schema": "integrity-summary-result.schema.json"
+    },
+    {
+      "example": "../examples/translated-statement-result.json",
+      "schema": "translated-statement-result.schema.json"
+    },
+    {
       "example": "../examples/book-snapshot.json",
       "schema": "book-snapshot.schema.json"
     },

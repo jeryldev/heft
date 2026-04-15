@@ -1,0 +1,10 @@
+{
+  "packet_kind": "integrity_summary",
+  "book_id": "book-1",
+  "passed": true,
+  "errors": 0,
+  "warnings": 0,
+  "entries_checked": 2,
+  "accounts_checked": 3,
+  "periods_checked": 2
+}

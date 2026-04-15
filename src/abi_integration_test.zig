@@ -149,6 +149,11 @@ const ledger_oble_export_fx_profile_bundle = abi.ledger_oble_export_fx_profile_b
 const ledger_oble_export_classified_report_result = abi.ledger_oble_export_classified_report_result;
 const ledger_oble_export_classified_trial_balance_result = abi.ledger_oble_export_classified_trial_balance_result;
 const ledger_oble_export_cash_flow_result = abi.ledger_oble_export_cash_flow_result;
+const ledger_oble_export_cash_flow_indirect_result = abi.ledger_oble_export_cash_flow_indirect_result;
+const ledger_oble_export_integrity_summary_result = abi.ledger_oble_export_integrity_summary_result;
+const ledger_oble_export_translated_trial_balance_result = abi.ledger_oble_export_translated_trial_balance_result;
+const ledger_oble_export_translated_income_statement_result = abi.ledger_oble_export_translated_income_statement_result;
+const ledger_oble_export_translated_balance_sheet_result = abi.ledger_oble_export_translated_balance_sheet_result;
 const ledger_oble_export_trial_balance_result = abi.ledger_oble_export_trial_balance_result;
 const ledger_oble_export_trial_balance_movement_result = abi.ledger_oble_export_trial_balance_movement_result;
 const ledger_oble_export_income_statement_result = abi.ledger_oble_export_income_statement_result;
@@ -1812,7 +1817,9 @@ test "C ABI: export wrappers null handle returns -1" {
     try std.testing.expectEqual(@as(i32, -1), ledger_export_periods(null, 1, &buf, 4096, 0));
     try std.testing.expectEqual(@as(i32, -1), ledger_export_subledger(null, 1, &buf, 4096, 0));
     try std.testing.expectEqual(@as(i32, -1), ledger_export_book_metadata(null, 1, &buf, 4096, 0));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_integrity_summary_result(null, 1, &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_result(null, 1, "2026-01-31", &buf, buf.len));
+    try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_translated_trial_balance_result(null, 1, "2026-01-31", "USD", 180000000, 185000000, &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_trial_balance_movement_result(null, 1, "2026-01-01", "2026-01-31", &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_income_statement_result(null, 1, "2026-01-01", "2026-01-31", &buf, buf.len));
     try std.testing.expectEqual(@as(i32, -1), ledger_oble_export_balance_sheet_result(null, 1, "2026-01-31", &buf, buf.len));
@@ -2017,9 +2024,21 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(cash_flow_result_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(cash_flow_result_len)], "\"packet_kind\":\"cash_flow_statement\"") != null);
 
+    const cash_flow_indirect_len = ledger_oble_export_cash_flow_indirect_result(handle, s.book_id, s.cash_flow_classification_id, "2026-01-01", "2026-01-31", &buf, buf.len);
+    try std.testing.expect(cash_flow_indirect_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(cash_flow_indirect_len)], "\"packet_kind\":\"cash_flow_indirect\"") != null);
+
+    const integrity_len = ledger_oble_export_integrity_summary_result(handle, s.book_id, &buf, buf.len);
+    try std.testing.expect(integrity_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(integrity_len)], "\"packet_kind\":\"integrity_summary\"") != null);
+
     const trial_balance_result_len = ledger_oble_export_trial_balance_result(handle, s.book_id, "2026-02-28", &buf, buf.len);
     try std.testing.expect(trial_balance_result_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(trial_balance_result_len)], "\"packet_kind\":\"trial_balance\"") != null);
+
+    const translated_tb_len = ledger_oble_export_translated_trial_balance_result(handle, s.book_id, "2026-02-28", "USD", 180000000, 185000000, &buf, buf.len);
+    try std.testing.expect(translated_tb_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(translated_tb_len)], "\"packet_kind\":\"translated_trial_balance\"") != null);
 
     const movement_result_len = ledger_oble_export_trial_balance_movement_result(handle, s.book_id, "2026-01-01", "2026-02-28", &buf, buf.len);
     try std.testing.expect(movement_result_len > 0);
@@ -2029,9 +2048,17 @@ test "C ABI: OBLE export happy paths" {
     try std.testing.expect(income_statement_result_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(income_statement_result_len)], "\"packet_kind\":\"income_statement\"") != null);
 
+    const translated_income_len = ledger_oble_export_translated_income_statement_result(handle, s.book_id, "2026-01-01", "2026-02-28", "USD", 180000000, 185000000, &buf, buf.len);
+    try std.testing.expect(translated_income_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(translated_income_len)], "\"packet_kind\":\"translated_income_statement\"") != null);
+
     const balance_sheet_result_len = ledger_oble_export_balance_sheet_result(handle, s.book_id, "2026-02-28", &buf, buf.len);
     try std.testing.expect(balance_sheet_result_len > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(balance_sheet_result_len)], "\"packet_kind\":\"balance_sheet\"") != null);
+
+    const translated_bs_len = ledger_oble_export_translated_balance_sheet_result(handle, s.book_id, "2026-02-28", "USD", 180000000, 185000000, &buf, buf.len);
+    try std.testing.expect(translated_bs_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(translated_bs_len)], "\"packet_kind\":\"translated_balance_sheet\"") != null);
 
     const tb_comparative_len = ledger_oble_export_trial_balance_comparative_result(handle, s.book_id, "2026-02-28", "2026-01-31", &buf, buf.len);
     try std.testing.expect(tb_comparative_len > 0);

@@ -5,6 +5,7 @@ const book_mod = @import("book.zig");
 const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
+const classification_mod = @import("classification.zig");
 const subledger_mod = @import("subledger.zig");
 const close_mod = @import("close.zig");
 const revaluation_mod = @import("revaluation.zig");
@@ -192,4 +193,42 @@ test "CONFORMANCE: OBLE statement-result packet family" {
     var equity_buf: [32 * 1024]u8 = undefined;
     const equity_json = try oble_results.exportEquityChangesResultPacketJson(database, book_id, "2026-02-01", "2026-02-28", "2026-01-01", &equity_buf);
     try std.testing.expect(std.mem.indexOf(u8, equity_json, "\"packet_kind\":\"equity_changes\"") != null);
+}
+
+test "CONFORMANCE: OBLE indirect cash flow, integrity, and translated result packets" {
+    const database = try db.Database.open(":memory:");
+    defer database.close();
+    try schema.createAll(database);
+
+    const book_id = try book_mod.Book.create(database, "Derived Result Conformance Book", "PHP", 2, "admin");
+    const cash_id = try account_mod.Account.create(database, book_id, "1000", "Cash", .asset, false, "admin");
+    const capital_id = try account_mod.Account.create(database, book_id, "3000", "Capital", .equity, false, "admin");
+    const revenue_id = try account_mod.Account.create(database, book_id, "4000", "Revenue", .revenue, false, "admin");
+    const jan_id = try period_mod.Period.create(database, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const feb_id = try period_mod.Period.create(database, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+
+    const open_id = try entry_mod.Entry.createDraft(database, book_id, "OPEN-001", "2026-01-01", "2026-01-01", null, jan_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, open_id, 1, 1_000_00_000_000, 0, "PHP", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, open_id, 2, 0, 1_000_00_000_000, "PHP", money.FX_RATE_SCALE, capital_id, null, null, "admin");
+    try entry_mod.Entry.post(database, open_id, "admin");
+
+    const sale_id = try entry_mod.Entry.createDraft(database, book_id, "SALE-001", "2026-02-10", "2026-02-10", null, feb_id, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, sale_id, 1, 200_00_000_000, 0, "PHP", money.FX_RATE_SCALE, cash_id, null, null, "admin");
+    _ = try entry_mod.Entry.addLine(database, sale_id, 2, 0, 200_00_000_000, "PHP", money.FX_RATE_SCALE, revenue_id, null, null, "admin");
+    try entry_mod.Entry.post(database, sale_id, "admin");
+
+    const cf_cls = try classification_mod.Classification.create(database, book_id, "Cash Flow", "cash_flow", "admin");
+    _ = try classification_mod.ClassificationNode.addGroup(database, cf_cls, "Operating Activities", null, 1, "admin");
+    _ = try classification_mod.ClassificationNode.addGroup(database, cf_cls, "Investing Activities", null, 2, "admin");
+    _ = try classification_mod.ClassificationNode.addGroup(database, cf_cls, "Financing Activities", null, 3, "admin");
+
+    var buf: [32 * 1024]u8 = undefined;
+    const indirect_json = try oble_results.exportCashFlowIndirectResultPacketJson(database, book_id, cf_cls, "2026-01-01", "2026-01-31", &buf);
+    try std.testing.expect(std.mem.indexOf(u8, indirect_json, "\"packet_kind\":\"cash_flow_indirect\"") != null);
+
+    const integrity_json = try oble_results.exportIntegritySummaryResultPacketJson(database, book_id, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, integrity_json, "\"packet_kind\":\"integrity_summary\"") != null);
+
+    const translated_json = try oble_results.exportTranslatedTrialBalanceResultPacketJson(database, book_id, "2026-02-28", "USD", 180000000, 185000000, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, translated_json, "\"packet_kind\":\"translated_trial_balance\"") != null);
 }

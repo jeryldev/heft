@@ -55,10 +55,10 @@ Implementation details that are outside OBLE itself:
 | --- | --- | --- | --- |
 | `OBLE Core` | `0001`, `0002`, parts of `0004` | `core-book.json`, `core-accounts.json`, `core-periods.json`, `core-entry-posted.json`, `book-snapshot.json` | Strong |
 | `Counterparty / Open Item` | `0003`, parts of `0004` | `counterparties.json`, `counterparty-open-item.json`, `book-snapshot.json` | Strong |
-| `Multi-Currency` | `0006` | core entry export with foreign-currency lines, revaluation packet export | Emerging |
-| `Close / Reopen` | `0007` | close/reopen profile export | Emerging |
+| `Multi-Currency` | `0006`, `0018` | core entry export with foreign-currency lines, revaluation packet export, translated statement result packets | Emerging |
+| `Close / Reopen` | `0007`, `0017` | close/reopen profile export, integrity summary result packet | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
-| `Classifications / Report Structures` | `0009`, `0012`, `0015`, `0016` | classification profile bundle, classified result packet, core and comparative statement result packets, equity result packet | Strong |
+| `Classifications / Report Structures` | `0009`, `0012`, `0015`, `0016`, `0017` | classification profile bundle, classified result packet, indirect cash flow result packet, core and comparative statement result packets, equity result packet | Strong |
 | `Dimensions / Analytics` | `0010`, `0013` | dimension profile bundle, dimension summary result packet | Strong |
 | `Budgets / Planning` | `0011`, `0014` | budget profile bundle, budget analysis result packet | Strong |
 

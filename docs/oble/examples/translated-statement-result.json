@@ -1,0 +1,22 @@
+{
+  "packet_kind": "translated_trial_balance",
+  "book_id": "book-1",
+  "as_of_date": "2026-02-28",
+  "source_currency": "PHP",
+  "target_currency": "USD",
+  "closing_rate": "0.0180000000",
+  "average_rate": "0.0185000000",
+  "decimal_places": 2,
+  "total_debits": "21.60",
+  "total_credits": "21.60",
+  "rows": [
+    {
+      "account_id": "acct-1",
+      "account_number": "1000",
+      "account_name": "Cash",
+      "account_type": "asset",
+      "debit": "21.60",
+      "credit": "0.00"
+    }
+  ]
+}
