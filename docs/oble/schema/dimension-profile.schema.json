@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/dimension-profile.schema.json",
+  "title": "OBLE Dimension Profile Bundle",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "dimensions",
+    "dimension_values",
+    "line_dimension_assignments"
+  ],
+  "properties": {
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "book_id",
+          "name",
+          "dimension_type"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "book_id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "dimension_type": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "dimension_values": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "dimension_id",
+          "code",
+          "label"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "dimension_id": { "type": "string", "minLength": 1 },
+          "code": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "parent_value_id": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "line_dimension_assignments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "line_id",
+          "dimension_value_id"
+        ],
+        "properties": {
+          "line_id": { "type": "string", "minLength": 1 },
+          "dimension_value_id": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

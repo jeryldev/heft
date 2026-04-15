@@ -1,0 +1,32 @@
+{
+  "dimensions": [
+    {
+      "id": "dimension-1",
+      "book_id": "book-1",
+      "name": "Tax Code",
+      "dimension_type": "tax_code"
+    }
+  ],
+  "dimension_values": [
+    {
+      "id": "dimension-value-1",
+      "dimension_id": "dimension-1",
+      "code": "VAT",
+      "label": "VAT",
+      "parent_value_id": null
+    },
+    {
+      "id": "dimension-value-2",
+      "dimension_id": "dimension-1",
+      "code": "VAT12",
+      "label": "VAT 12%",
+      "parent_value_id": "dimension-value-1"
+    }
+  ],
+  "line_dimension_assignments": [
+    {
+      "line_id": "line-1",
+      "dimension_value_id": "dimension-value-2"
+    }
+  ]
+}

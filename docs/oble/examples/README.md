@@ -11,6 +11,9 @@ Current examples:
 - `core-entry-posted.json`
 - `counterparties.json`
 - `policy-profile.json`
+- `classification-profile.json`
+- `dimension-profile.json`
+- `budget-profile.json`
 - `book-snapshot.json`
 - `reversal-pair.json`
 - `counterparty-open-item.json`

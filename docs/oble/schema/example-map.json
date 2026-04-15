@@ -25,6 +25,18 @@
       "schema": "policy-profile.schema.json"
     },
     {
+      "example": "../examples/classification-profile.json",
+      "schema": "classification-profile.schema.json"
+    },
+    {
+      "example": "../examples/dimension-profile.json",
+      "schema": "dimension-profile.schema.json"
+    },
+    {
+      "example": "../examples/budget-profile.json",
+      "schema": "budget-profile.schema.json"
+    },
+    {
       "example": "../examples/book-snapshot.json",
       "schema": "book-snapshot.schema.json"
     },

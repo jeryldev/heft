@@ -1,0 +1,37 @@
+{
+  "classification": {
+    "id": "classification-1",
+    "book_id": "book-1",
+    "name": "Balance Sheet",
+    "report_type": "balance_sheet"
+  },
+  "nodes": [
+    {
+      "id": "classification-node-1",
+      "classification_id": "classification-1",
+      "node_type": "group",
+      "label": "Assets",
+      "parent_id": null,
+      "account_id": null,
+      "position": 1
+    },
+    {
+      "id": "classification-node-2",
+      "classification_id": "classification-1",
+      "node_type": "account",
+      "label": null,
+      "parent_id": "classification-node-1",
+      "account_id": "acct-1",
+      "position": 1
+    },
+    {
+      "id": "classification-node-3",
+      "classification_id": "classification-1",
+      "node_type": "account",
+      "label": null,
+      "parent_id": "classification-node-1",
+      "account_id": "acct-2",
+      "position": 2
+    }
+  ]
+}

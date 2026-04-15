@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "id": "budget-1",
+    "book_id": "book-1",
+    "name": "FY2026 Plan",
+    "fiscal_year": 2026,
+    "status": "approved"
+  },
+  "budget_lines": [
+    {
+      "id": "budget-line-1",
+      "budget_id": "budget-1",
+      "account_id": "acct-1",
+      "period_id": "period-2026-01",
+      "amount": 10000000000
+    },
+    {
+      "id": "budget-line-2",
+      "budget_id": "budget-1",
+      "account_id": "acct-2",
+      "period_id": "period-2026-02",
+      "amount": 25000000000
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/budget-profile.schema.json",
+  "title": "OBLE Budget Profile Bundle",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "budget",
+    "budget_lines"
+  ],
+  "properties": {
+    "budget": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "book_id",
+        "name",
+        "fiscal_year",
+        "status"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "book_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "fiscal_year": { "type": "integer" },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "approved", "closed"]
+        }
+      }
+    },
+    "budget_lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "budget_id",
+          "account_id",
+          "period_id",
+          "amount"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "budget_id": { "type": "string", "minLength": 1 },
+          "account_id": { "type": "string", "minLength": 1 },
+          "period_id": { "type": "string", "minLength": 1 },
+          "amount": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

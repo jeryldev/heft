@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oble.dev/schema/classification-profile.schema.json",
+  "title": "OBLE Classification Profile Bundle",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "classification",
+    "nodes"
+  ],
+  "properties": {
+    "classification": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "book_id",
+        "name",
+        "report_type"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "book_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "report_type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "classification_id",
+          "node_type",
+          "position"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "classification_id": { "type": "string", "minLength": 1 },
+          "node_type": {
+            "type": "string",
+            "enum": ["group", "account"]
+          },
+          "label": {
+            "type": ["string", "null"]
+          },
+          "parent_id": {
+            "type": ["string", "null"]
+          },
+          "account_id": {
+            "type": ["string", "null"]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

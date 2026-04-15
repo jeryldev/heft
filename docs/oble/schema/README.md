@@ -21,6 +21,9 @@ Current scope:
 - `entry.schema.json`
 - `counterparties.schema.json`
 - `policy-profile.schema.json`
+- `classification-profile.schema.json`
+- `dimension-profile.schema.json`
+- `budget-profile.schema.json`
 - `book-snapshot.schema.json`
 - `reversal-pair.schema.json`
 - `counterparty-open-item.schema.json`
@@ -39,6 +42,9 @@ Suggested mapping to the example payloads:
 - `examples/core-entry-posted.json` -> `entry.schema.json`
 - `examples/counterparties.json` -> `counterparties.schema.json`
 - `examples/policy-profile.json` -> `policy-profile.schema.json`
+- `examples/classification-profile.json` -> `classification-profile.schema.json`
+- `examples/dimension-profile.json` -> `dimension-profile.schema.json`
+- `examples/budget-profile.json` -> `budget-profile.schema.json`
 - `examples/book-snapshot.json` -> `book-snapshot.schema.json`
 - `examples/reversal-pair.json` -> `reversal-pair.schema.json`
 - `examples/counterparty-open-item.json` -> `counterparty-open-item.schema.json`
