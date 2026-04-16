@@ -68,6 +68,7 @@ extern "C" {
 #define HEFT_SCHEMA_VERSION    13
 #define HEFT_FORMAT_CSV        0
 #define HEFT_FORMAT_JSON       1
+#define HEFT_FORMAT_DEFAULT    2   /* explicit "give me the default programmatic format" => JSON */
 
 /* Opaque handle — one per .ledger file */
 typedef struct LedgerDB LedgerDB;
@@ -127,6 +128,7 @@ enum {
     HEFT_TOO_MANY_IMPORT_IDS            = 39,
     HEFT_PAYLOAD_TOO_LARGE              = 40,
     HEFT_PERIOD_HAS_DRAFTS              = 41,
+    HEFT_DOCUMENT_NUMBER_REQUIRED       = 42,
     HEFT_SQLITE_OPEN_FAILED             = 90,
     HEFT_SQLITE_EXEC_FAILED             = 91,
     HEFT_SQLITE_PREPARE_FAILED          = 92,
@@ -208,6 +210,7 @@ int64_t ledger_create_period(LedgerDB* h, int64_t book_id, const char* name, int
 bool    ledger_bulk_create_periods(LedgerDB* h, int64_t book_id, int32_t year, int32_t start_month, const char* granularity, const char* performed_by);
 bool    ledger_transition_period(LedgerDB* h, int64_t period_id, const char* new_status, const char* performed_by);
 bool    ledger_close_period(LedgerDB* h, int64_t book_id, int64_t period_id, const char* performed_by);
+int32_t ledger_preview_close_period(LedgerDB* h, int64_t book_id, int64_t period_id, uint8_t* buf, int32_t buf_len, int32_t format);
 
 /* ── Journal Entries ───────────────────────────────────────── */
 
@@ -363,6 +366,9 @@ int32_t ledger_dimension_summary(LedgerDB* h, int64_t book_id, int64_t dimension
 int32_t ledger_dimension_summary_rollup(LedgerDB* h, int64_t book_id, int64_t dimension_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_budget_vs_actual(LedgerDB* h, int64_t budget_id, const char* start_date, const char* end_date, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_describe_schema(LedgerDB* h, uint8_t* buf, int32_t buf_len, int32_t format);
+int32_t ledger_render_report_result_json(ReportResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
+int32_t ledger_render_ledger_result_json(LedgerResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
+int32_t ledger_render_classified_result_json(ClassifiedResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
 
 /* ── Export (full-book JSON/CSV into caller buffer) ────────── */
 

@@ -3,9 +3,10 @@ const heft = @import("heft");
 const common = @import("abi_common.zig");
 
 const LedgerDB = common.LedgerDB;
+const export_mod = heft.export_mod;
 
 fn exportFormat(format: i32) ?heft.export_mod.ExportFormat {
-    return if (format == 0) .csv else if (format == 1) .json else null;
+    return if (format == 0) .csv else if (format == 1 or format == 2) .json else null;
 }
 
 fn queryOrder(sort_order: i32) ?heft.query_mod.SortOrder {
@@ -903,4 +904,198 @@ pub fn ledger_dimension_summary_rollup(handle: ?*LedgerDB, book_id: i64, dimensi
         return -1;
     };
     return common.safeIntCast(result.len);
+}
+
+pub fn ledger_render_report_result_json(result: ?*heft.report.ReportResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    const r = result orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "report result pointer is required");
+        return -1;
+    };
+    const slice = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+    const kind = if (packet_kind) |k| std.mem.span(k) else "report";
+    const rendered = heft.export_mod.reportToJsonEx(r, kind, book_id, slice, as_integer_minor_units != 0) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(rendered.len);
+}
+
+pub fn ledger_render_ledger_result_json(result: ?*heft.report.LedgerResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    const r = result orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "ledger result pointer is required");
+        return -1;
+    };
+    const slice = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+    const kind = if (packet_kind) |k| std.mem.span(k) else "ledger";
+    const rendered = heft.export_mod.ledgerResultToJsonEx(r, kind, book_id, slice, as_integer_minor_units != 0) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(rendered.len);
+}
+
+pub fn ledger_render_classified_result_json(result: ?*heft.classification.ClassifiedResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    const r = result orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "classified result pointer is required");
+        return -1;
+    };
+    const slice = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+    const kind = if (packet_kind) |k| std.mem.span(k) else "classified_result";
+    const rendered = heft.export_mod.classifiedResultToJsonEx(r, kind, book_id, slice, as_integer_minor_units != 0) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(rendered.len);
+}
+
+pub fn ledger_preview_close_period(handle: ?*LedgerDB, book_id: i64, period_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
+    const h = handle orelse return common.invalidHandleI32();
+    const fmt = exportFormat(format) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "format must be HEFT_FORMAT_CSV (0), HEFT_FORMAT_JSON (1), or HEFT_FORMAT_DEFAULT (2)");
+        return -1;
+    };
+    const out = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+
+    var before_stmt = h.sqlite.prepare("SELECT COALESCE(MAX(id), 0) FROM ledger_entries WHERE book_id = ?;") catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    defer before_stmt.finalize();
+    before_stmt.bindInt(1, book_id) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    _ = before_stmt.step() catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    const before_max = before_stmt.columnInt64(0);
+
+    h.sqlite.beginTransaction() catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    defer h.sqlite.rollback();
+
+    heft.close.closePeriod(h.sqlite, book_id, period_id, "preview") catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+
+    var stmt = h.sqlite.prepare(
+        \\SELECT e.id, e.document_number, e.posting_date, e.entry_type, e.period_id, e.status,
+        \\  COALESCE((SELECT COUNT(*) FROM ledger_entry_lines el WHERE el.entry_id = e.id), 0)
+        \\FROM ledger_entries e
+        \\WHERE e.book_id = ? AND e.id > ? AND e.entry_type IN ('closing', 'opening')
+        \\ORDER BY e.id ASC;
+    ) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    defer stmt.finalize();
+    stmt.bindInt(1, book_id) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    stmt.bindInt(2, before_max) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+
+    var pos: usize = 0;
+    switch (fmt) {
+        .csv => {
+            const header = "id,document_number,posting_date,entry_type,period_id,status,line_count\n";
+            if (header.len > out.len) {
+                common.setError(common.mapError(error.BufferTooSmall));
+                return -1;
+            }
+            @memcpy(out[0..header.len], header);
+            pos = header.len;
+            while (stmt.step() catch |err| {
+                common.setError(common.mapError(err));
+                return -1;
+            }) {
+                const chunk = std.fmt.bufPrint(out[pos..], "{d},", .{stmt.columnInt64(0)}) catch {
+                    common.setError(common.mapError(error.BufferTooSmall));
+                    return -1;
+                };
+                pos += chunk.len;
+                pos += export_mod.csvField(out[pos..], stmt.columnText(1) orelse "") catch {
+                    common.setError(common.mapError(error.BufferTooSmall));
+                    return -1;
+                };
+                if (pos >= out.len) return -1;
+                out[pos] = ',';
+                pos += 1;
+                pos += export_mod.csvField(out[pos..], stmt.columnText(2) orelse "") catch return -1;
+                if (pos >= out.len) return -1;
+                out[pos] = ',';
+                pos += 1;
+                pos += export_mod.csvField(out[pos..], stmt.columnText(3) orelse "") catch return -1;
+                const tail = std.fmt.bufPrint(out[pos..], ",{d},", .{stmt.columnInt64(4)}) catch return -1;
+                pos += tail.len;
+                pos += export_mod.csvField(out[pos..], stmt.columnText(5) orelse "") catch return -1;
+                const ending = std.fmt.bufPrint(out[pos..], ",{d}\n", .{stmt.columnInt(6)}) catch return -1;
+                pos += ending.len;
+            }
+        },
+        .json => {
+            const open = "{\"packet_kind\":\"close_preview\",\"book_id\":";
+            if (open.len > out.len) {
+                common.setError(common.mapError(error.BufferTooSmall));
+                return -1;
+            }
+            @memcpy(out[0..open.len], open);
+            pos = open.len;
+            pos += (std.fmt.bufPrint(out[pos..], "{d},\"period_id\":{d},\"rows\":[", .{ book_id, period_id }) catch {
+                common.setError(common.mapError(error.BufferTooSmall));
+                return -1;
+            }).len;
+            var first = true;
+            while (stmt.step() catch |err| {
+                common.setError(common.mapError(err));
+                return -1;
+            }) {
+                if (!first) {
+                    if (pos >= out.len) return -1;
+                    out[pos] = ',';
+                    pos += 1;
+                }
+                first = false;
+                const head = std.fmt.bufPrint(out[pos..], "{{\"id\":{d},\"document_number\":\"", .{stmt.columnInt64(0)}) catch return -1;
+                pos += head.len;
+                pos += export_mod.jsonString(out[pos..], stmt.columnText(1) orelse "") catch return -1;
+                const mid = "\",\"posting_date\":\"";
+                if (pos + mid.len > out.len) return -1;
+                @memcpy(out[pos .. pos + mid.len], mid);
+                pos += mid.len;
+                pos += export_mod.jsonString(out[pos..], stmt.columnText(2) orelse "") catch return -1;
+                const tail = std.fmt.bufPrint(out[pos..], "\",\"entry_type\":\"{s}\",\"period_id\":{d},\"status\":\"{s}\",\"line_count\":{d}}}", .{
+                    stmt.columnText(3) orelse "",
+                    stmt.columnInt64(4),
+                    stmt.columnText(5) orelse "",
+                    stmt.columnInt(6),
+                }) catch return -1;
+                pos += tail.len;
+            }
+            if (pos + 2 > out.len) return -1;
+            out[pos] = ']';
+            out[pos + 1] = '}';
+            pos += 2;
+        },
+    }
+    return common.safeIntCast(pos);
 }

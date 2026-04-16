@@ -5,7 +5,11 @@ const common = @import("abi_common.zig");
 const LedgerDB = common.LedgerDB;
 
 fn exportFormat(format: i32) ?heft.export_mod.ExportFormat {
-    return if (format == 0) .csv else if (format == 1) .json else null;
+    return if (format == 0) .csv else if (format == 1 or format == 2) .json else null;
+}
+
+fn isSaneFxRate(fx_rate: i64) bool {
+    return fx_rate >= 1_000_000 and fx_rate <= 100_000_000_000_000;
 }
 
 fn normalizedGroupRole(raw: []const u8) ?[]const u8 {
@@ -193,7 +197,7 @@ pub fn ledger_create_draft(handle: ?*LedgerDB, book_id: i64, document_number: [*
     const h = handle orelse return common.invalidHandleI64();
     const doc = std.mem.span(document_number);
     if (doc.len == 0) {
-        common.setErrorMessage(common.mapError(error.InvalidInput), "document_number is required");
+        common.setErrorMessage(42, "document_number is required");
         return -1;
     }
     const desc: ?[]const u8 = if (description) |d| std.mem.span(d) else null;
@@ -225,6 +229,10 @@ pub fn ledger_add_line(handle: ?*LedgerDB, entry_id: i64, line_number: i32, debi
     }
     if (fx_rate <= 0) {
         common.setErrorMessage(common.mapError(error.InvalidFxRate), "fx_rate must be greater than zero");
+        return -1;
+    }
+    if (!isSaneFxRate(fx_rate)) {
+        common.setErrorMessage(common.mapError(error.InvalidFxRate), "fx_rate is outside the sane input range [10^6, 10^14]");
         return -1;
     }
     const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;
@@ -313,6 +321,10 @@ pub fn ledger_delete_draft(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0
 
 pub fn ledger_edit_line(handle: ?*LedgerDB, line_id: i64, debit_amount: i64, credit_amount: i64, transaction_currency: [*:0]const u8, fx_rate: i64, account_id: i64, performed_by: [*:0]const u8) bool {
     const h = handle orelse return common.invalidHandleBool();
+    if (fx_rate <= 0 or !isSaneFxRate(fx_rate)) {
+        common.setErrorMessage(common.mapError(error.InvalidFxRate), "fx_rate is outside the sane input range [10^6, 10^14]");
+        return false;
+    }
     heft.entry.Entry.editLine(h.sqlite, line_id, debit_amount, credit_amount, std.mem.span(transaction_currency), fx_rate, account_id, null, null, std.mem.span(performed_by)) catch |err| {
         common.setError(common.mapError(err));
         return false;
@@ -674,6 +686,10 @@ pub fn ledger_edit_line_full(handle: ?*LedgerDB, line_id: i64, debit_amount: i64
     const h = handle orelse return common.invalidHandleBool();
     if (counterparty_id < 0) {
         common.setError(common.mapError(error.InvalidInput));
+        return false;
+    }
+    if (fx_rate <= 0 or !isSaneFxRate(fx_rate)) {
+        common.setErrorMessage(common.mapError(error.InvalidFxRate), "fx_rate is outside the sane input range [10^6, 10^14]");
         return false;
     }
     const cp: ?i64 = if (counterparty_id > 0) counterparty_id else null;

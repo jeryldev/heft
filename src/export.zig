@@ -12,6 +12,18 @@ fn fmtAmount(dest: []u8, amount: i64, dp: u8) !usize {
     return result.len;
 }
 
+fn appendAmountValue(buf: []u8, amount: i64, dp: u8, as_integer_minor_units: bool) !usize {
+    if (as_integer_minor_units) {
+        return (try std.fmt.bufPrint(buf, "{d}", .{amount})).len;
+    }
+    if (buf.len < 2) return error.BufferTooSmall;
+    buf[0] = '"';
+    const inner_len = try fmtAmount(buf[1..], amount, dp);
+    if (1 + inner_len >= buf.len) return error.BufferTooSmall;
+    buf[1 + inner_len] = '"';
+    return inner_len + 2;
+}
+
 pub fn csvField(dest: []u8, src: []const u8) !usize {
     var needs_quoting = false;
     for (src) |c| {
@@ -158,26 +170,42 @@ pub fn reportToCsv(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
 
 /// Export a ReportResult to JSON format in a caller-provided buffer.
 pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
-    var pos: usize = 0;
+    return reportToJsonEx(result, "report", 0, buf, false);
+}
 
-    const open = "{\"total_debits\":";
+pub fn reportToJsonEx(result: *report_mod.ReportResult, packet_kind: []const u8, book_id: i64, buf: []u8, as_integer_minor_units: bool) ![]u8 {
+    var pos: usize = 0;
+    const dp = result.decimal_places;
+
+    const open = "{\"packet_kind\":\"";
     if (pos + open.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + open.len], open);
     pos += open.len;
-
-    const dp = result.decimal_places;
-    if (pos >= buf.len) return error.BufferTooSmall;
-    buf[pos] = '"';
-    pos += 1;
-    pos += try fmtAmount(buf[pos..], result.total_debits, dp);
-    const mid = "\",\"total_credits\":\"";
+    pos += try jsonString(buf[pos..], packet_kind);
+    const mid0 = std.fmt.bufPrint(buf[pos..], "\",\"book_id\":{d},\"meta\":{{\"decimal_places\":{d},\"amount_encoding\":\"", .{ book_id, dp }) catch return error.BufferTooSmall;
+    pos += mid0.len;
+    const enc = if (as_integer_minor_units) "integer_minor_units" else "decimal_string";
+    pos += try jsonString(buf[pos..], enc);
+    const mid = "\"},\"totals\":{\"debits\":";
     if (pos + mid.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + mid.len], mid);
     pos += mid.len;
-    pos += try fmtAmount(buf[pos..], result.total_credits, dp);
-    if (pos >= buf.len) return error.BufferTooSmall;
-    buf[pos] = '"';
-    pos += 1;
+    pos += try appendAmountValue(buf[pos..], result.total_debits, dp, as_integer_minor_units);
+    const mid2 = ",\"credits\":";
+    if (pos + mid2.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid2.len], mid2);
+    pos += mid2.len;
+    pos += try appendAmountValue(buf[pos..], result.total_credits, dp, as_integer_minor_units);
+    const legacy = "},\"total_debits\":";
+    if (pos + legacy.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + legacy.len], legacy);
+    pos += legacy.len;
+    pos += try appendAmountValue(buf[pos..], result.total_debits, dp, as_integer_minor_units);
+    const legacy2 = ",\"total_credits\":";
+    if (pos + legacy2.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + legacy2.len], legacy2);
+    pos += legacy2.len;
+    pos += try appendAmountValue(buf[pos..], result.total_credits, dp, as_integer_minor_units);
 
     const arr_open = ",\"rows\":[";
     if (pos + arr_open.len > buf.len) return error.BufferTooSmall;
@@ -194,32 +222,45 @@ pub fn reportToJson(result: *report_mod.ReportResult, buf: []u8) ![]u8 {
         const acct_name = row.account_name[0..row.account_name_len];
         const acct_type = row.account_type[0..row.account_type_len];
 
-        const p1 = "{\"account\":\"";
-        if (pos + p1.len > buf.len) return error.BufferTooSmall;
-        @memcpy(buf[pos .. pos + p1.len], p1);
+        const p1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"account_id\":{d},\"account\":\"", .{ row.account_id, row.account_id }) catch return error.BufferTooSmall;
         pos += p1.len;
         pos += try jsonString(buf[pos..], acct_num);
-        const p2 = "\",\"name\":\"";
+        const p1b = "\",\"number\":\"";
+        if (pos + p1b.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + p1b.len], p1b);
+        pos += p1b.len;
+        pos += try jsonString(buf[pos..], acct_num);
+        const p2 = "\",\"account_number\":\"";
         if (pos + p2.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p2.len], p2);
         pos += p2.len;
+        pos += try jsonString(buf[pos..], acct_num);
+        const p2b = "\",\"name\":\"";
+        if (pos + p2b.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + p2b.len], p2b);
+        pos += p2b.len;
+        pos += try jsonString(buf[pos..], acct_name);
+        const p2c = "\",\"account_name\":\"";
+        if (pos + p2c.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + p2c.len], p2c);
+        pos += p2c.len;
         pos += try jsonString(buf[pos..], acct_name);
         const p3 = "\",\"type\":\"";
         if (pos + p3.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p3.len], p3);
         pos += p3.len;
         pos += try jsonString(buf[pos..], acct_type);
-        const p4 = "\",\"debit\":\"";
+        const p4 = "\",\"debit\":";
         if (pos + p4.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p4.len], p4);
         pos += p4.len;
-        pos += try fmtAmount(buf[pos..], row.debit_balance, dp);
-        const p5 = "\",\"credit\":\"";
+        pos += try appendAmountValue(buf[pos..], row.debit_balance, dp, as_integer_minor_units);
+        const p5 = ",\"credit\":";
         if (pos + p5.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p5.len], p5);
         pos += p5.len;
-        pos += try fmtAmount(buf[pos..], row.credit_balance, dp);
-        const p6 = "\"}";
+        pos += try appendAmountValue(buf[pos..], row.credit_balance, dp, as_integer_minor_units);
+        const p6 = "}";
         if (pos + p6.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p6.len], p6);
         pos += p6.len;
@@ -299,12 +340,53 @@ pub fn ledgerResultToCsv(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
 }
 
 pub fn ledgerResultToJson(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
-    var pos: usize = 0;
+    return ledgerResultToJsonEx(result, "ledger", 0, buf, false);
+}
 
-    const open = std.fmt.bufPrint(buf[pos..], "{{\"opening_balance\":{d},\"closing_balance\":{d},\"total_debits\":{d},\"total_credits\":{d},\"rows\":[", .{
-        result.opening_balance, result.closing_balance, result.total_debits, result.total_credits,
-    }) catch return error.BufferTooSmall;
+pub fn ledgerResultToJsonEx(result: *report_mod.LedgerResult, packet_kind: []const u8, book_id: i64, buf: []u8, as_integer_minor_units: bool) ![]u8 {
+    var pos: usize = 0;
+    const open = "{\"packet_kind\":\"";
+    if (pos + open.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + open.len], open);
     pos += open.len;
+    pos += try jsonString(buf[pos..], packet_kind);
+    const mid = std.fmt.bufPrint(buf[pos..], "\",\"book_id\":{d},\"meta\":{{\"decimal_places\":{d},\"amount_encoding\":\"", .{ book_id, result.decimal_places }) catch return error.BufferTooSmall;
+    pos += mid.len;
+    pos += try jsonString(buf[pos..], if (as_integer_minor_units) "integer_minor_units" else "decimal_string");
+    const mid2 = "\"},\"opening_balance\":";
+    if (pos + mid2.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid2.len], mid2);
+    pos += mid2.len;
+    pos += try appendAmountValue(buf[pos..], result.opening_balance, result.decimal_places, as_integer_minor_units);
+    const mid3 = ",\"closing_balance\":";
+    if (pos + mid3.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid3.len], mid3);
+    pos += mid3.len;
+    pos += try appendAmountValue(buf[pos..], result.closing_balance, result.decimal_places, as_integer_minor_units);
+    const mid4 = ",\"totals\":{\"debits\":";
+    if (pos + mid4.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid4.len], mid4);
+    pos += mid4.len;
+    pos += try appendAmountValue(buf[pos..], result.total_debits, result.decimal_places, as_integer_minor_units);
+    const mid5 = ",\"credits\":";
+    if (pos + mid5.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid5.len], mid5);
+    pos += mid5.len;
+    pos += try appendAmountValue(buf[pos..], result.total_credits, result.decimal_places, as_integer_minor_units);
+    const mid6 = "},\"total_debits\":";
+    if (pos + mid6.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid6.len], mid6);
+    pos += mid6.len;
+    pos += try appendAmountValue(buf[pos..], result.total_debits, result.decimal_places, as_integer_minor_units);
+    const mid7 = ",\"total_credits\":";
+    if (pos + mid7.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + mid7.len], mid7);
+    pos += mid7.len;
+    pos += try appendAmountValue(buf[pos..], result.total_credits, result.decimal_places, as_integer_minor_units);
+    const rows_open = ",\"rows\":[";
+    if (pos + rows_open.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + rows_open.len], rows_open);
+    pos += rows_open.len;
 
     for (result.rows, 0..) |row, i| {
         if (i > 0) {
@@ -327,25 +409,56 @@ pub fn ledgerResultToJson(result: *report_mod.LedgerResult, buf: []u8) ![]u8 {
         @memcpy(buf[pos .. pos + p3.len], p3);
         pos += p3.len;
         pos += try jsonString(buf[pos..], row.description[0..row.description_len]);
-        const p4 = "\",\"account_number\":\"";
-        if (pos + p4.len > buf.len) return error.BufferTooSmall;
-        @memcpy(buf[pos .. pos + p4.len], p4);
+        const p4 = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"account_number\":\"", .{row.account_id}) catch return error.BufferTooSmall;
         pos += p4.len;
+        pos += try jsonString(buf[pos..], row.account_number[0..row.account_number_len]);
+        const p4b = "\",\"number\":\"";
+        if (pos + p4b.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + p4b.len], p4b);
+        pos += p4b.len;
         pos += try jsonString(buf[pos..], row.account_number[0..row.account_number_len]);
         const p5 = "\",\"account_name\":\"";
         if (pos + p5.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p5.len], p5);
         pos += p5.len;
         pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
+        const p5b = "\",\"name\":\"";
+        if (pos + p5b.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + p5b.len], p5b);
+        pos += p5b.len;
+        pos += try jsonString(buf[pos..], row.account_name[0..row.account_name_len]);
         const p6 = "\",\"transaction_currency\":\"";
         if (pos + p6.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + p6.len], p6);
         pos += p6.len;
         pos += try jsonString(buf[pos..], row.transaction_currency[0..row.transaction_currency_len]);
-        const nums = std.fmt.bufPrint(buf[pos..], "\",\"debit\":{d},\"credit\":{d},\"running_balance\":{d},\"transaction_debit\":{d},\"transaction_credit\":{d},\"fx_rate\":{d}}}", .{
-            row.debit_amount, row.credit_amount, row.running_balance, row.transaction_debit, row.transaction_credit, row.fx_rate,
-        }) catch return error.BufferTooSmall;
+        const nums = "\",\"debit\":";
+        if (pos + nums.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + nums.len], nums);
         pos += nums.len;
+        pos += try appendAmountValue(buf[pos..], row.debit_amount, result.decimal_places, as_integer_minor_units);
+        const nums2 = ",\"credit\":";
+        if (pos + nums2.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + nums2.len], nums2);
+        pos += nums2.len;
+        pos += try appendAmountValue(buf[pos..], row.credit_amount, result.decimal_places, as_integer_minor_units);
+        const nums3 = ",\"running_balance\":";
+        if (pos + nums3.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + nums3.len], nums3);
+        pos += nums3.len;
+        pos += try appendAmountValue(buf[pos..], row.running_balance, result.decimal_places, as_integer_minor_units);
+        const nums4 = ",\"transaction_debit\":";
+        if (pos + nums4.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + nums4.len], nums4);
+        pos += nums4.len;
+        pos += try appendAmountValue(buf[pos..], row.transaction_debit, result.decimal_places, as_integer_minor_units);
+        const nums5 = ",\"transaction_credit\":";
+        if (pos + nums5.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + nums5.len], nums5);
+        pos += nums5.len;
+        pos += try appendAmountValue(buf[pos..], row.transaction_credit, result.decimal_places, as_integer_minor_units);
+        const nums6 = std.fmt.bufPrint(buf[pos..], ",\"fx_rate\":{d}}}", .{row.fx_rate}) catch return error.BufferTooSmall;
+        pos += nums6.len;
     }
 
     const close = "]}";
@@ -388,33 +501,55 @@ pub fn classifiedResultToCsv(result: *classification_mod.ClassifiedResult, buf: 
 }
 
 pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf: []u8) ![]u8 {
+    return classifiedResultToJsonEx(result, "classified_result", 0, buf, false);
+}
+
+pub fn classifiedResultToJsonEx(result: *classification_mod.ClassifiedResult, packet_kind: []const u8, book_id: i64, buf: []u8, as_integer_minor_units: bool) ![]u8 {
     var pos: usize = 0;
 
     const dp = result.decimal_places;
-    const hdr = "{\"total_debits\":\"";
+    const hdr = "{\"packet_kind\":\"";
     if (pos + hdr.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr.len], hdr);
     pos += hdr.len;
-    pos += try fmtAmount(buf[pos..], result.total_debits, dp);
-    const hdr2 = "\",\"total_credits\":\"";
+    pos += try jsonString(buf[pos..], packet_kind);
+    const hdr0 = std.fmt.bufPrint(buf[pos..], "\",\"book_id\":{d},\"meta\":{{\"decimal_places\":{d},\"amount_encoding\":\"", .{ book_id, dp }) catch return error.BufferTooSmall;
+    pos += hdr0.len;
+    pos += try jsonString(buf[pos..], if (as_integer_minor_units) "integer_minor_units" else "decimal_string");
+    const hdr2 = "\"},\"totals\":{\"debits\":";
     if (pos + hdr2.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr2.len], hdr2);
     pos += hdr2.len;
-    pos += try fmtAmount(buf[pos..], result.total_credits, dp);
-    const hdr3 = "\",\"unclassified_debits\":\"";
+    pos += try appendAmountValue(buf[pos..], result.total_debits, dp, as_integer_minor_units);
+    const hdr2b = ",\"credits\":";
+    if (pos + hdr2b.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + hdr2b.len], hdr2b);
+    pos += hdr2b.len;
+    pos += try appendAmountValue(buf[pos..], result.total_credits, dp, as_integer_minor_units);
+    const hdr3 = "},\"total_debits\":";
     if (pos + hdr3.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr3.len], hdr3);
     pos += hdr3.len;
-    pos += try fmtAmount(buf[pos..], result.unclassified_debits, dp);
-    const hdr4 = "\",\"unclassified_credits\":\"";
+    pos += try appendAmountValue(buf[pos..], result.total_debits, dp, as_integer_minor_units);
+    const hdr4 = ",\"total_credits\":";
     if (pos + hdr4.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr4.len], hdr4);
     pos += hdr4.len;
-    pos += try fmtAmount(buf[pos..], result.unclassified_credits, dp);
-    const hdr5 = "\",\"rows\":[";
+    pos += try appendAmountValue(buf[pos..], result.total_credits, dp, as_integer_minor_units);
+    const hdr4b = ",\"unclassified_debits\":";
+    if (pos + hdr4b.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + hdr4b.len], hdr4b);
+    pos += hdr4b.len;
+    pos += try appendAmountValue(buf[pos..], result.unclassified_debits, dp, as_integer_minor_units);
+    const hdr5 = ",\"unclassified_credits\":";
     if (pos + hdr5.len > buf.len) return error.BufferTooSmall;
     @memcpy(buf[pos .. pos + hdr5.len], hdr5);
     pos += hdr5.len;
+    pos += try appendAmountValue(buf[pos..], result.unclassified_credits, dp, as_integer_minor_units);
+    const hdr6 = ",\"rows\":[";
+    if (pos + hdr6.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + hdr6.len], hdr6);
+    pos += hdr6.len;
 
     for (result.rows, 0..) |row, i| {
         if (i > 0) {
@@ -430,15 +565,15 @@ pub fn classifiedResultToJson(result: *classification_mod.ClassifiedResult, buf:
         const mid1 = std.fmt.bufPrint(buf[pos..], "\",\"depth\":{d},\"label\":\"", .{row.depth}) catch return error.BufferTooSmall;
         pos += mid1.len;
         pos += try jsonString(buf[pos..], row.label[0..row.label_len]);
-        const acct_part = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":\"", .{row.account_id}) catch return error.BufferTooSmall;
+        const acct_part = std.fmt.bufPrint(buf[pos..], "\",\"account_id\":{d},\"debit\":", .{row.account_id}) catch return error.BufferTooSmall;
         pos += acct_part.len;
-        pos += try fmtAmount(buf[pos..], row.debit_balance, dp);
-        const cr_part = "\",\"credit\":\"";
+        pos += try appendAmountValue(buf[pos..], row.debit_balance, dp, as_integer_minor_units);
+        const cr_part = ",\"credit\":";
         if (pos + cr_part.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + cr_part.len], cr_part);
         pos += cr_part.len;
-        pos += try fmtAmount(buf[pos..], row.credit_balance, dp);
-        const close_row = "\"}";
+        pos += try appendAmountValue(buf[pos..], row.credit_balance, dp, as_integer_minor_units);
+        const close_row = "}";
         if (pos + close_row.len > buf.len) return error.BufferTooSmall;
         @memcpy(buf[pos .. pos + close_row.len], close_row);
         pos += close_row.len;

@@ -241,13 +241,23 @@ pub fn getAccount(database: db_mod.Database, account_id: i64, buf: []u8, format:
             pos += 1;
         },
         .json => {
-            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{id}) catch return error.BufferTooSmall;
+            const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"account_id\":{d},\"number\":\"", .{ id, id }) catch return error.BufferTooSmall;
             pos += j1.len;
             pos += try export_mod.jsonString(buf[pos..], number);
-            const j2 = "\",\"name\":\"";
+            const j2 = "\",\"account_number\":\"";
             if (pos + j2.len > buf.len) return error.BufferTooSmall;
             @memcpy(buf[pos .. pos + j2.len], j2);
             pos += j2.len;
+            pos += try export_mod.jsonString(buf[pos..], number);
+            const j2b = "\",\"name\":\"";
+            if (pos + j2b.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + j2b.len], j2b);
+            pos += j2b.len;
+            pos += try export_mod.jsonString(buf[pos..], name);
+            const j2c = "\",\"account_name\":\"";
+            if (pos + j2c.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[pos .. pos + j2c.len], j2c);
+            pos += j2c.len;
             pos += try export_mod.jsonString(buf[pos..], name);
             const j3 = "\",\"account_type\":\"";
             if (pos + j3.len > buf.len) return error.BufferTooSmall;
@@ -420,13 +430,23 @@ pub fn listAccounts(database: db_mod.Database, book_id: i64, type_filter: ?[]con
                 const is_contra = stmt.columnInt(5);
                 const status = stmt.columnText(6) orelse "";
 
-                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"number\":\"", .{id}) catch return error.BufferTooSmall;
+                const j1 = std.fmt.bufPrint(buf[pos..], "{{\"id\":{d},\"account_id\":{d},\"number\":\"", .{ id, id }) catch return error.BufferTooSmall;
                 pos += j1.len;
                 pos += try export_mod.jsonString(buf[pos..], number);
-                const j2 = "\",\"name\":\"";
+                const j2 = "\",\"account_number\":\"";
                 if (pos + j2.len > buf.len) return error.BufferTooSmall;
                 @memcpy(buf[pos .. pos + j2.len], j2);
                 pos += j2.len;
+                pos += try export_mod.jsonString(buf[pos..], number);
+                const j2b = "\",\"name\":\"";
+                if (pos + j2b.len > buf.len) return error.BufferTooSmall;
+                @memcpy(buf[pos .. pos + j2b.len], j2b);
+                pos += j2b.len;
+                pos += try export_mod.jsonString(buf[pos..], name);
+                const j2c = "\",\"account_name\":\"";
+                if (pos + j2c.len > buf.len) return error.BufferTooSmall;
+                @memcpy(buf[pos .. pos + j2c.len], j2c);
+                pos += j2c.len;
                 pos += try export_mod.jsonString(buf[pos..], name);
                 const j3 = "\",\"account_type\":\"";
                 if (pos + j3.len > buf.len) return error.BufferTooSmall;

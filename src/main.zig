@@ -442,6 +442,10 @@ pub export fn ledger_close_period(handle: ?*LedgerDB, book_id: i64, period_id: i
     return abi_core.ledger_close_period(handle, book_id, period_id, performed_by);
 }
 
+pub export fn ledger_preview_close_period(handle: ?*LedgerDB, book_id: i64, period_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
+    return abi_buffers.ledger_preview_close_period(handle, book_id, period_id, buf, buf_len, format);
+}
+
 pub export fn ledger_revalue_forex_balances(handle: ?*LedgerDB, book_id: i64, period_id: i64, rates_json: [*:0]const u8, performed_by: [*:0]const u8) i64 {
     return abi_core.ledger_revalue_forex_balances(handle, book_id, period_id, rates_json, performed_by);
 }
@@ -689,6 +693,18 @@ pub export fn ledger_list_dimension_values(handle: ?*LedgerDB, dimension_id: i64
 
 pub export fn ledger_describe_schema(handle: ?*LedgerDB, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     return abi_buffers.ledger_describe_schema(handle, buf, buf_len, format);
+}
+
+pub export fn ledger_render_report_result_json(result: ?*heft.report.ReportResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    return abi_buffers.ledger_render_report_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
+}
+
+pub export fn ledger_render_ledger_result_json(result: ?*heft.report.LedgerResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    return abi_buffers.ledger_render_ledger_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
+}
+
+pub export fn ledger_render_classified_result_json(result: ?*heft.classification.ClassifiedResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    return abi_buffers.ledger_render_classified_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
 }
 
 // ── Sprint 20B: Approval Workflow ─────────────────────────────

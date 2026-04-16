@@ -73,6 +73,7 @@ const ledger_verify = abi.ledger_verify;
 const ledger_verify_detailed = abi.ledger_verify_detailed;
 const ledger_archive_book = abi.ledger_archive_book;
 const ledger_close_period = abi.ledger_close_period;
+const ledger_preview_close_period = abi.ledger_preview_close_period;
 const ledger_revalue_forex_balances = abi.ledger_revalue_forex_balances;
 const ledger_last_error = abi.ledger_last_error;
 const ledger_last_error_message = abi.ledger_last_error_message;
@@ -174,6 +175,9 @@ const ledger_oble_export_dimension_summary_result = abi.ledger_oble_export_dimen
 const ledger_oble_export_dimension_rollup_result = abi.ledger_oble_export_dimension_rollup_result;
 const ledger_oble_export_budget_analysis_result = abi.ledger_oble_export_budget_analysis_result;
 const ledger_get_scales = abi.ledger_get_scales;
+const ledger_render_report_result_json = abi.ledger_render_report_result_json;
+const ledger_render_ledger_result_json = abi.ledger_render_ledger_result_json;
+const ledger_render_classified_result_json = abi.ledger_render_classified_result_json;
 const ledger_oble_import_session_open = abi.ledger_oble_import_session_open;
 const ledger_oble_import_session_close = abi.ledger_oble_import_session_close;
 const ledger_oble_import_session_set_max_payload = abi.ledger_oble_import_session_set_max_payload;
@@ -1401,6 +1405,29 @@ test "C ABI: ledger_get_scales returns runtime constants" {
     try std.testing.expectEqual(heft.money.FX_RATE_SCALE, fx_rate_scale);
 }
 
+test "C ABI: explicit document number error code is returned" {
+    defer cleanupTestFile("test-cabi-doc-required.ledger");
+    const h = ledger_open("test-cabi-doc-required.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    _ = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+    _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    try std.testing.expectEqual(@as(i64, -1), ledger_create_draft(h, book_id, "", "2026-01-15", "2026-01-15", null, 1, null, "admin"));
+    try std.testing.expectEqual(@as(i32, 42), ledger_last_error());
+    try std.testing.expectEqualStrings("HEFT_DOCUMENT_NUMBER_REQUIRED", std.mem.span(ledger_last_error_name()));
+}
+
+test "C ABI: default format constant renders JSON" {
+    defer cleanupTestFile("test-cabi-format-default.ledger");
+    const h = ledger_open("test-cabi-format-default.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    var buf: [1024]u8 = undefined;
+    const len = ledger_get_book(h, book_id, &buf, buf.len, 2);
+    try std.testing.expect(len > 0);
+    try std.testing.expectEqual(@as(u8, '{'), buf[0]);
+}
+
 test "C ABI: ledger_open null path returns null" {
     const handle = ledger_open(null);
     try std.testing.expect(handle == null);
@@ -1458,6 +1485,81 @@ test "C ABI: ledger_verify_detailed returns structured diagnostics" {
     const json = buf[0..@intCast(len)];
     try std.testing.expect(std.mem.indexOf(u8, json, "\"issues\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "UNBALANCED_ENTRY") != null);
+}
+
+test "C ABI: preview close period returns generated entries without committing" {
+    defer cleanupTestFile("test-preview-close.ledger");
+    const h = ledger_open("test-preview-close.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    const cash = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+    const re = ledger_create_account(h, book_id, "3100", "RE", "equity", 0, "admin");
+    const rev = ledger_create_account(h, book_id, "4000", "Revenue", "revenue", 0, "admin");
+    try std.testing.expect(ledger_set_retained_earnings_account(h, book_id, re, "admin"));
+    _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    _ = ledger_create_period(h, book_id, "Feb 2026", 2, 2026, "2026-02-01", "2026-02-28", "regular", "admin");
+    const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(h, entry_id, 1, 100_000_000, 0, "PHP", 10_000_000_000, cash, 0, null, "admin");
+    _ = ledger_add_line(h, entry_id, 2, 0, 100_000_000, "PHP", 10_000_000_000, rev, 0, null, "admin");
+    _ = ledger_post_entry(h, entry_id, "admin");
+
+    var preview_buf: [4096]u8 = undefined;
+    const preview_len = ledger_preview_close_period(h, book_id, 1, &preview_buf, preview_buf.len, 1);
+    try std.testing.expect(preview_len > 0);
+    const preview = preview_buf[0..@intCast(preview_len)];
+    try std.testing.expect(std.mem.indexOf(u8, preview, "\"packet_kind\":\"close_preview\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, preview, "\"entry_type\":\"closing\"") != null);
+
+    var entries_buf: [4096]u8 = undefined;
+    const entries_len = ledger_list_entries(h, book_id, null, null, null, null, 0, 100, 0, &entries_buf, entries_buf.len, 1);
+    try std.testing.expect(entries_len > 0);
+    const entries_json = entries_buf[0..@intCast(entries_len)];
+    try std.testing.expect(std.mem.indexOf(u8, entries_json, "CLOSE-P") == null);
+}
+
+test "C ABI: result render helpers expose aliases and integer minor units" {
+    defer cleanupTestFile("test-render-helpers.ledger");
+    const h = ledger_open("test-render-helpers.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    const cash = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+    const rev = ledger_create_account(h, book_id, "4000", "Revenue", "revenue", 0, "admin");
+    _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(h, entry_id, 1, 100_000_000, 0, "PHP", 10_000_000_000, cash, 0, null, "admin");
+    _ = ledger_add_line(h, entry_id, 2, 0, 100_000_000, "PHP", 10_000_000_000, rev, 0, null, "admin");
+    _ = ledger_post_entry(h, entry_id, "admin");
+
+    const report = ledger_trial_balance(h, book_id, "2026-01-31") orelse unreachable;
+    defer ledger_free_result(report);
+    var report_buf: [4096]u8 = undefined;
+    const report_len = ledger_render_report_result_json(report, "trial_balance", book_id, &report_buf, report_buf.len, 1);
+    try std.testing.expect(report_len > 0);
+    const report_json = report_buf[0..@intCast(report_len)];
+    try std.testing.expect(std.mem.indexOf(u8, report_json, "\"packet_kind\":\"trial_balance\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report_json, "\"account_number\":\"1000\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report_json, "\"amount_encoding\":\"integer_minor_units\"") != null);
+
+    const ledger = ledger_general_ledger(h, book_id, "2026-01-01", "2026-01-31") orelse unreachable;
+    defer ledger_free_ledger_result(ledger);
+    var ledger_buf: [4096]u8 = undefined;
+    const ledger_len = ledger_render_ledger_result_json(ledger, "general_ledger", book_id, &ledger_buf, ledger_buf.len, 1);
+    try std.testing.expect(ledger_len > 0);
+    const ledger_json = ledger_buf[0..@intCast(ledger_len)];
+    try std.testing.expect(std.mem.indexOf(u8, ledger_json, "\"number\":\"1000\"") != null);
+}
+
+test "C ABI: unreasonable fx rate is rejected early" {
+    defer cleanupTestFile("test-fx-range.ledger");
+    const h = ledger_open("test-fx-range.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    const cash = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+    _ = ledger_create_account(h, book_id, "4000", "Revenue", "revenue", 0, "admin");
+    _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    try std.testing.expectEqual(@as(i64, -1), ledger_add_line(h, entry_id, 1, 100_000_000, 0, "PHP", 10, cash, 0, null, "admin"));
+    try std.testing.expectEqual(@as(i32, 23), ledger_last_error());
 }
 
 test "C ABI: counterparty aliases accept business synonyms and inferred role" {
