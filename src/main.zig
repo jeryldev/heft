@@ -470,7 +470,7 @@ fn invalidHandleI32() i32 {
 // 30 = approval required, 31 = too many accounts,
 // 32 = period not in balance, 33 = no next period, 34 = cannot reopen cascade,
 // 35 = equity allocation required, 36 = equity allocation total invalid,
-// 37 = suspense account not clear,
+// 37 = suspense account not clear, 41 = period has drafts,
 // 90-94 = sqlite errors (open, exec, prepare, step, bind),
 // 99 = unknown
 

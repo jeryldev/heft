@@ -75,6 +75,7 @@ pub fn mapError(err: anyerror) i32 {
         error.SuspenseNotClear => 37,
         error.TooManyImportIds => 39,
         error.PayloadTooLarge => 40,
+        error.PeriodHasDrafts => 41,
         error.SqliteOpenFailed => 90,
         error.SqliteExecFailed => 91,
         error.SqlitePrepareFailed => 92,

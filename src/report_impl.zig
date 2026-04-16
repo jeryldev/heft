@@ -41,6 +41,7 @@ const schema = @import("schema.zig");
 const account_mod = @import("account.zig");
 const period_mod = @import("period.zig");
 const entry_mod = @import("entry.zig");
+const close_mod = @import("close.zig");
 
 fn setupTestDb() !db.Database {
     const database = try db.Database.open(":memory:");
@@ -293,6 +294,59 @@ test "trial balance: as_of_date before second period excludes it" {
     defer result.deinit();
 
     try std.testing.expectEqual(@as(i64, 1_000_000_000_00), result.total_debits);
+}
+
+test "trial balance: mid-period as_of_date includes posted activity" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_500_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_500_000_000_00, .account_id = 2 }});
+
+    const result = try trialBalance(database, 1, "2026-01-15");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 1_500_000_000_00), result.total_debits);
+    try std.testing.expectEqual(@as(i64, 1_500_000_000_00), result.total_credits);
+}
+
+test "balance sheet: mid-period as_of_date includes posted activity" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    try postEntry(database, "JE-001", "2026-01-15", 1, &.{.{ .amount = 1_500_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_500_000_000_00, .account_id = 2 }});
+
+    const result = try balanceSheet(database, 1, "2026-01-15");
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 1_500_000_000_00), result.total_debits);
+    try std.testing.expectEqual(@as(i64, 1_500_000_000_00), result.total_credits);
+}
+
+test "income statement: closing entries are excluded after close" {
+    const database = try setupTestDb();
+    defer database.close();
+
+    const retained_earnings = try account_mod.Account.create(database, 1, "3100", "Retained Earnings", .equity, false, "admin");
+    try book_mod.Book.setRetainedEarningsAccount(database, 1, retained_earnings, "admin");
+
+    try postEntry(database, "REV-001", "2026-01-15", 1, &.{.{ .amount = 1_100_000_000_00, .account_id = 1 }}, &.{.{ .amount = 1_100_000_000_00, .account_id = 4 }});
+
+    const before_close = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
+    defer before_close.deinit();
+    const revenue_before = findRow(before_close.rows, "4000").?;
+    try std.testing.expectEqual(@as(i64, 1_100_000_000_00), revenue_before.credit_balance);
+    try std.testing.expectEqual(@as(i64, 1_100_000_000_00), before_close.total_credits);
+
+    try close_mod.closePeriod(database, 1, 1, "admin");
+
+    const after_close = try incomeStatement(database, 1, "2026-01-01", "2026-01-31");
+    defer after_close.deinit();
+    const revenue_after = findRow(after_close.rows, "4000").?;
+    try std.testing.expectEqual(@as(i64, 1_100_000_000_00), revenue_after.credit_balance);
+    try std.testing.expectEqual(@as(i64, 1_100_000_000_00), after_close.total_credits);
+    try std.testing.expectEqual(@as(i64, 0), after_close.total_debits);
 }
 
 // ── Helper: find row by account number ──────────────────────────

@@ -102,7 +102,7 @@ fn closePeriodInternal(database: db.Database, book_id: i64, period_id: i64, perf
         try stmt.bindInt(1, book_id);
         try stmt.bindInt(2, period_id);
         _ = try stmt.step();
-        if (stmt.columnInt(0) > 0) return error.InvalidInput;
+        if (stmt.columnInt(0) > 0) return error.PeriodHasDrafts;
     }
 
     if (phase_timer) |*timer| {
@@ -1091,7 +1091,7 @@ test "closePeriod: draft entries exist" {
     _ = try entry_mod.Entry.createDraft(s.database, s.book_id, "DRAFT-001", "2026-01-15", "2026-01-15", null, s.period_id, null, "admin");
 
     const result = closePeriod(s.database, s.book_id, s.period_id, "admin");
-    try std.testing.expectError(error.InvalidInput, result);
+    try std.testing.expectError(error.PeriodHasDrafts, result);
 }
 
 test "closePeriod: period already closed" {

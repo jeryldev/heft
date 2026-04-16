@@ -171,6 +171,11 @@ pub const Period = struct {
             period_book_id = stmt.columnInt64(1);
         }
 
+        if (current == target_status) {
+            if (owns_txn) try database.commit();
+            return;
+        }
+
         if (current == .locked) return error.PeriodLocked;
         if (!current.canTransitionTo(target_status)) return error.InvalidTransition;
 
@@ -1379,4 +1384,21 @@ test "forward transition does not require reason" {
     defer database.close();
     const period_id = try Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
     try Period.transitionWithReason(database, period_id, .soft_closed, null, "admin");
+}
+
+test "period same-status transition is idempotent" {
+    const database = try setupTestDb();
+    defer database.close();
+    const period_id = try Period.create(database, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+
+    try Period.transition(database, period_id, .soft_closed, "admin");
+    try Period.transition(database, period_id, .soft_closed, "admin");
+    try Period.transition(database, period_id, .closed, "admin");
+    try Period.transition(database, period_id, .closed, "admin");
+
+    var stmt = try database.prepare("SELECT status FROM ledger_periods WHERE id = ?;");
+    defer stmt.finalize();
+    try stmt.bindInt(1, period_id);
+    _ = try stmt.step();
+    try std.testing.expectEqualStrings("closed", stmt.columnText(0).?);
 }

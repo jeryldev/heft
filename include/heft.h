@@ -124,6 +124,7 @@ enum {
     HEFT_EQUITY_CLOSE_TARGET_REQUIRED   = 38,
     HEFT_TOO_MANY_IMPORT_IDS            = 39,
     HEFT_PAYLOAD_TOO_LARGE              = 40,
+    HEFT_PERIOD_HAS_DRAFTS              = 41,
     HEFT_SQLITE_OPEN_FAILED             = 90,
     HEFT_SQLITE_EXEC_FAILED             = 91,
     HEFT_SQLITE_PREPARE_FAILED          = 92,

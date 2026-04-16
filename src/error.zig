@@ -43,4 +43,5 @@ pub const LedgerError = error{
     VoidReasonRequired,
     TooManyImportIds,
     PayloadTooLarge,
+    PeriodHasDrafts,
 };
