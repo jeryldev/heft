@@ -369,6 +369,9 @@ int32_t ledger_describe_schema(LedgerDB* h, uint8_t* buf, int32_t buf_len, int32
 int32_t ledger_render_report_result_json(ReportResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
 int32_t ledger_render_ledger_result_json(LedgerResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
 int32_t ledger_render_classified_result_json(ClassifiedResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
+int32_t ledger_render_comparative_result_json(ComparativeReportResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
+int32_t ledger_render_equity_result_json(EquityResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
+int32_t ledger_render_cash_flow_indirect_result_json(CashFlowIndirectResult* r, const char* packet_kind, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t as_integer_minor_units);
 
 /* ── Export (full-book JSON/CSV into caller buffer) ────────── */
 

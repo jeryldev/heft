@@ -991,6 +991,7 @@ pub const CashFlowIndirectResult = struct {
     investing_total: i64,
     financing_total: i64,
     net_cash_change: i64,
+    decimal_places: u8 = 2,
     truncated: bool = false,
 
     pub fn deinit(self: *CashFlowIndirectResult) void {
@@ -1050,6 +1051,7 @@ pub fn cashFlowStatementIndirect(database: db.Database, book_id: i64, start_date
 
     const cf_result = try cashFlowStatement(database, classification_id, start_date, end_date);
     defer cf_result.deinit();
+    result.decimal_places = cf_result.decimal_places;
 
     var rows = std.ArrayListUnmanaged(ClassifiedRow){};
     var operating: i64 = 0;

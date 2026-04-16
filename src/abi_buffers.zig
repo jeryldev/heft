@@ -957,6 +957,57 @@ pub fn ledger_render_classified_result_json(result: ?*heft.classification.Classi
     return common.safeIntCast(rendered.len);
 }
 
+pub fn ledger_render_comparative_result_json(result: ?*heft.report.ComparativeReportResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    const r = result orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "comparative result pointer is required");
+        return -1;
+    };
+    const slice = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+    const kind = if (packet_kind) |k| std.mem.span(k) else "comparative_report";
+    const rendered = heft.export_mod.comparativeResultToJsonEx(r, kind, book_id, slice, as_integer_minor_units != 0) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(rendered.len);
+}
+
+pub fn ledger_render_equity_result_json(result: ?*heft.report.EquityResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    const r = result orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "equity result pointer is required");
+        return -1;
+    };
+    const slice = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+    const kind = if (packet_kind) |k| std.mem.span(k) else "equity_changes";
+    const rendered = heft.export_mod.equityResultToJsonEx(r, kind, book_id, slice, as_integer_minor_units != 0) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(rendered.len);
+}
+
+pub fn ledger_render_cash_flow_indirect_result_json(result: ?*heft.classification.CashFlowIndirectResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    const r = result orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "cash flow indirect result pointer is required");
+        return -1;
+    };
+    const slice = common.safeBuf(buf, buf_len) orelse {
+        common.setErrorMessage(common.mapError(error.InvalidInput), "output buffer is required");
+        return -1;
+    };
+    const kind = if (packet_kind) |k| std.mem.span(k) else "cash_flow_indirect";
+    const rendered = heft.export_mod.cashFlowIndirectResultToJson(r, kind, book_id, slice, as_integer_minor_units != 0) catch |err| {
+        common.setError(common.mapError(err));
+        return -1;
+    };
+    return common.safeIntCast(rendered.len);
+}
+
 pub fn ledger_preview_close_period(handle: ?*LedgerDB, book_id: i64, period_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
     const h = handle orelse return common.invalidHandleI32();
     const fmt = exportFormat(format) orelse {

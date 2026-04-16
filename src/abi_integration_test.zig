@@ -178,6 +178,9 @@ const ledger_get_scales = abi.ledger_get_scales;
 const ledger_render_report_result_json = abi.ledger_render_report_result_json;
 const ledger_render_ledger_result_json = abi.ledger_render_ledger_result_json;
 const ledger_render_classified_result_json = abi.ledger_render_classified_result_json;
+const ledger_render_comparative_result_json = abi.ledger_render_comparative_result_json;
+const ledger_render_equity_result_json = abi.ledger_render_equity_result_json;
+const ledger_render_cash_flow_indirect_result_json = abi.ledger_render_cash_flow_indirect_result_json;
 const ledger_oble_import_session_open = abi.ledger_oble_import_session_open;
 const ledger_oble_import_session_close = abi.ledger_oble_import_session_close;
 const ledger_oble_import_session_set_max_payload = abi.ledger_oble_import_session_set_max_payload;
@@ -1547,6 +1550,56 @@ test "C ABI: result render helpers expose aliases and integer minor units" {
     try std.testing.expect(ledger_len > 0);
     const ledger_json = ledger_buf[0..@intCast(ledger_len)];
     try std.testing.expect(std.mem.indexOf(u8, ledger_json, "\"number\":\"1000\"") != null);
+
+    const comparative = ledger_trial_balance_comparative(h, book_id, "2026-01-31", "2025-12-31") orelse unreachable;
+    defer ledger_free_comparative_result(comparative);
+    var comparative_buf: [4096]u8 = undefined;
+    const comparative_len = ledger_render_comparative_result_json(comparative, "trial_balance_comparative", book_id, &comparative_buf, comparative_buf.len, 1);
+    try std.testing.expect(comparative_len > 0);
+    const comparative_json = comparative_buf[0..@intCast(comparative_len)];
+    try std.testing.expect(std.mem.indexOf(u8, comparative_json, "\"packet_kind\":\"trial_balance_comparative\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, comparative_json, "\"current\":{\"debits\":100000000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, comparative_json, "\"account_type\":\"asset\"") != null);
+
+    const equity = ledger_equity_changes(h, book_id, "2026-01-01", "2026-01-31", "2026-01-01") orelse unreachable;
+    defer ledger_free_equity_result(equity);
+    var equity_buf: [4096]u8 = undefined;
+    const equity_len = ledger_render_equity_result_json(equity, "equity_changes", book_id, &equity_buf, equity_buf.len, 1);
+    try std.testing.expect(equity_len > 0);
+    const equity_json = equity_buf[0..@intCast(equity_len)];
+    try std.testing.expect(std.mem.indexOf(u8, equity_json, "\"packet_kind\":\"equity_changes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, equity_json, "\"totals\":{\"opening\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, equity_json, "\"account_number\":\"3000\"") == null);
+}
+
+test "C ABI: indirect cash flow render helper emits normalized JSON" {
+    defer cleanupTestFile("test-cashflow-indirect-render.ledger");
+    const h = ledger_open("test-cashflow-indirect-render.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    const cash = ledger_create_account(h, book_id, "1000", "Cash", "asset", 0, "admin");
+    const equity = ledger_create_account(h, book_id, "3000", "Capital", "equity", 0, "admin");
+    const revenue = ledger_create_account(h, book_id, "4000", "Revenue", "revenue", 0, "admin");
+    _ = equity;
+    _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const class_id = ledger_create_classification(h, book_id, "Cash Flow", "cash_flow", "admin");
+    const operating = ledger_add_group_node(h, class_id, "Operating Activities", 0, 1, "admin");
+    _ = ledger_add_account_node(h, class_id, revenue, operating, 1, "admin");
+
+    const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(h, entry_id, 1, 100_000_000, 0, "PHP", 10_000_000_000, cash, 0, null, "admin");
+    _ = ledger_add_line(h, entry_id, 2, 0, 100_000_000, "PHP", 10_000_000_000, revenue, 0, null, "admin");
+    _ = ledger_post_entry(h, entry_id, "admin");
+
+    const indirect = ledger_cash_flow_indirect(h, book_id, "2026-01-01", "2026-01-31", class_id) orelse unreachable;
+    defer abi.ledger_free_cash_flow_indirect(indirect);
+    var buf: [4096]u8 = undefined;
+    const len = ledger_render_cash_flow_indirect_result_json(indirect, "cash_flow_indirect", book_id, &buf, buf.len, 1);
+    try std.testing.expect(len > 0);
+    const json = buf[0..@intCast(len)];
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"packet_kind\":\"cash_flow_indirect\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"net_income\":100000000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"totals\":{\"operating\"") != null);
 }
 
 test "C ABI: unreasonable fx rate is rejected early" {

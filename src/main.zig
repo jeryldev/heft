@@ -707,6 +707,18 @@ pub export fn ledger_render_classified_result_json(result: ?*heft.classification
     return abi_buffers.ledger_render_classified_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
 }
 
+pub export fn ledger_render_comparative_result_json(result: ?*heft.report.ComparativeReportResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    return abi_buffers.ledger_render_comparative_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
+}
+
+pub export fn ledger_render_equity_result_json(result: ?*heft.report.EquityResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    return abi_buffers.ledger_render_equity_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
+}
+
+pub export fn ledger_render_cash_flow_indirect_result_json(result: ?*heft.classification.CashFlowIndirectResult, packet_kind: ?[*:0]const u8, book_id: i64, buf: ?[*]u8, buf_len: i32, as_integer_minor_units: i32) i32 {
+    return abi_buffers.ledger_render_cash_flow_indirect_result_json(result, packet_kind, book_id, buf, buf_len, as_integer_minor_units);
+}
+
 // ── Sprint 20B: Approval Workflow ─────────────────────────────
 
 pub export fn ledger_approve_entry(handle: ?*LedgerDB, entry_id: i64, performed_by: [*:0]const u8) bool {
