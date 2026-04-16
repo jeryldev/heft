@@ -54,7 +54,7 @@ Implementation details that are outside OBLE itself:
 | Profile | Related drafts | Current packet examples | Heft status |
 | --- | --- | --- | --- |
 | `OBLE Core` | `0001`, `0002`, parts of `0004` | `core-book.json`, `core-accounts.json`, `core-periods.json`, `core-entry-posted.json`, `book-snapshot.json` | Strong |
-| `Counterparty / Open Item` | `0003`, parts of `0004` | `counterparties.json`, `counterparty-open-item.json`, `book-snapshot.json` | Strong |
+| `Counterparties / Open Items` | `0003`, parts of `0004` | `counterparties.json`, `counterparty-open-item.json`, `book-snapshot.json` | Strong |
 | `Multi-Currency` | `0006`, `0018` | core entry export with foreign-currency lines, revaluation packet export, translated statement result packets | Emerging |
 | `Close / Reopen` | `0007`, `0017` | close/reopen profile export, integrity summary result packet | Emerging |
 | `Policy / Designations` | `0008` | `policy-profile.json`, `book-snapshot.json` | Strong |
@@ -73,7 +73,7 @@ The current public-boundary posture in Heft is intentionally asymmetric:
 That means:
 
 - `OBLE Core` has public export in Zig and C, and import in Zig and C
-- `Counterparty / Open Item` has public export in Zig and C, and stable
+- `Counterparties / Open Items` has public export in Zig and C, and stable
   session-based import in Zig and C
 - `Policy / Designations` has public export in Zig and C, and safe
   user-authored import in Zig and C
@@ -123,7 +123,7 @@ OBLE compatibility.
 - preserve line ordering
 - enforce or validate balance invariants
 
-## 2. Counterparty / Open Item
+## 2. Counterparties / Open Items
 
 This profile adds:
 
@@ -139,6 +139,8 @@ This profile adds:
 - import/export open-item packet(s)
 - preserve counterparty linkage on entry lines
 - preserve remaining/open/partial/closed state
+
+This profile also covers subledger-style control-account relationships.
 
 ## 3. Multi-Currency
 

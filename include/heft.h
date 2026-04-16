@@ -230,10 +230,14 @@ bool    ledger_batch_void(LedgerDB* h, const char* entry_ids_json, const char* r
 
 /* ── Subledger ────────────────────────────────────────────── */
 
-int64_t ledger_create_subledger_group(LedgerDB* h, int64_t book_id, const char* name, const char* group_type, int32_t group_number, int64_t gl_account_id, const char* performed_by);
+/* Publicly, these records map most closely to counterparties and counterparty roles.
+ * Heft keeps "subledger" in the ABI because the native engine model is still
+ * organized around control-account-linked subledger domains.
+ */
+int64_t ledger_create_subledger_group(LedgerDB* h, int64_t book_id, const char* name, const char* counterparty_role, int32_t group_number, int64_t gl_account_id, const char* performed_by);
 bool    ledger_update_subledger_group_name(LedgerDB* h, int64_t group_id, const char* new_name, const char* performed_by);
 bool    ledger_delete_subledger_group(LedgerDB* h, int64_t group_id, const char* performed_by);
-int64_t ledger_create_subledger_account(LedgerDB* h, int64_t book_id, const char* number, const char* name, const char* account_type, int64_t group_id, const char* performed_by);
+int64_t ledger_create_subledger_account(LedgerDB* h, int64_t book_id, const char* number, const char* name, const char* counterparty_role, int64_t group_id, const char* performed_by);
 bool    ledger_update_subledger_account_name(LedgerDB* h, int64_t account_id, const char* new_name, const char* performed_by);
 bool    ledger_update_subledger_account_status(LedgerDB* h, int64_t account_id, const char* new_status, const char* performed_by);
 bool    ledger_delete_subledger_account(LedgerDB* h, int64_t account_id, const char* performed_by);
@@ -331,7 +335,7 @@ int32_t ledger_list_periods(LedgerDB* h, int64_t book_id, int32_t year_filter, c
 int32_t ledger_list_entries(LedgerDB* h, int64_t book_id, const char* status_filter, const char* start_date, const char* end_date, const char* doc_search, int32_t sort_order, int32_t limit, int32_t offset, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_list_entry_lines(LedgerDB* h, int64_t entry_id, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_list_classifications(LedgerDB* h, int64_t book_id, const char* type_filter, int32_t sort_order, int32_t limit, int32_t offset, uint8_t* buf, int32_t buf_len, int32_t format);
-int32_t ledger_list_subledger_groups(LedgerDB* h, int64_t book_id, const char* type_filter, int32_t sort_order, int32_t limit, int32_t offset, uint8_t* buf, int32_t buf_len, int32_t format);
+int32_t ledger_list_subledger_groups(LedgerDB* h, int64_t book_id, const char* role_filter, int32_t sort_order, int32_t limit, int32_t offset, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_list_subledger_accounts(LedgerDB* h, int64_t book_id, int64_t group_filter, const char* name_search, int32_t sort_order, int32_t limit, int32_t offset, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_list_audit_log(LedgerDB* h, int64_t book_id, const char* entity_type, const char* action, const char* start_date, const char* end_date, int32_t sort_order, int32_t limit, int32_t offset, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_list_open_items(LedgerDB* h, int64_t counterparty_id, bool include_closed, uint8_t* buf, int32_t buf_len, int32_t format);

@@ -28,6 +28,17 @@ The economic amount of a line measured in the book's base currency.
 The primary currency of a book. Canonical ledger totals are ultimately measured
 in this currency.
 
+## Bundle
+
+A grouped portable document containing related accounting material for one
+exchange use case.
+
+Examples:
+
+- core bundle
+- counterparty profile bundle
+- policy lifecycle bundle
+
 ## Book
 
 The top-level accounting boundary that owns accounts, periods, and entries.
@@ -61,6 +72,17 @@ Examples:
 
 A named entity that can be referenced by ledger lines, open items, or subledger
 workflows.
+
+Examples:
+
+- customer
+- supplier
+- employee
+- investor
+
+## Counterparty role
+
+The primary semantic role a counterparty plays in a given profile payload.
 
 Examples:
 
@@ -130,6 +152,16 @@ Open Bookkeeping Ledger Exchange.
 An emerging open standard for representing and exchanging double-entry ledger
 state and lifecycle semantics.
 
+## Packet
+
+One portable JSON document exchanged under an OBLE draft or profile.
+
+Examples:
+
+- one entry packet
+- one result packet
+- one audit-trail packet
+
 ## Open item
 
 An unsettled amount tied to a source line and counterparty.
@@ -137,6 +169,16 @@ An unsettled amount tied to a source line and counterparty.
 ## Period
 
 A reporting and lifecycle boundary for a book.
+
+## Profile
+
+A named interoperability capability area layered above the core model.
+
+Examples:
+
+- OBLE Core
+- Counterparties / Open Items
+- Multi-Currency
 
 ## Policy profile
 
@@ -146,6 +188,26 @@ requirements attached to a book or implementation.
 ## Posted
 
 An entry state that is economically effective and contributes to ledger totals.
+
+## Snapshot
+
+A bundle flavor representing a broader captured view of ledger state.
+
+Examples:
+
+- book snapshot
+- period snapshot
+
+## Status
+
+The stored lifecycle field value for an accounting entity or profile object.
+
+Examples:
+
+- active
+- draft
+- open
+- closed
 
 ## Reopen
 

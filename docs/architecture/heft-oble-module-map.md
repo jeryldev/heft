@@ -105,7 +105,7 @@ future refactors.
   Explicit export-first profile boundary for multi-currency entry exchange and
   revaluation packet bundling.
 - `src/subledger.zig`
-  Counterparty-account semantics and control-account relationships.
+  Native counterparty/subledger semantics and control-account relationships.
 - `src/open_item.zig`
   Open-item creation, remaining-balance tracking, and settlement lifecycle.
 - `src/close.zig`

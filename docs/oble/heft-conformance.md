@@ -44,7 +44,7 @@ standard boundary or testable conformance surface.
 | --- | --- | --- |
 | OBLE Core | Confirmed | Heft has `Book`, `Account`, `Period`, `Entry`, and `Line` with exact balancing and book/period boundaries. |
 | Lifecycle and Invariants | Confirmed | Draft/post/void/reverse states, period state enforcement, and audit-backed lifecycle semantics are present. |
-| Counterparties and Subledgers | Confirmed | Heft supports subledger groups/accounts, line-level counterparty linkage, open items, allocation, aging, and reconciliation. |
+| Counterparties / Open Items | Confirmed | Heft supports counterparties, line-level counterparty linkage, open items, allocation, aging, reconciliation, and subledger-style control-account relationships. |
 | Serialization and Conformance | Confirmed | Heft now exports canonical OBLE JSON for the implemented core and extension packets, imports those packets back into live ledgers, and runs lightweight draft-bundle validation in the repo today. |
 | Heft Mapping | Confirmed | The mapping is documented explicitly in the OBLE docs. |
 | Multi-Currency Semantics | Confirmed | Heft stores transaction amounts, base amounts, and FX rates with exact integer arithmetic and revaluation flows. |
@@ -111,8 +111,9 @@ Heft models this through:
 - allocation
 - aged subledger and reconciliation surfaces
 
-The terminology differs slightly from the generic OBLE language, but the
-underlying semantics are clearly present.
+Heft still uses native `subledger` terminology in parts of the engine and ABI,
+but the underlying portable semantics map cleanly to counterparties, open
+items, and control-account relationships.
 
 ## OBLE-0004 Serialization and Conformance
 

@@ -4,7 +4,8 @@ Heft is an embedded accounting engine built in Zig on top of SQLite.
 
 The design goal is to give applications a small, deterministic, transactional
 ledger core with double-entry posting, accounting periods, reporting,
-subledgers, dimensions, budgets, and a C ABI for embedding.
+counterparties and subledger control-account workflows, dimensions, budgets,
+and a C ABI for embedding.
 
 ## What Heft is
 
@@ -28,7 +29,8 @@ subledgers, dimensions, budgets, and a C ABI for embedding.
 - Entries and lines hold journal activity
 - Balance cache stores per-account, per-period aggregates
 - Audit log records all mutations
-- Subledger/open items support AR/AP style workflows
+- Counterparties, subledger control relationships, and open items support AR/AP
+  style workflows
 - Dimensions and budgets support analysis and planning
 
 ## Build
@@ -135,6 +137,7 @@ zig build example-oble-roundtrip
 - [Architecture](docs/architecture.md)
 - [Why Heft](docs/why-heft.md)
 - [Heft vs OBLE](docs/architecture/heft-vs-oble.md)
+- [Heft to OBLE Terminology](docs/architecture/heft-oble-translation.md)
 - [OBLE Repo Split Plan](docs/architecture/oble-repo-split-plan.md)
 - [Heft to OBLE Module Map](docs/architecture/heft-oble-module-map.md)
 - [Core, Policy, and Runtime](docs/architecture/core-policy-runtime.md)

@@ -3,11 +3,11 @@ const db = @import("db.zig");
 const audit = @import("audit.zig");
 
 pub const SubledgerGroup = struct {
-    const valid_types = [_][]const u8{ "customer", "supplier" };
+    const valid_roles = [_][]const u8{ "customer", "supplier" };
 
-    fn isValidType(t: []const u8) bool {
-        for (valid_types) |vt| {
-            if (std.mem.eql(u8, t, vt)) return true;
+    fn isValidRole(role: []const u8) bool {
+        for (valid_roles) |valid_role| {
+            if (std.mem.eql(u8, role, valid_role)) return true;
         }
         return false;
     }
@@ -17,8 +17,8 @@ pub const SubledgerGroup = struct {
         \\VALUES (?, ?, ?, ?, ?, ?, ?);
     ;
 
-    pub fn create(database: db.Database, book_id: i64, name: []const u8, group_type: []const u8, group_number: i32, gl_account_id: i64, number_range_start: ?[]const u8, number_range_end: ?[]const u8, performed_by: []const u8) !i64 {
-        if (!isValidType(group_type)) return error.InvalidInput;
+    pub fn create(database: db.Database, book_id: i64, name: []const u8, counterparty_role: []const u8, group_number: i32, gl_account_id: i64, number_range_start: ?[]const u8, number_range_end: ?[]const u8, performed_by: []const u8) !i64 {
+        if (!isValidRole(counterparty_role)) return error.InvalidInput;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
@@ -47,7 +47,7 @@ pub const SubledgerGroup = struct {
         defer stmt.finalize();
 
         try stmt.bindText(1, name);
-        try stmt.bindText(2, group_type);
+        try stmt.bindText(2, counterparty_role);
         try stmt.bindInt(3, @intCast(group_number));
         try stmt.bindInt(4, gl_account_id);
         if (number_range_start) |s| try stmt.bindText(5, s) else try stmt.bindNull(5);
@@ -194,11 +194,11 @@ pub const SubledgerAccountStatus = enum {
 };
 
 pub const SubledgerAccount = struct {
-    const valid_types = [_][]const u8{ "customer", "supplier", "both" };
+    const valid_roles = [_][]const u8{ "customer", "supplier", "both" };
 
-    fn isValidType(t: []const u8) bool {
-        for (valid_types) |vt| {
-            if (std.mem.eql(u8, t, vt)) return true;
+    fn isValidRole(role: []const u8) bool {
+        for (valid_roles) |valid_role| {
+            if (std.mem.eql(u8, role, valid_role)) return true;
         }
         return false;
     }
@@ -208,8 +208,8 @@ pub const SubledgerAccount = struct {
         \\VALUES (?, ?, ?, ?, ?);
     ;
 
-    pub fn create(database: db.Database, book_id: i64, number: []const u8, name: []const u8, account_type: []const u8, group_id: i64, performed_by: []const u8) !i64 {
-        if (!isValidType(account_type)) return error.InvalidInput;
+    pub fn create(database: db.Database, book_id: i64, number: []const u8, name: []const u8, counterparty_role: []const u8, group_id: i64, performed_by: []const u8) !i64 {
+        if (!isValidRole(counterparty_role)) return error.InvalidInput;
 
         const owns_txn = try database.beginTransactionIfNeeded();
         errdefer if (owns_txn) database.rollback();
@@ -239,7 +239,7 @@ pub const SubledgerAccount = struct {
 
         try stmt.bindText(1, number);
         try stmt.bindText(2, name);
-        try stmt.bindText(3, account_type);
+        try stmt.bindText(3, counterparty_role);
         try stmt.bindInt(4, group_id);
         try stmt.bindInt(5, book_id);
 

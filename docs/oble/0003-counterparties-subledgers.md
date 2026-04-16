@@ -58,7 +58,17 @@ Minimum recommended role values:
 - `investor`
 - `other`
 
-Implementations may support one counterparty with multiple roles.
+For the current draft-0 profile, the canonical schema carries one primary
+`role` string per exported counterparty.
+
+Implementations may still support richer native models internally:
+
+- one legal entity may have more than one role
+- an engine may expose a combined role such as `both`
+- future drafts may widen the schema if a portable multi-role model proves
+  necessary
+
+For now, the portable minimum is one explicit primary role in the packet.
 
 ## Line-level counterparty linkage
 
@@ -208,6 +218,9 @@ So the preferred pattern is:
 - role tags
 - optional `SubledgerGroup`
 - optional `OpenItem`
+
+The current draft keeps the packet shape simple by using one primary `role`
+string, while allowing implementations to document richer native role models.
 
 ## What remains out of scope
 
