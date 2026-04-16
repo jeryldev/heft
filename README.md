@@ -145,6 +145,7 @@ zig build example-oble-roundtrip
 - [Stability Statement](docs/stability.md)
 - [v0.1.1 Release Notes](docs/releases/v0.1.1.md)
 - [Release Checklist](RELEASE.md)
+- [Licensing](LICENSING.md)
 - [OBLE Source of Truth](docs/oble/source-of-truth.md)
 
 Examples:
@@ -219,4 +220,13 @@ The current ABI root has already been split into focused modules:
 
 ## License
 
-`AGPL-3.0-or-later`
+Heft is available under `AGPL-3.0-or-later`.
+
+If you want to embed Heft in a proprietary product, use it in a closed
+deployment, or need a different commercial arrangement, commercial licensing
+may be available.
+
+For licensing inquiries, contact
+[Jeryl Donato Estopace](https://www.linkedin.com/in/jeryldev/).
+
+See [LICENSING.md](LICENSING.md) for the short-form licensing posture.
