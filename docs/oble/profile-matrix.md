@@ -249,7 +249,7 @@ This profile adds:
 ### Strongest today
 
 - `OBLE Core`
-- `Counterparty / Open Item`
+- `Counterparties / Open Items`
 - `Policy / Designations`
 
 These are the areas where Heft already has the most complete semantics plus
@@ -285,7 +285,7 @@ That means:
 Good claims:
 
 - "Heft implements OBLE Core."
-- "Heft implements the OBLE Counterparty/Open Item profile."
+- "Heft implements the OBLE Counterparties / Open Items profile."
 - "Heft implements the OBLE Policy/Designations profile."
 - "Heft has emerging support for the OBLE Multi-Currency and Close/Reopen profiles."
 - "OBLE defines draft profiles for classifications, dimensions, and budgets that are not yet widely implemented."

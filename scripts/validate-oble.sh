@@ -50,6 +50,10 @@ docs = [
     oble_root / "README.md",
     oble_root / "schema" / "README.md",
     oble_root / "schema" / "validation.md",
+    oble_root / "profile-matrix.md",
+    oble_root / "import-boundary.md",
+    oble_root / "conformance-checklist.md",
+    oble_root / "heft-conformance.md",
 ]
 pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
