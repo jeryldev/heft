@@ -66,6 +66,8 @@ extern "C" {
 #define HEFT_AMOUNT_SCALE      100000000LL      /* 10^8: multiply to convert decimal to int */
 #define HEFT_FX_RATE_SCALE     10000000000LL    /* 10^10: multiply to convert FX rate to int */
 #define HEFT_SCHEMA_VERSION    13
+#define HEFT_FORMAT_CSV        0
+#define HEFT_FORMAT_JSON       1
 
 /* Opaque handle — one per .ledger file */
 typedef struct LedgerDB LedgerDB;
@@ -150,6 +152,9 @@ const char* ledger_version(void);
 LedgerDB*   ledger_open(const char* path);
 void        ledger_close(LedgerDB* handle);
 int32_t     ledger_last_error(void);
+const char* ledger_last_error_message(void);
+const char* ledger_last_error_name(void);
+bool        ledger_get_scales(int64_t* out_amount_scale, int64_t* out_fx_rate_scale);
 bool        ledger_set_busy_timeout(LedgerDB* h, int32_t timeout_ms);
 
 /* ── OBLE Import Session ───────────────────────────────────── */
@@ -236,9 +241,12 @@ bool    ledger_batch_void(LedgerDB* h, const char* entry_ids_json, const char* r
  * organized around control-account-linked subledger domains.
  */
 int64_t ledger_create_subledger_group(LedgerDB* h, int64_t book_id, const char* name, const char* counterparty_role, int32_t group_number, int64_t gl_account_id, const char* performed_by);
+int64_t ledger_create_counterparty_group(LedgerDB* h, int64_t book_id, const char* name, const char* counterparty_role, int32_t group_number, int64_t gl_account_id, const char* performed_by);
 bool    ledger_update_subledger_group_name(LedgerDB* h, int64_t group_id, const char* new_name, const char* performed_by);
 bool    ledger_delete_subledger_group(LedgerDB* h, int64_t group_id, const char* performed_by);
 int64_t ledger_create_subledger_account(LedgerDB* h, int64_t book_id, const char* number, const char* name, const char* counterparty_role, int64_t group_id, const char* performed_by);
+/* If counterparty_role is NULL or empty, Heft infers it from the parent group. */
+int64_t ledger_create_counterparty(LedgerDB* h, int64_t book_id, const char* number, const char* name, const char* counterparty_role, int64_t group_id, const char* performed_by);
 bool    ledger_update_subledger_account_name(LedgerDB* h, int64_t account_id, const char* new_name, const char* performed_by);
 bool    ledger_update_subledger_account_status(LedgerDB* h, int64_t account_id, const char* new_status, const char* performed_by);
 bool    ledger_delete_subledger_account(LedgerDB* h, int64_t account_id, const char* performed_by);
@@ -322,6 +330,7 @@ int64_t ledger_revalue_forex_balances(LedgerDB* h, int64_t book_id, int64_t peri
 /* ── Verification ──────────────────────────────────────────── */
 
 bool    ledger_verify(LedgerDB* h, int64_t book_id, uint32_t* out_errors, uint32_t* out_warnings);
+int32_t ledger_verify_detailed(LedgerDB* h, int64_t book_id, uint8_t* buf, int32_t buf_len, int32_t format);
 int32_t ledger_recalculate_balances(LedgerDB* h, int64_t book_id);
 
 /* ── Queries (JSON/CSV into caller buffer, returns bytes written or -1) */

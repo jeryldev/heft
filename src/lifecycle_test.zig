@@ -1797,12 +1797,12 @@ test "SCENARIO: Period close with MaxAccounts=2000 handles large COA" {
     // Close the period — should handle 20 R/E accounts without TooManyAccounts
     try close_mod.closePeriod(database, book_id, period_id, "admin");
 
-    // All revenue/expense accounts should be zeroed after close
+    // Closing entries are excluded, so the period's operating activity remains visible.
     {
         const is_rep = try report_mod.incomeStatement(database, book_id, "2026-01-01", "2026-01-31");
         defer is_rep.deinit();
-        // After closing, R/E accounts debits=credits so TB shows zero net
-        try std.testing.expectEqual(is_rep.total_debits, is_rep.total_credits);
+        try std.testing.expectEqual(@as(i64, 2_750_000_000_000), is_rep.total_debits);
+        try std.testing.expectEqual(@as(i64, 5_500_000_000_000), is_rep.total_credits);
     }
 
     // Verify

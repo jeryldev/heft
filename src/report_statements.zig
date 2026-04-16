@@ -163,13 +163,13 @@ pub fn balanceSheetWithProjectedRE(database: db.Database, book_id: i64, as_of_da
         try period_stmt.bindText(3, as_of_date);
         if (try period_stmt.step()) {
             const period_status = period_stmt.columnText(0).?;
-            should_project = !std.mem.eql(u8, period_status, "closed") and !std.mem.eql(u8, period_status, "locked");
+            should_project = std.mem.eql(u8, period_status, "open");
         }
     }
 
     // Compute net income (revenue - expense) for the fiscal year only while the
-    // current period is still open/soft_closed. Once the period is closed, the
-    // retained-earnings close entries already carry that value.
+    // current period is still open. Once the period has been soft-closed or
+    // fully closed, the close entries already carry that value into equity.
     if (should_project) {
         var stmt = try database.prepare(ni_sql);
         defer stmt.finalize();

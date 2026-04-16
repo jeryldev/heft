@@ -898,7 +898,7 @@ test "CHAR corp: TB Movement Jan shows period activity only" {
     } else return error.TestUnexpectedResult;
 }
 
-test "CHAR corp: Income Statement Jan-Mar shows YTD totals" {
+test "CHAR corp: Income Statement Jan-Mar excludes closing entries after close" {
     const s = try setupCorporationScenario();
     defer s.database.close();
 
@@ -907,19 +907,15 @@ test "CHAR corp: Income Statement Jan-Mar shows YTD totals" {
     try close_mod.closePeriod(s.database, s.book_id, s.periods[1], "admin");
     try close_mod.closePeriod(s.database, s.book_id, s.periods[2], "admin");
 
-    // YTD activity (before closing entries affected the cache):
+    // YTD activity should remain visible after close because the report now
+    // excludes closing entries by construction.
     // Revenue: 25k + 20k + 12k = 57k
     // Expense: 8k + 5k + 3k = 16k
-    // NOTE: After close, the closing entries also appear in the cache. This
-    // test captures what the current implementation produces.
     const is_report = try report_mod.incomeStatement(s.database, s.book_id, "2026-01-01", "2026-03-31");
     defer is_report.deinit();
 
-    // After close, revenue has dr=57 cr=57 (period net movement = 0), same for expense
-    // So the IS for a closed period shows all zeros.
-    // This is CURRENT BEHAVIOR — locked down for the rewrite.
-    try std.testing.expectEqual(@as(i64, 0), is_report.total_debits);
-    try std.testing.expectEqual(@as(i64, 0), is_report.total_credits);
+    try std.testing.expectEqual(@as(i64, 16 * 1_000_000_000_00), is_report.total_debits);
+    try std.testing.expectEqual(@as(i64, 57 * 1_000_000_000_00), is_report.total_credits);
 }
 
 test "CHAR corp: General Ledger Jan lists all 5 entries" {

@@ -224,14 +224,17 @@ pub const SubledgerAccount = struct {
             if (std.mem.eql(u8, stmt.columnText(0).?, "archived")) return error.BookArchived;
         }
 
-        // Verify group exists and belongs to same book
+        // Verify group exists, belongs to same book, and matches the requested role.
         {
-            var stmt = try database.prepare("SELECT book_id FROM ledger_subledger_groups WHERE id = ?;");
+            var stmt = try database.prepare("SELECT book_id, type FROM ledger_subledger_groups WHERE id = ?;");
             defer stmt.finalize();
             try stmt.bindInt(1, group_id);
             const has_row = try stmt.step();
             if (!has_row) return error.NotFound;
             if (stmt.columnInt64(0) != book_id) return error.CrossBookViolation;
+            const group_role = stmt.columnText(1).?;
+            const matches_group = std.mem.eql(u8, counterparty_role, group_role) or std.mem.eql(u8, counterparty_role, "both");
+            if (!matches_group) return error.InvalidInput;
         }
 
         var stmt = try database.prepare(create_sql);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const db = @import("db.zig");
+const export_mod = @import("export.zig");
 
 /// Result of ledger_verify: counts errors (must fix) and warnings (investigate).
 pub const VerifyResult = struct {
@@ -13,6 +14,409 @@ pub const VerifyResult = struct {
         return self.errors == 0;
     }
 };
+
+pub const VerifySeverity = enum {
+    @"error",
+    warning,
+
+    fn label(self: VerifySeverity) []const u8 {
+        return switch (self) {
+            .@"error" => "error",
+            .warning => "warning",
+        };
+    }
+};
+
+pub const VerifyIssue = struct {
+    severity: VerifySeverity,
+    code: []const u8,
+    primary_id: i64 = 0,
+    related_id: i64 = 0,
+    message_buf: [192]u8 = [_]u8{0} ** 192,
+    message_len: usize = 0,
+
+    fn message(self: *const VerifyIssue) []const u8 {
+        return self.message_buf[0..self.message_len];
+    }
+};
+
+const VerifyIssueList = std.ArrayListUnmanaged(VerifyIssue);
+
+fn appendIssue(issues: *VerifyIssueList, severity: VerifySeverity, code: []const u8, primary_id: i64, related_id: i64, comptime fmt: []const u8, args: anytype) !void {
+    var issue = VerifyIssue{
+        .severity = severity,
+        .code = code,
+        .primary_id = primary_id,
+        .related_id = related_id,
+    };
+    issue.message_len = (try std.fmt.bufPrint(&issue.message_buf, fmt, args)).len;
+    try issues.append(std.heap.page_allocator, issue);
+}
+
+fn renderVerifyDetailedJson(summary: VerifyResult, issues: []const VerifyIssue, buf: []u8) ![]u8 {
+    var pos: usize = 0;
+
+    const open = "{\"summary\":{\"errors\":";
+    if (pos + open.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + open.len], open);
+    pos += open.len;
+    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{summary.errors})).len;
+
+    const p1 = ",\"warnings\":";
+    if (pos + p1.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + p1.len], p1);
+    pos += p1.len;
+    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{summary.warnings})).len;
+
+    const p2 = ",\"entries_checked\":";
+    if (pos + p2.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + p2.len], p2);
+    pos += p2.len;
+    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{summary.entries_checked})).len;
+
+    const p3 = ",\"accounts_checked\":";
+    if (pos + p3.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + p3.len], p3);
+    pos += p3.len;
+    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{summary.accounts_checked})).len;
+
+    const p4 = ",\"periods_checked\":";
+    if (pos + p4.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + p4.len], p4);
+    pos += p4.len;
+    pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{summary.periods_checked})).len;
+
+    const p5 = "},\"issues\":[";
+    if (pos + p5.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[pos .. pos + p5.len], p5);
+    pos += p5.len;
+
+    for (issues, 0..) |issue, idx| {
+        if (idx > 0) {
+            if (pos >= buf.len) return error.BufferTooSmall;
+            buf[pos] = ',';
+            pos += 1;
+        }
+        const prefix = "{\"severity\":\"";
+        if (pos + prefix.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + prefix.len], prefix);
+        pos += prefix.len;
+        pos += try export_mod.jsonString(buf[pos..], issue.severity.label());
+
+        const c1 = "\",\"code\":\"";
+        if (pos + c1.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + c1.len], c1);
+        pos += c1.len;
+        pos += try export_mod.jsonString(buf[pos..], issue.code);
+
+        const c2 = "\",\"message\":\"";
+        if (pos + c2.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + c2.len], c2);
+        pos += c2.len;
+        pos += try export_mod.jsonString(buf[pos..], issue.message());
+
+        const c3 = "\",\"primary_id\":";
+        if (pos + c3.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + c3.len], c3);
+        pos += c3.len;
+        pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{issue.primary_id})).len;
+
+        const c4 = ",\"related_id\":";
+        if (pos + c4.len > buf.len) return error.BufferTooSmall;
+        @memcpy(buf[pos .. pos + c4.len], c4);
+        pos += c4.len;
+        pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{issue.related_id})).len;
+
+        if (pos >= buf.len) return error.BufferTooSmall;
+        buf[pos] = '}';
+        pos += 1;
+    }
+
+    if (pos + 2 > buf.len) return error.BufferTooSmall;
+    buf[pos] = ']';
+    buf[pos + 1] = '}';
+    pos += 2;
+    return buf[0..pos];
+}
+
+fn renderVerifyDetailedCsv(issues: []const VerifyIssue, buf: []u8) ![]u8 {
+    var pos: usize = 0;
+    const header = "severity,code,primary_id,related_id,message\n";
+    if (header.len > buf.len) return error.BufferTooSmall;
+    @memcpy(buf[0..header.len], header);
+    pos = header.len;
+
+    for (issues) |issue| {
+        pos += try export_mod.csvField(buf[pos..], issue.severity.label());
+        if (pos >= buf.len) return error.BufferTooSmall;
+        buf[pos] = ',';
+        pos += 1;
+        pos += try export_mod.csvField(buf[pos..], issue.code);
+        if (pos >= buf.len) return error.BufferTooSmall;
+        buf[pos] = ',';
+        pos += 1;
+        pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{issue.primary_id})).len;
+        if (pos >= buf.len) return error.BufferTooSmall;
+        buf[pos] = ',';
+        pos += 1;
+        pos += (try std.fmt.bufPrint(buf[pos..], "{d}", .{issue.related_id})).len;
+        if (pos >= buf.len) return error.BufferTooSmall;
+        buf[pos] = ',';
+        pos += 1;
+        pos += try export_mod.csvField(buf[pos..], issue.message());
+        if (pos >= buf.len) return error.BufferTooSmall;
+        buf[pos] = '\n';
+        pos += 1;
+    }
+    return buf[0..pos];
+}
+
+pub fn verifyDetailed(database: db.Database, book_id: i64, buf: []u8, format: export_mod.ExportFormat) ![]u8 {
+    var issues = VerifyIssueList{};
+    defer issues.deinit(std.heap.page_allocator);
+
+    // Verify book exists
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_books WHERE id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        if (stmt.columnInt(0) == 0) return error.NotFound;
+    }
+
+    var summary = VerifyResult{
+        .errors = 0,
+        .warnings = 0,
+        .entries_checked = 0,
+        .accounts_checked = 0,
+        .periods_checked = 0,
+    };
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT e.id, SUM(el.base_debit_amount), SUM(el.base_credit_amount)
+            \\FROM ledger_entries e
+            \\JOIN ledger_entry_lines el ON el.entry_id = e.id
+            \\WHERE e.book_id = ? AND e.status IN ('posted', 'reversed')
+            \\GROUP BY e.id;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        while (try stmt.step()) {
+            summary.entries_checked += 1;
+            const entry_id = stmt.columnInt64(0);
+            const debits = stmt.columnInt64(1);
+            const credits = stmt.columnInt64(2);
+            if (debits != credits) {
+                summary.errors += 1;
+                try appendIssue(&issues, .@"error", "UNBALANCED_ENTRY", entry_id, 0, "entry {d} has base debits {d} but credits {d}", .{ entry_id, debits, credits });
+            }
+        }
+    }
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT ab.account_id, ab.period_id, ab.debit_sum, ab.credit_sum,
+            \\  COALESCE(computed.real_debit, 0), COALESCE(computed.real_credit, 0)
+            \\FROM ledger_account_balances ab
+            \\LEFT JOIN (
+            \\    SELECT el.account_id, e.period_id,
+            \\      SUM(el.base_debit_amount) AS real_debit,
+            \\      SUM(el.base_credit_amount) AS real_credit
+            \\    FROM ledger_entry_lines el
+            \\    JOIN ledger_entries e ON e.id = el.entry_id
+            \\    WHERE e.book_id = ? AND e.status IN ('posted', 'reversed')
+            \\      AND e.entry_type != 'opening'
+            \\    GROUP BY el.account_id, e.period_id
+            \\) computed ON computed.account_id = ab.account_id AND computed.period_id = ab.period_id
+            \\WHERE ab.book_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, book_id);
+
+        while (try stmt.step()) {
+            summary.accounts_checked += 1;
+            const account_id = stmt.columnInt64(0);
+            const period_id = stmt.columnInt64(1);
+            const cached_debit = stmt.columnInt64(2);
+            const cached_credit = stmt.columnInt64(3);
+            const real_debit = stmt.columnInt64(4);
+            const real_credit = stmt.columnInt64(5);
+            if (cached_debit != real_debit or cached_credit != real_credit) {
+                summary.errors += 1;
+                try appendIssue(&issues, .@"error", "STALE_ACCOUNT_BALANCE_CACHE", account_id, period_id, "account {d} period {d} cache debit/credit {d}/{d} differs from computed {d}/{d}", .{ account_id, period_id, cached_debit, cached_credit, real_debit, real_credit });
+            }
+        }
+    }
+
+    {
+        var stmt = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE book_id = ?;");
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        _ = try stmt.step();
+        const pc = stmt.columnInt(0);
+        summary.periods_checked = if (pc >= 0) @as(u32, @intCast(pc)) else 0;
+    }
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT p1.id, p2.id
+            \\FROM ledger_periods p1
+            \\JOIN ledger_periods p2 ON p1.book_id = p2.book_id AND p1.id < p2.id
+            \\  AND p1.period_type = 'regular' AND p2.period_type = 'regular'
+            \\  AND p1.start_date <= p2.end_date AND p2.start_date <= p1.end_date
+            \\WHERE p1.book_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        while (try stmt.step()) {
+            const p1 = stmt.columnInt64(0);
+            const p2 = stmt.columnInt64(1);
+            summary.warnings += 1;
+            try appendIssue(&issues, .warning, "OVERLAPPING_PERIODS", p1, p2, "period {d} overlaps period {d}", .{ p1, p2 });
+        }
+    }
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT e.id
+            \\FROM ledger_entries e
+            \\WHERE e.book_id = ? AND e.status IN ('posted', 'reversed', 'void')
+            \\  AND NOT EXISTS (
+            \\    SELECT 1 FROM ledger_audit_log al
+            \\    WHERE al.entity_type = 'entry' AND al.entity_id = e.id
+            \\      AND al.action = 'post'
+            \\  );
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        while (try stmt.step()) {
+            const entry_id = stmt.columnInt64(0);
+            summary.warnings += 1;
+            try appendIssue(&issues, .warning, "MISSING_POST_AUDIT_RECORD", entry_id, 0, "entry {d} is missing its post audit log record", .{entry_id});
+        }
+    }
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT sg.id, sg.gl_account_id,
+            \\  COALESCE(gl.gl_debit, 0) as gl_debit,
+            \\  COALESCE(gl.gl_credit, 0) as gl_credit,
+            \\  COALESCE(sl.sl_debit, 0) as sl_debit,
+            \\  COALESCE(sl.sl_credit, 0) as sl_credit
+            \\FROM ledger_subledger_groups sg
+            \\LEFT JOIN (
+            \\  SELECT ab.account_id, SUM(ab.debit_sum) as gl_debit, SUM(ab.credit_sum) as gl_credit
+            \\  FROM ledger_account_balances ab
+            \\  WHERE ab.book_id = ?
+            \\  GROUP BY ab.account_id
+            \\) gl ON gl.account_id = sg.gl_account_id
+            \\LEFT JOIN (
+            \\  SELECT sa.group_id,
+            \\    SUM(el.base_debit_amount) as sl_debit,
+            \\    SUM(el.base_credit_amount) as sl_credit
+            \\  FROM ledger_entry_lines el
+            \\  JOIN ledger_entries e ON e.id = el.entry_id AND e.status = 'posted'
+            \\  JOIN ledger_subledger_accounts sa ON sa.id = el.counterparty_id
+            \\  WHERE e.book_id = ?
+            \\  GROUP BY sa.group_id
+            \\) sl ON sl.group_id = sg.id
+            \\WHERE sg.book_id = ?;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        try stmt.bindInt(2, book_id);
+        try stmt.bindInt(3, book_id);
+
+        while (try stmt.step()) {
+            const group_id = stmt.columnInt64(0);
+            const gl_account_id = stmt.columnInt64(1);
+            const gl_debit = stmt.columnInt64(2);
+            const gl_credit = stmt.columnInt64(3);
+            const sl_debit = stmt.columnInt64(4);
+            const sl_credit = stmt.columnInt64(5);
+            if (gl_debit != sl_debit or gl_credit != sl_credit) {
+                summary.warnings += 1;
+                try appendIssue(&issues, .warning, "SUBLEDGER_GL_MISMATCH", group_id, gl_account_id, "subledger group {d} does not reconcile to control account {d}: GL {d}/{d} vs subledger {d}/{d}", .{ group_id, gl_account_id, gl_debit, gl_credit, sl_debit, sl_credit });
+            }
+        }
+    }
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT period_id, COUNT(*)
+            \\FROM ledger_entries
+            \\WHERE book_id = ? AND status = 'posted' AND entry_type = 'opening'
+            \\GROUP BY period_id
+            \\HAVING COUNT(*) > 1;
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        while (try stmt.step()) {
+            const period_id = stmt.columnInt64(0);
+            const count = stmt.columnInt64(1);
+            summary.errors += 1;
+            try appendIssue(&issues, .@"error", "DUPLICATE_OPENING_ENTRIES", period_id, 0, "period {d} has {d} posted opening entries", .{ period_id, count });
+        }
+    }
+
+    {
+        var stmt = try database.prepare(
+            \\SELECT e.id, e.metadata
+            \\FROM ledger_entries e
+            \\WHERE e.book_id = ? AND e.entry_type = 'opening' AND e.status = 'posted';
+        );
+        defer stmt.finalize();
+        try stmt.bindInt(1, book_id);
+        var check = try database.prepare("SELECT COUNT(*) FROM ledger_periods WHERE id = ? AND book_id = ?;");
+        defer check.finalize();
+        while (try stmt.step()) {
+            const entry_id = stmt.columnInt64(0);
+            const meta = stmt.columnText(1) orelse {
+                summary.warnings += 1;
+                try appendIssue(&issues, .warning, "OPENING_ENTRY_MISSING_METADATA", entry_id, 0, "opening entry {d} is missing metadata", .{entry_id});
+                continue;
+            };
+            const needle = "\"source_period_id\":";
+            const idx = std.mem.indexOf(u8, meta, needle) orelse {
+                summary.warnings += 1;
+                try appendIssue(&issues, .warning, "OPENING_ENTRY_MISSING_SOURCE_PERIOD", entry_id, 0, "opening entry {d} is missing source_period_id metadata", .{entry_id});
+                continue;
+            };
+            var tail = meta[idx + needle.len ..];
+            while (tail.len > 0 and (tail[0] == ' ' or tail[0] == '\t')) : (tail = tail[1..]) {}
+            var start: usize = 0;
+            if (tail.len > 0 and tail[0] == '-') start = 1;
+            var end: usize = start;
+            while (end < tail.len and (tail[end] >= '0' and tail[end] <= '9')) : (end += 1) {}
+            if (end == start) {
+                summary.warnings += 1;
+                try appendIssue(&issues, .warning, "OPENING_ENTRY_INVALID_SOURCE_PERIOD", entry_id, 0, "opening entry {d} has an unreadable source_period_id", .{entry_id});
+                continue;
+            }
+            const src_id = std.fmt.parseInt(i64, tail[0..end], 10) catch {
+                summary.warnings += 1;
+                try appendIssue(&issues, .warning, "OPENING_ENTRY_INVALID_SOURCE_PERIOD", entry_id, 0, "opening entry {d} has an invalid source_period_id", .{entry_id});
+                continue;
+            };
+            try check.bindInt(1, src_id);
+            try check.bindInt(2, book_id);
+            _ = try check.step();
+            if (check.columnInt(0) == 0) {
+                summary.errors += 1;
+                try appendIssue(&issues, .@"error", "OPENING_ENTRY_ORPHAN_SOURCE_PERIOD", entry_id, src_id, "opening entry {d} references missing source period {d}", .{ entry_id, src_id });
+            }
+            check.reset();
+            check.clearBindings();
+        }
+    }
+
+    return switch (format) {
+        .json => renderVerifyDetailedJson(summary, issues.items, buf),
+        .csv => renderVerifyDetailedCsv(issues.items, buf),
+    };
+}
 
 /// The most paranoid function in the engine. Runs integrity checks on every
 /// posted entry, balance cache, subledger, period, and audit trail.

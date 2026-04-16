@@ -96,6 +96,10 @@ pub export fn ledger_version() [*:0]const u8 {
     return VERSION;
 }
 
+pub export fn ledger_get_scales(out_amount_scale: ?*i64, out_fx_rate_scale: ?*i64) bool {
+    return abi_core.ledger_get_scales(out_amount_scale, out_fx_rate_scale);
+}
+
 pub export fn ledger_set_busy_timeout(handle: ?*LedgerDB, timeout_ms: i32) bool {
     return abi_core.ledger_set_busy_timeout(handle, timeout_ms);
 }
@@ -378,8 +382,16 @@ pub export fn ledger_create_subledger_group(handle: ?*LedgerDB, book_id: i64, na
     return abi_core.ledger_create_subledger_group(handle, book_id, name, group_type, group_number, gl_account_id, performed_by);
 }
 
+pub export fn ledger_create_counterparty_group(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, counterparty_role: [*:0]const u8, group_number: i32, gl_account_id: i64, performed_by: [*:0]const u8) i64 {
+    return abi_core.ledger_create_counterparty_group(handle, book_id, name, counterparty_role, group_number, gl_account_id, performed_by);
+}
+
 pub export fn ledger_create_subledger_account(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, account_type: [*:0]const u8, group_id: i64, performed_by: [*:0]const u8) i64 {
     return abi_core.ledger_create_subledger_account(handle, book_id, number, name, account_type, group_id, performed_by);
+}
+
+pub export fn ledger_create_counterparty(handle: ?*LedgerDB, book_id: i64, number: [*:0]const u8, name: [*:0]const u8, counterparty_role: ?[*:0]const u8, group_id: i64, performed_by: [*:0]const u8) i64 {
+    return abi_core.ledger_create_counterparty(handle, book_id, number, name, counterparty_role, group_id, performed_by);
 }
 
 pub export fn ledger_create_classification(handle: ?*LedgerDB, book_id: i64, name: [*:0]const u8, report_type: [*:0]const u8, performed_by: [*:0]const u8) i64 {
@@ -418,6 +430,10 @@ pub export fn ledger_verify(handle: ?*LedgerDB, book_id: i64, out_errors: ?*u32,
     return abi_core.ledger_verify(handle, book_id, out_errors, out_warnings);
 }
 
+pub export fn ledger_verify_detailed(handle: ?*LedgerDB, book_id: i64, buf: ?[*]u8, buf_len: i32, format: i32) i32 {
+    return abi_core.ledger_verify_detailed(handle, book_id, buf, buf_len, format);
+}
+
 pub export fn ledger_archive_book(handle: ?*LedgerDB, book_id: i64, performed_by: [*:0]const u8) bool {
     return abi_core.ledger_archive_book(handle, book_id, performed_by);
 }
@@ -437,6 +453,14 @@ pub export fn ledger_revalue_forex_balances(handle: ?*LedgerDB, book_id: i64, pe
 /// The error code is NOT cleared on success — check the return value first.
 pub export fn ledger_last_error() i32 {
     return abi_common.ledgerLastError();
+}
+
+pub export fn ledger_last_error_message() [*:0]const u8 {
+    return abi_common.ledgerLastErrorMessage();
+}
+
+pub export fn ledger_last_error_name() [*:0]const u8 {
+    return abi_common.ledgerLastErrorName();
 }
 
 fn setError(code: i32) void {

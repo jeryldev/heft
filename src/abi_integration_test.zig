@@ -58,7 +58,9 @@ const ledger_result_row_count = abi.ledger_result_row_count;
 const ledger_result_total_debits = abi.ledger_result_total_debits;
 const ledger_result_total_credits = abi.ledger_result_total_credits;
 const ledger_create_subledger_group = abi.ledger_create_subledger_group;
+const ledger_create_counterparty_group = abi.ledger_create_counterparty_group;
 const ledger_create_subledger_account = abi.ledger_create_subledger_account;
+const ledger_create_counterparty = abi.ledger_create_counterparty;
 const ledger_create_classification = abi.ledger_create_classification;
 const ledger_add_group_node = abi.ledger_add_group_node;
 const ledger_add_account_node = abi.ledger_add_account_node;
@@ -68,10 +70,13 @@ const ledger_cash_flow_statement = abi.ledger_cash_flow_statement;
 const ledger_free_classified_result = abi.ledger_free_classified_result;
 const ledger_delete_classification = abi.ledger_delete_classification;
 const ledger_verify = abi.ledger_verify;
+const ledger_verify_detailed = abi.ledger_verify_detailed;
 const ledger_archive_book = abi.ledger_archive_book;
 const ledger_close_period = abi.ledger_close_period;
 const ledger_revalue_forex_balances = abi.ledger_revalue_forex_balances;
 const ledger_last_error = abi.ledger_last_error;
+const ledger_last_error_message = abi.ledger_last_error_message;
+const ledger_last_error_name = abi.ledger_last_error_name;
 const ledger_update_book_name = abi.ledger_update_book_name;
 const ledger_update_account_name = abi.ledger_update_account_name;
 const ledger_set_account_parent = abi.ledger_set_account_parent;
@@ -168,6 +173,7 @@ const ledger_oble_export_equity_changes_result = abi.ledger_oble_export_equity_c
 const ledger_oble_export_dimension_summary_result = abi.ledger_oble_export_dimension_summary_result;
 const ledger_oble_export_dimension_rollup_result = abi.ledger_oble_export_dimension_rollup_result;
 const ledger_oble_export_budget_analysis_result = abi.ledger_oble_export_budget_analysis_result;
+const ledger_get_scales = abi.ledger_get_scales;
 const ledger_oble_import_session_open = abi.ledger_oble_import_session_open;
 const ledger_oble_import_session_close = abi.ledger_oble_import_session_close;
 const ledger_oble_import_session_set_max_payload = abi.ledger_oble_import_session_set_max_payload;
@@ -1367,6 +1373,34 @@ test "C ABI: ledger_last_error after post failure" {
     }
 }
 
+test "C ABI: ledger_last_error exposes message and symbolic name" {
+    defer cleanupTestFile("test-cabi-lasterr-msg.ledger");
+    const handle = ledger_open("test-cabi-lasterr-msg.ledger");
+    if (handle) |h| {
+        defer ledger_close(h);
+
+        _ = ledger_create_book(h, "Test", "PHP", 2, "admin");
+        _ = ledger_create_account(h, 1, "1000", "Cash", "asset", 0, "admin");
+        _ = ledger_create_period(h, 1, "Jan", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+        const eid = ledger_create_draft(h, 1, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+        try std.testing.expectEqual(@as(i64, -1), ledger_add_line(h, eid, 1, 0, 0, "PHP", 10_000_000_000, 1, 0, null, "admin"));
+        try std.testing.expectEqual(@as(i32, 20), ledger_last_error());
+
+        const name = std.mem.span(ledger_last_error_name());
+        const message = std.mem.span(ledger_last_error_message());
+        try std.testing.expectEqualStrings("HEFT_INVALID_AMOUNT", name);
+        try std.testing.expect(std.mem.indexOf(u8, message, "non-zero debit or credit") != null);
+    }
+}
+
+test "C ABI: ledger_get_scales returns runtime constants" {
+    var amount_scale: i64 = 0;
+    var fx_rate_scale: i64 = 0;
+    try std.testing.expect(ledger_get_scales(&amount_scale, &fx_rate_scale));
+    try std.testing.expectEqual(heft.money.AMOUNT_SCALE, amount_scale);
+    try std.testing.expectEqual(heft.money.FX_RATE_SCALE, fx_rate_scale);
+}
+
 test "C ABI: ledger_open null path returns null" {
     const handle = ledger_open(null);
     try std.testing.expect(handle == null);
@@ -1402,6 +1436,46 @@ test "C ABI: ledger_verify clean book passes" {
     const passed = ledger_verify(h, book_id, &errors, &warnings);
     try std.testing.expect(passed);
     try std.testing.expectEqual(@as(u32, 0), errors);
+}
+
+test "C ABI: ledger_verify_detailed returns structured diagnostics" {
+    defer cleanupTestFile("test-verify-detailed.ledger");
+    const h = ledger_open("test-verify-detailed.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    _ = ledger_create_account(h, book_id, "1001", "Cash", "asset", 0, "admin");
+    _ = ledger_create_account(h, book_id, "3001", "Capital", "equity", 0, "admin");
+    _ = ledger_create_period(h, book_id, "Jan 2026", 1, 2026, "2026-01-01", "2026-01-31", "regular", "admin");
+    const entry_id = ledger_create_draft(h, book_id, "JE-001", "2026-01-15", "2026-01-15", null, 1, null, "admin");
+    _ = ledger_add_line(h, entry_id, 1, 100_000_000, 0, "PHP", 10_000_000_000, 1, 0, null, "admin");
+    _ = ledger_add_line(h, entry_id, 2, 0, 100_000_000, "PHP", 10_000_000_000, 2, 0, null, "admin");
+    _ = ledger_post_entry(h, entry_id, "admin");
+    try h.sqlite.exec("UPDATE ledger_entry_lines SET base_debit_amount = 999 WHERE id = 1;");
+
+    var buf: [8192]u8 = undefined;
+    const len = ledger_verify_detailed(h, book_id, &buf, buf.len, 1);
+    try std.testing.expect(len > 0);
+    const json = buf[0..@intCast(len)];
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"issues\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "UNBALANCED_ENTRY") != null);
+}
+
+test "C ABI: counterparty aliases accept business synonyms and inferred role" {
+    defer cleanupTestFile("test-counterparty-alias.ledger");
+    const h = ledger_open("test-counterparty-alias.ledger") orelse unreachable;
+    defer ledger_close(h);
+    const book_id = ledger_create_book(h, "Test", "PHP", 2, "admin");
+    const ar_id = ledger_create_account(h, book_id, "1200", "AR", "asset", 0, "admin");
+    const group_id = ledger_create_counterparty_group(h, book_id, "Receivables", "ar", 1, ar_id, "admin");
+    try std.testing.expect(group_id > 0);
+
+    const inferred = ledger_create_counterparty(h, book_id, "C001", "Acme Corp", null, group_id, "admin");
+    try std.testing.expect(inferred > 0);
+
+    const mismatched = ledger_create_subledger_account(h, book_id, "S001", "Wrong Role", "supplier", group_id, "admin");
+    try std.testing.expectEqual(@as(i64, -1), mismatched);
+    try std.testing.expectEqual(@as(i32, 2), ledger_last_error());
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(ledger_last_error_message()), "does not match parent group role") != null);
 }
 
 test "C ABI: ledger_edit_line_full happy path" {
