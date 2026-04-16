@@ -1134,13 +1134,100 @@ pub fn ledger_preview_close_period(handle: ?*LedgerDB, book_id: i64, period_id: 
                 @memcpy(out[pos .. pos + mid.len], mid);
                 pos += mid.len;
                 pos += export_mod.jsonString(out[pos..], stmt.columnText(2) orelse "") catch return -1;
-                const tail = std.fmt.bufPrint(out[pos..], "\",\"entry_type\":\"{s}\",\"period_id\":{d},\"status\":\"{s}\",\"line_count\":{d}}}", .{
+                const tail = std.fmt.bufPrint(out[pos..], "\",\"entry_type\":\"{s}\",\"period_id\":{d},\"status\":\"{s}\",\"line_count\":{d},\"lines\":[", .{
                     stmt.columnText(3) orelse "",
                     stmt.columnInt64(4),
                     stmt.columnText(5) orelse "",
                     stmt.columnInt(6),
                 }) catch return -1;
                 pos += tail.len;
+
+                const entry_id = stmt.columnInt64(0);
+                var line_stmt = h.sqlite.prepare(
+                    \\SELECT el.id, el.line_number, el.account_id, a.number, a.name,
+                    \\  el.debit_amount, el.credit_amount, el.base_debit_amount, el.base_credit_amount,
+                    \\  el.transaction_currency, el.fx_rate, el.counterparty_id,
+                    \\  CASE WHEN el.counterparty_id IS NULL THEN 1 ELSE 0 END,
+                    \\  COALESCE(el.description, '')
+                    \\FROM ledger_entry_lines el
+                    \\JOIN ledger_accounts a ON a.id = el.account_id
+                    \\WHERE el.entry_id = ?
+                    \\ORDER BY el.line_number ASC;
+                ) catch |err| {
+                    common.setError(common.mapError(err));
+                    return -1;
+                };
+                defer line_stmt.finalize();
+                line_stmt.bindInt(1, entry_id) catch |err| {
+                    common.setError(common.mapError(err));
+                    return -1;
+                };
+
+                var first_line = true;
+                while (line_stmt.step() catch |err| {
+                    common.setError(common.mapError(err));
+                    return -1;
+                }) {
+                    if (!first_line) {
+                        if (pos >= out.len) return -1;
+                        out[pos] = ',';
+                        pos += 1;
+                    }
+                    first_line = false;
+
+                    const line_head = std.fmt.bufPrint(out[pos..], "{{\"id\":{d},\"line_number\":{d},\"account_id\":{d},\"account_number\":\"", .{
+                        line_stmt.columnInt64(0),
+                        line_stmt.columnInt(1),
+                        line_stmt.columnInt64(2),
+                    }) catch return -1;
+                    pos += line_head.len;
+                    pos += export_mod.jsonString(out[pos..], line_stmt.columnText(3) orelse "") catch return -1;
+
+                    const line_mid = "\",\"account_name\":\"";
+                    if (pos + line_mid.len > out.len) return -1;
+                    @memcpy(out[pos .. pos + line_mid.len], line_mid);
+                    pos += line_mid.len;
+                    pos += export_mod.jsonString(out[pos..], line_stmt.columnText(4) orelse "") catch return -1;
+
+                    const line_nums = std.fmt.bufPrint(out[pos..], "\",\"debit\":{d},\"credit\":{d},\"base_debit\":{d},\"base_credit\":{d},\"transaction_currency\":\"", .{
+                        line_stmt.columnInt64(5),
+                        line_stmt.columnInt64(6),
+                        line_stmt.columnInt64(7),
+                        line_stmt.columnInt64(8),
+                    }) catch return -1;
+                    pos += line_nums.len;
+                    pos += export_mod.jsonString(out[pos..], line_stmt.columnText(9) orelse "") catch return -1;
+
+                    const fx_chunk = std.fmt.bufPrint(out[pos..], "\",\"fx_rate\":{d},\"counterparty_id\":", .{
+                        line_stmt.columnInt64(10),
+                    }) catch return -1;
+                    pos += fx_chunk.len;
+                    if (line_stmt.columnInt(12) == 1) {
+                        const null_text = "null";
+                        if (pos + null_text.len > out.len) return -1;
+                        @memcpy(out[pos .. pos + null_text.len], null_text);
+                        pos += null_text.len;
+                    } else {
+                        const cp_chunk = std.fmt.bufPrint(out[pos..], "{d}", .{line_stmt.columnInt64(11)}) catch return -1;
+                        pos += cp_chunk.len;
+                    }
+
+                    const desc_open = ",\"description\":\"";
+                    if (pos + desc_open.len > out.len) return -1;
+                    @memcpy(out[pos .. pos + desc_open.len], desc_open);
+                    pos += desc_open.len;
+                    pos += export_mod.jsonString(out[pos..], line_stmt.columnText(13) orelse "") catch return -1;
+
+                    if (pos + 2 > out.len) return -1;
+                    out[pos] = '"';
+                    out[pos + 1] = '}';
+                    pos += 2;
+                }
+
+                if (pos + 2 > out.len) return -1;
+                out[pos] = ']';
+                out[pos + 1] = '}';
+                pos += 2;
             }
             if (pos + 2 > out.len) return -1;
             out[pos] = ']';

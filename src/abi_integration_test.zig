@@ -1512,6 +1512,8 @@ test "C ABI: preview close period returns generated entries without committing" 
     const preview = preview_buf[0..@intCast(preview_len)];
     try std.testing.expect(std.mem.indexOf(u8, preview, "\"packet_kind\":\"close_preview\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, preview, "\"entry_type\":\"closing\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, preview, "\"lines\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, preview, "\"account_number\":\"4000\"") != null);
 
     var entries_buf: [4096]u8 = undefined;
     const entries_len = ledger_list_entries(h, book_id, null, null, null, null, 0, 100, 0, &entries_buf, entries_buf.len, 1);
