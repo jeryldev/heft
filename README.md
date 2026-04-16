@@ -133,6 +133,7 @@ zig build example-oble-roundtrip
 ## Docs
 
 - [Architecture](docs/architecture.md)
+- [Why Heft](docs/why-heft.md)
 - [Heft vs OBLE](docs/architecture/heft-vs-oble.md)
 - [OBLE Repo Split Plan](docs/architecture/oble-repo-split-plan.md)
 - [Heft to OBLE Module Map](docs/architecture/heft-oble-module-map.md)
